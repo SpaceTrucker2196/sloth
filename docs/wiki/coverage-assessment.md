@@ -12,7 +12,7 @@ type: reference
 
 **Sources**: `include/sloth_alert_inputs.def`; `src/rule_coverage.h`, `src/rule_coverage.c`; `src/rule_coverage_live.c`, `src/rule_coverage_capture.c`; `src/posture_coverage.c`, `src/views/stats.c`; `src/cov_interval.h`, `src/cov_interval.c`, `src/cov_interval_capture.c`, `src/wifi_chanhop.c` (`chanhop_slot_time_ms`), `src/capture/probe.c` (`mon_frame_class_totals`); `tests/test_rule_coverage.c`, `tests/test_rule_coverage_live.c`, `tests/test_cov_interval.c`; `src/alert_quality.h`, `src/alert_quality.c`, `src/alert_quality_capture.c`, `src/cov_timeline.c`, `tests/test_alert_quality.c` (§ 9); issue #246; US Army FM 2-0 (2004) 1-28, chapter 5, 8-28; [[jsonl-schema]]; issue #242 (parent #241); US Army FM 2-0 (2004) 4-48, 4-51, 8-34; [[collection-cycle]].
 
-**Last updated**: 2026-11-23 (#246 review: § 9, a cited frame gone from the evidence ring is not judged `full`, a `full` incident keeps it when the rule goes blind, no `corroboration` in a `--replay`, the sloth-mesh consumers named), 2026-11-23 (#246: § 9, the quality fields on each finding), 2026-11-23 (#247: `--preflight` prints the expected statuses, [[preflight]] § 4), 2026-11-23 (item 3 review: § 8, the Stats view's short form on a short screen, and the groups hold every blind and partly kind), 2026-11-23 (item 3: § 8, the report section and the Stats view's collection gaps; § 5 quotes the two limits they print), 2026-11-23 (item 4 review: § 7 says the silent-channel default has no measured baseline, and what an operator's clear keeps; the kind counts follow the build), 2026-11-23 (item 4: § 7, `SENSOR_SUPPRESSED` and the reason `suppressed`), 2026-11-23 (item 2 review: the v18 deploy order; overflowed channel time stays in the band totals; the sampler's clock), 2026-11-23 (item 2: § 6, the per-interval coverage record), 2026-11-23
+**Last updated**: 2026-11-24 (#243: § 10, the exposure report carries the statuses), 2026-11-23 (#246 review: § 9, a cited frame gone from the evidence ring is not judged `full`, a `full` incident keeps it when the rule goes blind, no `corroboration` in a `--replay`, the sloth-mesh consumers named), 2026-11-23 (#246: § 9, the quality fields on each finding), 2026-11-23 (#247: `--preflight` prints the expected statuses, [[preflight]] § 4), 2026-11-23 (item 3 review: § 8, the Stats view's short form on a short screen, and the groups hold every blind and partly kind), 2026-11-23 (item 3: § 8, the report section and the Stats view's collection gaps; § 5 quotes the two limits they print), 2026-11-23 (item 4 review: § 7 says the silent-channel default has no measured baseline, and what an operator's clear keeps; the kind counts follow the build), 2026-11-23 (item 4: § 7, `SENSOR_SUPPRESSED` and the reason `suppressed`), 2026-11-23 (item 2 review: the v18 deploy order; overflowed channel time stays in the band totals; the sampler's clock), 2026-11-23 (item 2: § 6, the per-interval coverage record), 2026-11-23
 
 ---
 
@@ -211,7 +211,13 @@ The window is the span from the oldest to the newest frame the incident cites th
 
 Tests: `tests/test_alert_quality.c` (the judge's precedence; the dwell and drop history; a twin whose window a hop plan misses part of reads `partial`, `hop`, and the same twin inside one dwell `full`; a flood two radios each delivered part of reads `corroboration` 2 through the real monitor callback, and one whose second copies lost the de-duplication 1; the source, drops and not-assessed cases; a `full` incident that goes blind stays `full`; cited frames gone from the ring are not `full`; the capture stage writing the drop totals; the hop stage writing each radio's dwells; the stream, the alert detail and the report), `tests/test_db.c` (the columns' upsert, and a v18 file migrated and refused); every absence assertion seen red under a mutation.
 
+## 10. The exposure report
+
+#243 builds on the statuses: the "What this site reveals" section of `--report` and the `exposure_summary` record group the designated site's exposure findings by what an observer learns, and each group carries the observable / partly / blind counts and reason words of its kinds, so an empty group reads `Nothing found, rules observable.` or `Not observable: <reasons>.` and never a bare "none". [[exposure-report]] is its page.
+
 ## Related pages
+
+- [[exposure-report]] — what the designated site reveals, each group with its rules' status
 
 - [[preflight]] — the statuses a command line would have, before the run.
 - [[collection-cycle]] — where the assessment sits in the cycle (the minute step)

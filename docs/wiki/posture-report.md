@@ -88,6 +88,28 @@ announced as written.
   line, `complete partial (hop), latency 1700 ms, corroboration 1
   radio, source ok`, parts not known left out; `not assessed` when none
   is known (a `--replay`, which carries no corroboration either). [[coverage-assessment]] § 9.
+- **What this site reveals** (#243), after Finding quality: the
+  designated site's exposure findings grouped by what an outside
+  observer learns (network names, device makes and presence, clear-text
+  credentials, self-announcing devices, weak encryption lanes, devices
+  in setup mode). Each group states whether it found anything and the
+  coverage status of its rules (`Nothing found, rules observable.`,
+  `Not observable: no_own_net.`, ...); each kind found is one line with
+  its finding and evidence counts, first and last seen, and the first
+  fix step of [[alert-remediation]]. Kinds only, no addresses. With
+  nothing designated it names `--my-ssid`, `--my-bssid`, `--known-mac`
+  and `--known-macs` instead of listing the neighbourhood.
+  [[exposure-report]].
+
+### The JSON report's `exposure` member
+
+After `risky_devices`, before `findings` (#243):
+`{"designated":false,"needs":[...]}` with nothing designated, else
+`{"designated":true,"ssids","bssids","rostered","groups":[{"group",
+"title","state","findings","evidence","outside","assessed","rules"
+[,"observable","partly","blind","why"],"lines":[{"kind","findings",
+"evidence","first_seen","last_seen","remedy"}]}]}`, the six groups in
+order. [[exposure-report]] § 4.
 
 ### The JSON report's `findings` member
 
@@ -99,7 +121,7 @@ alerts.
 
 ### The JSON report's `coverage` member
 
-The last member of the object, after `risky_devices` and `findings`;
+The last member of the object, after `risky_devices`, `exposure` and `findings`;
 every earlier key keeps its place.
 
 | Key | Content |
@@ -159,5 +181,6 @@ sign-off document."
 - [[alerts]] — where the ATT&CK tag on each alert comes from.
 - [[jsonl-schema]] — the streaming event log the report summarises.
 - [[coverage-assessment]] — the Collection coverage section.
+- [[exposure-report]] — the What this site reveals section.
 - [`cleartext_cred` in the JSONL schema](jsonl-schema.md#cleartext_cred) —
   the "no password field, ever" rule.

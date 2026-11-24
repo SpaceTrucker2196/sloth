@@ -259,6 +259,9 @@ CORE_BASE_SRCS += src/reg_table.c src/alerts/rules_regulatory.c
 CORE_BASE_SRCS += src/rule_coverage.c src/rule_coverage_live.c
 # The capture side's filler: named by capture_side.c only.
 CORE_BASE_SRCS += src/rule_coverage_capture.c
+# What the site reveals (#243): the exposure report section and the
+# exposure_summary record; reads alerts, designations and coverage.
+CORE_BASE_SRCS += src/exposure.c
 # The per-interval coverage record (#242 item 2): the record and its
 # writers (cov_interval.c, which db.c reads and which names no capture
 # module) and the capture side's sampler (named by poll.c's wifi table

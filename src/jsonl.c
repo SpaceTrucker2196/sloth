@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include "jsonl.h"
 #include "jsonl_internal.h"
+#include "exposure.h"
 #include "gps.h"
 #include "position_track.h"
 #include "sloth_clock.h"
@@ -2851,6 +2852,9 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* What the radios did in the last minute (#242 item 2, JSONL
      * 2.9.0): one line per interval closed, on its fixed cadence. */
     cov_iv_emit                  ();
+    /* What the site reveals, by group (#243, JSONL 2.11.0): one row per
+     * group on change, kinds and counts only. */
+    exp_emit                     (s);
     /* The operator's designated networks: change-only, a heartbeat. */
     jsonl_emit_ownership         ();
     /* The KARMA and key-harvest evidence tables (JSONL 1.3.0). */

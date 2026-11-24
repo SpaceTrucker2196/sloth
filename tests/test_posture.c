@@ -1235,9 +1235,10 @@ static void test_coverage_not_assessed_before_a_sample(void) {
     const char *rd = strstr(js, "\"risky_devices\": [");
     const char *cv = strstr(js, "\"coverage\": {");
     ASSERT(rd && cv && rd < cv);
-    /* `findings` (#246) sits between them, `coverage` still last. */
-    ASSERT(contains(js, "\"risky_devices\": [],\n  \"findings\": [],\n"
-                        "  \"coverage\": {"));
+    /* `exposure` (#243) and `findings` (#246) sit between them,
+     * `coverage` still last. */
+    ASSERT(contains(js, "\"risky_devices\": [],\n  \"exposure\": {"));
+    ASSERT(contains(js, "},\n  \"findings\": [],\n  \"coverage\": {"));
     ASSERT(contains(js, "]}\n}\n"));
     cov_end();
 }

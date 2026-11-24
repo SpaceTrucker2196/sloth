@@ -1,0 +1,160 @@
+/* What an outside observer learns from each alert kind (#243). Not a
+ * header: no include guard, on purpose. Every includer defines
+ * X(ID, GROUP, SCOPE, REMEDY) first and gets one expansion per row.
+ *
+ * A sibling of sloth_alerts.def, like sloth_alert_inputs.def and for the
+ * same reason: that file is in the contract with a two-argument X.
+ * tests/test_exposure.c holds this list to that one, row for row, in the
+ * same order, and holds each REMEDY to docs/wiki/alert-remediation.md.
+ *
+ *   ID      the kind, as in sloth_alerts.def.
+ *   GROUP   what the finding tells someone outside the site (exp_group_t,
+ *           src/exposure.h, without the EXP_G_ prefix), or NONE: an
+ *           attack, an anomaly or the sensor's own state is not
+ *           something the site reveals. One group at most:
+ *             NAMES     network names and their history
+ *             DEVICES   device makes, models and presence times
+ *             CREDS     credentials and user names in clear text
+ *             ANNOUNCE  cameras and other devices that announce
+ *                       themselves
+ *             LANES     weak encryption lanes a device can be moved to
+ *             SETUP     devices in setup mode
+ *   SCOPE   how a finding is tied to the operator's own site, which the
+ *           exposure report is limited to (exp_scope_t):
+ *             OWN   the rule fires only about a designated network
+ *             AIR   heard over the air: in scope when an address in the
+ *                   key is a designated BSSID, a rostered device or a
+ *                   BSSID beaconing a designated SSID, or the key names
+ *                   a designated SSID
+ *             LAN   from the IP capture: in scope when an address in the
+ *                   key is a rostered device's, or the managed link is
+ *                   associated to a designated network
+ *             NA    for GROUP NONE
+ *   REMEDY  the first Fix step of the kind's section of
+ *           docs/wiki/alert-remediation.md, its lines joined with one
+ *           space and the "1. " dropped; "" for GROUP NONE.
+ *
+ * The group is a judgement about what the finding discloses, written
+ * out in docs/wiki/exposure-report.md; change it there and here
+ * together. */
+X(PORT_SCAN,                        NONE,     NA,  "")
+X(DEAUTH_FLOOD,                     NONE,     NA,  "")
+X(NXDOMAIN_BURST,                   NONE,     NA,  "")
+X(THREAT_DOMAIN,                    NONE,     NA,  "")
+X(THREAT_IP,                        NONE,     NA,  "")
+X(BEACONING,                        NONE,     NA,  "")
+X(DGA_DOMAIN,                       NONE,     NA,  "")
+X(ARP_SPOOF,                        NONE,     NA,  "")
+X(ROGUE_DHCP,                       NONE,     NA,  "")
+X(ROGUE_RA,                         NONE,     NA,  "")
+X(SMB1_USE,                         NONE,     NA,  "")
+X(KERB_PREAUTH_BURST,               NONE,     NA,  "")
+X(LDAP_SEARCH_FLOOD,                NONE,     NA,  "")
+X(BGP_NOTIFICATION_BURST,           NONE,     NA,  "")
+X(SSH_BRUTE_FORCE,                  NONE,     NA,  "")
+X(RDP_BRUTE_FORCE,                  NONE,     NA,  "")
+X(SNMP_COMMUNITY_BRUTE,             NONE,     NA,  "")
+X(MQTT_BROKER_BRUTE,                NONE,     NA,  "")
+X(EVIL_TWIN,                        NONE,     NA,  "")
+X(EVIL_TWIN_PROXIMITY,              NONE,     NA,  "")
+X(KARMA_AP,                         NONE,     NA,  "")
+X(DNS_TUNNEL,                       NONE,     NA,  "")
+X(PROBE_FLOOD,                      NONE,     NA,  "")
+X(ATTACK_TOOL_UA,                   NONE,     NA,  "")
+X(ATTACK_PATH,                      NONE,     NA,  "")
+X(WEAK_TLS,                         NONE,     NA,  "")
+X(NO_MONITOR_MODE,                  NONE,     NA,  "")
+X(CLEARTEXT_CRED,                   CREDS,    LAN,
+  "Change the exposed credential.")
+X(BEACON_FLOOD,                     NONE,     NA,  "")
+X(AUTH_FLOOD,                       NONE,     NA,  "")
+X(SSID_CONFUSION,                   LANES,    AIR,
+  "If it is the operator's, raise its posture to match the others.")
+X(MGMT_FUZZ,                        NONE,     NA,  "")
+X(ROGUE_RADIUS,                     NONE,     NA,  "")
+X(ICMP_TUNNEL,                      NONE,     NA,  "")
+X(MY_NETWORK_RECON,                 NAMES,    OWN,
+  "None for a single sighting. Repeated sightings with `RECURRING_TRANSIT` are a pattern worth recording against the operator's own context.")
+X(RECURRING_TRANSIT,                DEVICES,  AIR,
+  "None from sloth's side; the operator supplies the context.")
+X(UNKNOWN_DEVICE,                   NONE,     NA,  "")
+X(RF_DEGRADED,                      NONE,     NA,  "")
+X(ASSOC_FLOOD,                      NONE,     NA,  "")
+X(BTM_ABUSE,                        NONE,     NA,  "")
+X(WPA_DOWNGRADE,                    LANES,    AIR,
+  "On the operator's own BSS, when every client supports it, switch it to SAE only with MFP required; the source says WPA3 mandates MFP. A BSS that is not the operator's is its owner's to change.")
+X(PEAP_NO_SERVER_CERT,              CREDS,    AIR,
+  "Configure the client with `ca_cert` and `domain_suffix_match`; the source states that without a CA pin there is nothing to verify the server against.")
+X(CSA_ABUSE,                        NONE,     NA,  "")
+X(RRM_SURVEY_ABUSE,                 NONE,     NA,  "")
+X(RTS_FLOOD,                        NONE,     NA,  "")
+X(CAPTIVE_PORTAL,                   NONE,     NA,  "")
+X(BLOCKACK_ATTACK,                  NONE,     NA,  "")
+X(FRAG_PLAINTEXT,                   NONE,     NA,  "")
+X(FRAG_BCAST,                       NONE,     NA,  "")
+X(FRAG_CACHE,                       NONE,     NA,  "")
+X(FRAG_MIXED,                       NONE,     NA,  "")
+X(SAE_PSK_SPLIT,                    LANES,    AIR,
+  "If the PSK-only BSSID is the operator's, move it to SAE.")
+X(SAE_PSK_REGRESSION,               LANES,    AIR,
+  "Restore SAE on the BSSID.")
+X(FRAG_AMSDU,                       NONE,     NA,  "")
+X(FRAG_AMSDU_EAPOL,                 NONE,     NA,  "")
+X(FRAG_MIXKEY,                      NONE,     NA,  "")
+X(FRAG_PN_GAP,                      NONE,     NA,  "")
+X(FRAG_EAPOL_RELAY,                 NONE,     NA,  "")
+X(SA_QUERY_FLOOD,                   NONE,     NA,  "")
+X(MFP_UNPROTECTED,                  NONE,     NA,  "")
+X(OPEN_SETUP_AP,                    SETUP,    AIR,
+  "If the device is the operator's: finish setting it up so it leaves the open SoftAP, or power it off.")
+X(WPS_PIN_BRUTE,                    NONE,     NA,  "")
+X(WPS_LOCKOUT_CYCLING,              NONE,     NA,  "")
+X(WPS_PBC_RACE,                     NONE,     NA,  "")
+X(MLE_INVALID_LINK_ID,              NONE,     NA,  "")
+X(MLE_COMMON_INFO_LEN_BAD,          NONE,     NA,  "")
+X(MLE_SUBELEM_OVERRUN,              NONE,     NA,  "")
+X(MLD_MAC_COLLISION,                NONE,     NA,  "")
+X(MLE_CROSS_LINK_CIPHER_DOWNGRADE,  LANES,    AIR,
+  "Configure every link of the MLD with the same posture.")
+X(CAM_WS_DISCOVERY,                 ANNOUNCE, LAN,
+  "Remove a camera that does not belong.")
+X(PM_FORGE,                         NONE,     NA,  "")
+X(SURV_CLOUD_SNI,                   DEVICES,  LAN,
+  "None if the traffic is expected. If not, identify and remove the device or application.")
+X(TPC_ABSENT_HIGH_BAND,             DEVICES,  OWN,
+  "Turn on 802.11d and 802.11h on the AP (hostapd `ieee80211d=1`, `ieee80211h=1` with a `country_code`); the source names those switched off as the common cause.")
+X(CAM_SETUP_SSID,                   SETUP,    AIR,
+  "If it is the operator's: finish provisioning it and change its account password (the setup key is printed on the camera; for Hikvision, the last 8 characters of the serial), or power it off if it is not being installed.")
+X(QUEUE_EVICT,                      NONE,     NA,  "")
+X(MLE_RECONFIG_NO_MLO,              NONE,     NA,  "")
+X(MLE_PR_BEACON_DIFF,               NONE,     NA,  "")
+X(SURV_DNS,                         DEVICES,  LAN,
+  "None if expected; otherwise identify the device or application.")
+X(WPS_PIXIE_PROBE,                  NONE,     NA,  "")
+X(WPS_PIXIE_LIKELY_SUCCESS,         NONE,     NA,  "")
+X(COUNTRY_ABSENT,                   DEVICES,  AIR,
+  "On the operator's AP, set a country code and enable 802.11d.")
+X(DFS_MASKING,                      NONE,     NA,  "")
+X(CAM_MDNS_SERVICE,                 ANNOUNCE, LAN,
+  "Remove a device that does not belong.")
+X(CAM_SSDP_DEVICE,                  ANNOUNCE, LAN,
+  "Remove a device that does not belong.")
+X(CAM_SETUP_OUI,                    SETUP,    AIR,
+  "Finish provisioning a camera of the operator's. One that is not the operator's: if it is on premises the operator controls, remove it; otherwise tell whoever controls it. Do not join or configure it.")
+X(CAM_RTSP_UNAUTH,                  ANNOUNCE, LAN,
+  "Require authentication on the RTSP server, so DESCRIBE is answered with the 401 challenge the RFC defines.")
+X(BT_OWN_TRANSMIT,                  NONE,     NA,  "")
+X(BLE_ADV_FLOOD,                    NONE,     NA,  "")
+X(BLE_HID_UNEXPECTED,               NONE,     NA,  "")
+X(BLE_WATCHLIST,                    NONE,     NA,  "")
+X(GNSS_JAMMING,                     NONE,     NA,  "")
+X(GNSS_SPOOF_SUSPECT,               NONE,     NA,  "")
+X(GNSS_TIME_JUMP,                   NONE,     NA,  "")
+X(GNSS_POSITION_JUMP,               NONE,     NA,  "")
+X(ADSB_EMERGENCY,                   NONE,     NA,  "")
+X(KARMA_PROBE_FORGE,                NONE,     NA,  "")
+X(PMKID_HARVEST,                    NONE,     NA,  "")
+X(HANDSHAKE_HARVEST,                NONE,     NA,  "")
+X(SENSOR_UNDERVOLT,                 NONE,     NA,  "")
+X(SENSOR_SOURCE_DOWN,               NONE,     NA,  "")
+X(SENSOR_SUPPRESSED,                NONE,     NA,  "")
