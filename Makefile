@@ -254,6 +254,8 @@ CORE_BASE_SRCS += src/evidence_manifest.c
 CORE_BASE_SRCS += src/geo.c
 # #101 slice A: the compiled-in 5 GHz channel table and the rules that read it.
 CORE_BASE_SRCS += src/reg_table.c src/alerts/rules_regulatory.c
+# Coverage assessment (#242): pure tables, no capture or 802.11 symbol.
+CORE_BASE_SRCS += src/rule_coverage.c
 CORE_BASE_SRCS += src/ble_snoop.c
 # #144 slice 2: the HCI monitor decoder and the own-transmission rule are
 # pure; the libpcap worker that feeds them is in PCAP_CORE_SRCS.

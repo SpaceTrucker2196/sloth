@@ -64,6 +64,7 @@ the Wi-Fi it watches:
 - [[threat-intel]] — embedded IOC matcher (synthetic demo data, not a feed).
 - [[retention]] — what `--db` actually deletes, and what nothing deletes.
 - [[collection-cycle]] — how sloth processes data over time, cycle by cycle, and which steps are proposed.
+- [[coverage-assessment]] — which alert rules can fire in the present configuration: the per-rule input declaration and the observable / partly / blind status (#242, slice 1: no output yet).
 - [[inventory]] — the approved-inventory trust anchor (#89): the only
   evil-twin trust input that does not arrive over the air, its JSON
   format, how it merges with `--my-ssid`/`--my-bssid`, and why `site`

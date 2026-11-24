@@ -1,0 +1,150 @@
+/* What each alert kind needs in order to fire (#242). Not a header: no
+ * include guard, on purpose. Every includer defines
+ * X(ID, INPUT, FRAMES, BANDS, SHAPE, NEEDS) first and gets one expansion
+ * per row.
+ *
+ * A sibling of sloth_alerts.def and not a new column there: that file
+ * is in the contract, and sloth-mesh includes it with a two-argument X.
+ * tests/test_rule_coverage.c holds this list to that one, row for row, in
+ * the same order.
+ *
+ *   ID      the kind, as in sloth_alerts.def.
+ *   INPUT   the one input the rule reads its evidence from (cov_input_t,
+ *           src/rule_coverage.h, without the COV_IN_ prefix):
+ *             DOT11    802.11 frames from a radio in monitor mode
+ *             IP       packets of the IP capture (--iface)
+ *             HOST     the host's own kernel tables: sockets, the
+ *                      neighbour table, the interface list
+ *             BLE_ADV  Bluetooth LE advertising, from --bt-monitor or
+ *                      --bt-capture
+ *             BLE_HCI  the host controller's own commands, --bt-monitor
+ *                      only
+ *             GNSS     the --gps receiver
+ *             ADSB     the --adsb decoder
+ *             SYS      sloth's own status sampler (/proc, /sys)
+ *           A corroborating input a rule can use and does not need
+ *           (EVIL_TWIN's wired check) is not declared.
+ *   FRAMES  for DOT11, the frame classes the evidence is made of
+ *           (COV_F_*, or-ed): BEACON (beacons and probe responses),
+ *           PROBE (probe requests), AUTH, ASSOC ((re)association
+ *           requests and responses), DEAUTH (and disassociation),
+ *           ACTION, CTRL, DATA, EAPOL (EAPOL and EAP in data frames).
+ *           0 for every other input.
+ *   BANDS   for DOT11, the bands the rule is about (COV_B_*); ANY when
+ *           it reads every band. ANY for every other input.
+ *   SHAPE   for DOT11, what the evidence looks like in time, which
+ *           decides what a hopping radio does to it:
+ *             STATE     repeated or standing (a beacon's content): one
+ *                       visit to the channel reads it
+ *             RATE      a count inside a time window: time off the
+ *                       channel lowers the count
+ *             EVENT     one frame, sent once
+ *             EXCHANGE  an ordered exchange of several frames
+ *           NA for every other input.
+ *   NEEDS   what the operator must have configured, or-ed (COV_N_*):
+ *           OWN_NET (--my-ssid or --my-bssid), ROSTER (--known-mac or
+ *           --known-macs), DB (--db). 0 for none.
+ *
+ * A declaration is a statement about the rule function, so it changes
+ * with the rule: read src/alerts/ and the trigger column of
+ * docs/views/alerts.md, never the kind's name. */
+X(PORT_SCAN,                 HOST,    0, COV_B_ANY, NA, 0)
+X(DEAUTH_FLOOD,              DOT11,   COV_F_DEAUTH, COV_B_ANY, RATE, 0)
+X(NXDOMAIN_BURST,            IP,      0, COV_B_ANY, NA, 0)
+X(THREAT_DOMAIN,             IP,      0, COV_B_ANY, NA, 0)
+X(THREAT_IP,                 HOST,    0, COV_B_ANY, NA, 0)
+X(BEACONING,                 HOST,    0, COV_B_ANY, NA, 0)
+X(DGA_DOMAIN,                IP,      0, COV_B_ANY, NA, 0)
+X(ARP_SPOOF,                 HOST,    0, COV_B_ANY, NA, 0)
+X(ROGUE_DHCP,                IP,      0, COV_B_ANY, NA, 0)
+X(ROGUE_RA,                  IP,      0, COV_B_ANY, NA, 0)
+X(SMB1_USE,                  IP,      0, COV_B_ANY, NA, 0)
+X(KERB_PREAUTH_BURST,        IP,      0, COV_B_ANY, NA, 0)
+X(LDAP_SEARCH_FLOOD,         IP,      0, COV_B_ANY, NA, 0)
+X(BGP_NOTIFICATION_BURST,    IP,      0, COV_B_ANY, NA, 0)
+X(SSH_BRUTE_FORCE,           IP,      0, COV_B_ANY, NA, 0)
+X(RDP_BRUTE_FORCE,           IP,      0, COV_B_ANY, NA, 0)
+X(SNMP_COMMUNITY_BRUTE,      IP,      0, COV_B_ANY, NA, 0)
+X(MQTT_BROKER_BRUTE,         IP,      0, COV_B_ANY, NA, 0)
+X(EVIL_TWIN,                 DOT11,   COV_F_BEACON, COV_B_ANY, STATE, 0)
+X(EVIL_TWIN_PROXIMITY,       DOT11,   COV_F_BEACON, COV_B_ANY, RATE, 0)
+X(KARMA_AP,                  DOT11,   COV_F_BEACON, COV_B_ANY, STATE, 0)
+X(DNS_TUNNEL,                IP,      0, COV_B_ANY, NA, 0)
+X(PROBE_FLOOD,               DOT11,   COV_F_PROBE, COV_B_ANY, RATE, 0)
+X(ATTACK_TOOL_UA,            IP,      0, COV_B_ANY, NA, 0)
+X(ATTACK_PATH,               IP,      0, COV_B_ANY, NA, 0)
+X(WEAK_TLS,                  IP,      0, COV_B_ANY, NA, 0)
+X(NO_MONITOR_MODE,           HOST,    0, COV_B_ANY, NA, 0)
+X(CLEARTEXT_CRED,            IP,      0, COV_B_ANY, NA, 0)
+X(BEACON_FLOOD,              DOT11,   COV_F_BEACON, COV_B_ANY, RATE, 0)
+X(AUTH_FLOOD,                DOT11,   COV_F_AUTH, COV_B_ANY, RATE, 0)
+X(SSID_CONFUSION,            DOT11,   COV_F_BEACON, COV_B_ANY, STATE, 0)
+X(MGMT_FUZZ,                 DOT11,   COV_F_BEACON, COV_B_ANY, RATE, 0)
+X(ROGUE_RADIUS,              DOT11,   COV_F_EAPOL, COV_B_ANY, EXCHANGE, 0)
+X(ICMP_TUNNEL,               IP,      0, COV_B_ANY, NA, 0)
+X(MY_NETWORK_RECON,          DOT11,   COV_F_PROBE | COV_F_ASSOC, COV_B_ANY, STATE, COV_N_OWN_NET)
+X(RECURRING_TRANSIT,         DOT11,   COV_F_PROBE, COV_B_ANY, RATE, 0)
+X(UNKNOWN_DEVICE,            DOT11,   COV_F_ASSOC, COV_B_ANY, EVENT, COV_N_OWN_NET | COV_N_ROSTER)
+X(RF_DEGRADED,               DOT11,   COV_F_DATA, COV_B_ANY, RATE, 0)
+X(ASSOC_FLOOD,               DOT11,   COV_F_ASSOC, COV_B_ANY, RATE, 0)
+X(BTM_ABUSE,                 DOT11,   COV_F_ACTION, COV_B_ANY, RATE, 0)
+X(WPA_DOWNGRADE,             DOT11,   COV_F_BEACON, COV_B_ANY, STATE, 0)
+X(PEAP_NO_SERVER_CERT,       DOT11,   COV_F_EAPOL, COV_B_ANY, EXCHANGE, 0)
+X(CSA_ABUSE,                 DOT11,   COV_F_BEACON | COV_F_ACTION, COV_B_ANY, EVENT, 0)
+X(RRM_SURVEY_ABUSE,          DOT11,   COV_F_ACTION, COV_B_ANY, RATE, 0)
+X(RTS_FLOOD,                 DOT11,   COV_F_CTRL, COV_B_ANY, RATE, 0)
+X(CAPTIVE_PORTAL,            IP,      0, COV_B_ANY, NA, 0)
+X(BLOCKACK_ATTACK,           DOT11,   COV_F_CTRL, COV_B_ANY, EVENT, 0)
+X(FRAG_PLAINTEXT,            DOT11,   COV_F_DATA, COV_B_ANY, EXCHANGE, 0)
+X(FRAG_BCAST,                DOT11,   COV_F_DATA, COV_B_ANY, EVENT, 0)
+X(FRAG_CACHE,                DOT11,   COV_F_DATA | COV_F_ASSOC, COV_B_ANY, EXCHANGE, 0)
+X(FRAG_MIXED,                DOT11,   COV_F_DATA, COV_B_ANY, EXCHANGE, 0)
+X(SAE_PSK_SPLIT,             DOT11,   COV_F_BEACON, COV_B_ANY, STATE, 0)
+X(SAE_PSK_REGRESSION,        DOT11,   COV_F_BEACON, COV_B_ANY, STATE, COV_N_DB)
+X(FRAG_AMSDU,                DOT11,   COV_F_DATA, COV_B_ANY, EXCHANGE, 0)
+X(FRAG_AMSDU_EAPOL,          DOT11,   COV_F_DATA, COV_B_ANY, EVENT, 0)
+X(FRAG_MIXKEY,               DOT11,   COV_F_DATA | COV_F_EAPOL, COV_B_ANY, EXCHANGE, 0)
+X(FRAG_PN_GAP,               DOT11,   COV_F_DATA, COV_B_ANY, EXCHANGE, 0)
+X(FRAG_EAPOL_RELAY,          DOT11,   COV_F_DATA | COV_F_EAPOL, COV_B_ANY, EVENT, 0)
+X(SA_QUERY_FLOOD,            DOT11,   COV_F_ACTION, COV_B_ANY, RATE, 0)
+X(MFP_UNPROTECTED,           DOT11,   COV_F_BEACON | COV_F_ACTION, COV_B_ANY, EVENT, 0)
+X(OPEN_SETUP_AP,             DOT11,   COV_F_BEACON, COV_B_ANY, STATE, 0)
+X(WPS_PIN_BRUTE,             DOT11,   COV_F_EAPOL, COV_B_ANY, EXCHANGE, 0)
+X(WPS_LOCKOUT_CYCLING,       DOT11,   COV_F_BEACON, COV_B_ANY, STATE, 0)
+X(WPS_PBC_RACE,              DOT11,   COV_F_BEACON | COV_F_EAPOL, COV_B_ANY, EXCHANGE, 0)
+X(MLE_INVALID_LINK_ID,       DOT11,   COV_F_BEACON | COV_F_ASSOC, COV_B_ANY, STATE, 0)
+X(MLE_COMMON_INFO_LEN_BAD,   DOT11,   COV_F_BEACON | COV_F_ASSOC, COV_B_ANY, STATE, 0)
+X(MLE_SUBELEM_OVERRUN,       DOT11,   COV_F_BEACON | COV_F_ASSOC, COV_B_ANY, STATE, 0)
+X(MLD_MAC_COLLISION,         DOT11,   COV_F_BEACON | COV_F_ASSOC, COV_B_ANY, STATE, 0)
+X(MLE_CROSS_LINK_CIPHER_DOWNGRADE, DOT11, COV_F_BEACON | COV_F_ASSOC, COV_B_ANY, STATE, 0)
+X(CAM_WS_DISCOVERY,          IP,      0, COV_B_ANY, NA, 0)
+X(PM_FORGE,                  DOT11,   COV_F_DATA, COV_B_ANY, EXCHANGE, 0)
+X(SURV_CLOUD_SNI,            IP,      0, COV_B_ANY, NA, 0)
+X(TPC_ABSENT_HIGH_BAND,      DOT11,   COV_F_BEACON, COV_B_5 | COV_B_5DFS, STATE, COV_N_OWN_NET)
+X(CAM_SETUP_SSID,            DOT11,   COV_F_BEACON, COV_B_ANY, STATE, 0)
+X(QUEUE_EVICT,               DOT11,   COV_F_DATA | COV_F_ASSOC, COV_B_ANY, EXCHANGE, 0)
+X(MLE_RECONFIG_NO_MLO,       DOT11,   COV_F_BEACON, COV_B_ANY, STATE, 0)
+X(MLE_PR_BEACON_DIFF,        DOT11,   COV_F_BEACON, COV_B_ANY, EVENT, 0)
+X(SURV_DNS,                  IP,      0, COV_B_ANY, NA, 0)
+X(WPS_PIXIE_PROBE,           DOT11,   COV_F_EAPOL, COV_B_ANY, EXCHANGE, 0)
+X(WPS_PIXIE_LIKELY_SUCCESS,  DOT11,   COV_F_EAPOL, COV_B_ANY, EXCHANGE, 0)
+X(COUNTRY_ABSENT,            DOT11,   COV_F_BEACON, COV_B_5 | COV_B_5DFS, STATE, 0)
+X(DFS_MASKING,               DOT11,   COV_F_BEACON, COV_B_5DFS, STATE, 0)
+X(CAM_MDNS_SERVICE,          IP,      0, COV_B_ANY, NA, 0)
+X(CAM_SSDP_DEVICE,           IP,      0, COV_B_ANY, NA, 0)
+X(CAM_SETUP_OUI,             DOT11,   COV_F_BEACON, COV_B_ANY, STATE, 0)
+X(CAM_RTSP_UNAUTH,           IP,      0, COV_B_ANY, NA, 0)
+X(BT_OWN_TRANSMIT,           BLE_HCI, 0, COV_B_ANY, NA, 0)
+X(BLE_ADV_FLOOD,             BLE_ADV, 0, COV_B_ANY, NA, 0)
+X(BLE_HID_UNEXPECTED,        BLE_ADV, 0, COV_B_ANY, NA, 0)
+X(BLE_WATCHLIST,             BLE_ADV, 0, COV_B_ANY, NA, 0)
+X(GNSS_JAMMING,              GNSS,    0, COV_B_ANY, NA, 0)
+X(GNSS_SPOOF_SUSPECT,        GNSS,    0, COV_B_ANY, NA, 0)
+X(GNSS_TIME_JUMP,            GNSS,    0, COV_B_ANY, NA, 0)
+X(GNSS_POSITION_JUMP,        GNSS,    0, COV_B_ANY, NA, 0)
+X(ADSB_EMERGENCY,            ADSB,    0, COV_B_ANY, NA, 0)
+X(KARMA_PROBE_FORGE,         DOT11,   COV_F_PROBE | COV_F_BEACON, COV_B_ANY, EXCHANGE, 0)
+X(PMKID_HARVEST,             DOT11,   COV_F_ASSOC | COV_F_EAPOL, COV_B_ANY, EXCHANGE, 0)
+X(HANDSHAKE_HARVEST,         DOT11,   COV_F_DEAUTH | COV_F_EAPOL, COV_B_ANY, EXCHANGE, 0)
+X(SENSOR_UNDERVOLT,          SYS,     0, COV_B_ANY, NA, 0)
+X(SENSOR_SOURCE_DOWN,        SYS,     0, COV_B_ANY, NA, 0)
