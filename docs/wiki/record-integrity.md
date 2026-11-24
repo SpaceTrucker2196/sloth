@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: issue #251 (from #241 item 18); FM 6-02.43 (2009) 3-19 (information assurance: availability, integrity, authentication, confidentiality, non-repudiation; integrity is "the protection from unauthorized change"); FIPS 180-4 (SHA-256); `src/jsonl_chain.h`, `src/jsonl_chain.c` (the writer), `src/jsonl_verify.c` (`--verify`), `src/jsonl_core.c` (the sink), `src/alerts/engine.c` (`alerts_pcap_sha256()`), `src/posture.c` (the report's head), `src/evidence_manifest.h` (#92 slice 3), `src/secure_file.h` (#87), `src/inventory.c` (`inventory_hash()`), `src/intel_pack.c`; `tests/test_jsonl_chain.c`, `tests/test_alert_pcap.c :: test_pcap_sha256_only_under_the_chain`, `make replay-check`.
 
-**Last updated**: 2026-11-24 (#251: the page; step 0, the chain, `--verify`, the report's head).
+**Last updated**: 2026-11-24 (#251 review: `n` on the chain record and the `N`-line tail rule, every segment's head from `--verify`, `pcap_sha256` read through the pinned directory, the handoff packet does not carry the head, the limits in § 3 restated), 2026-11-24 (#251: the page; step 0, the chain, `--verify`, the report's head).
 
 ---
 
@@ -45,9 +45,11 @@ With `--jsonl-chain N` (1..100000, both daemons, needs `-o` and
 ([[jsonl-schema]] § chain):
 
 ```json
-{"type":"chain","ts":1700000000,"v":1,"seq":2,"lines":3,"block_sha256":"…","prev_sha256":"…"}
+{"type":"chain","ts":1700000000,"v":1,"n":3,"seq":2,"lines":3,"block_sha256":"…","prev_sha256":"…"}
 ```
 
+- `n` is the run's `N`, on every record of the segment, so a reader
+  knows how many unchained lines the writer can have left (below).
 - `block_sha256` is the SHA-256 of the exact bytes of the `lines` lines
   between the previous chain record and this one, each with its `\n`:
   what a reader reads back, not what a builder meant.
@@ -59,9 +61,17 @@ With `--jsonl-chain N` (1..100000, both daemons, needs `-o` and
   **genesis** (`seq` 1, `lines` 0, `block_sha256` of nothing,
   `prev_sha256` 64 zeros) before the run's first record. Lines between
   one segment's last chain record and the next genesis (an earlier
-  run's tail after a crash, or a run without the flag) are in no block;
-  `--verify` counts them and gives the first line, and does not call
-  them a break.
+  run's tail after a crash) are in no block; `--verify` counts them and
+  gives the first line. The writer seals every `N` records, so a crash
+  leaves at most `N - 1` of them: `N` or more after a segment's last
+  chain record (before the next genesis or the end of the file) is a
+  **break**, because that is what taking a segment's chain records out
+  (genesis kept) looks like. A run without the flag appending to a
+  chained file looks the same and reads as the same break, since the
+  file cannot tell the two apart: keep a chained `-o` file chained, or
+  start a new file when the flag is dropped. Lines before the file's
+  first genesis (a file that was written without the flag first) are
+  not a break.
 - **Seals.** A block is closed after `N` records, at exit, and when a
   report is written. So a clean stop ends on a chain record, and the
   head a report prints is a line already in the file. A crash leaves
@@ -88,10 +98,18 @@ minutes.
 Under the same flag, an `alert.*` record that carries `pcap_path` also
 carries `pcap_sha256`, the SHA-256 of that file read back after the
 export wrote it (the engine's side table keeps it beside the path, for
-the key). The chained record then binds the capture's bytes, not only
+the key). It is read by name through the directory descriptor the
+exporter pinned when the directory was set and wrote the capture
+through, as the manifest reads its file back, and never through the
+`pcap_path` string: that string is the bare name when the full path
+does not fit (relative to the daemon's working directory it would name
+some other file), and names whatever is at that path now if the
+directory was moved after start. The open does not follow a symlink,
+take a terminal or wait on a FIFO, and anything but a regular file
+gets no hash. The chained record then binds the capture's bytes, not only
 its name: the manifest alone cannot show a capture and its line changed
 together, a chained `pcap_sha256` can. Absent when the file could not be
-read back (a path too long, recorded as the bare name). Off, the engine
+read back. Off, the engine
 reads nothing and the record has no such field.
 
 ## 3. `sloth --verify PATH`
@@ -101,8 +119,10 @@ Reads PATH and nothing else, writes nothing, exits.
 **A regular file** is read as a chained JSONL file. Each chain record
 must be exactly what the writer makes (it is re-rendered from its
 values and compared byte for byte); each non-genesis record must follow
-the previous one in `seq`, name it in `prev_sha256`, cover exactly the
-lines since it, and match their bytes. The first record that does not
+the previous one in `seq`, carry its segment's `n`, name it in
+`prev_sha256`, cover exactly the lines since it (at most `n`), and match
+their bytes; and no segment may end with `n` or more unchained lines
+after its last chain record. The first record that does not
 is the break, named by segment, block (`seq`) and line range:
 
 ```
@@ -113,9 +133,23 @@ verify: out.jsonl: JSONL hash chain (--jsonl-chain)
   result: break
 ```
 
-Intact, it prints the head (segment, `seq`, line and the SHA-256 of the
-head's line), the pending lines after it and the lines no segment
-covers. Exit `0` intact, `1` a break, `2` cannot verify (unreadable, or
+Intact, it prints every segment's head (one segment per run: its last
+chain record's `seq`, line and the SHA-256 of that line), then the
+file's head, the pending lines after it and the lines no segment
+covers:
+
+```
+  segment 1 head: seq 4 at line 11, sha256 …
+  segment 2 head: seq 4 at line 22, sha256 …
+  head: segment 2 seq 4 at line 22, sha256 …
+```
+
+A report written during a run is compared with that run's segment: its
+head is the segment's head, or (a report sealed mid-run) a chain record
+of that `seq` earlier in the same segment, whose line hashes to the
+report's SHA-256 (§6). Each segment's chain starts again at its
+genesis, so a later segment's head does not pass through an earlier
+one. Exit `0` intact, `1` a break, `2` cannot verify (unreadable, or
 no chain record: a file written without the flag).
 
 **A directory** is read as an evidence directory: every
@@ -130,11 +164,19 @@ them), and a file no line lists as unlisted; neither is a break.
 
 ### What `--verify` cannot show
 
-- **The end cut off at a chain record, or a whole segment removed**,
-  leaves a file that verifies: nothing after the cut refers to what was
-  cut. The defence is a copy of the head kept off the file: `--report`
-  prints it (§4), and the head `--verify` prints should be that one or
-  a later head whose chain passes through it.
+- **The end cut off at a chain record, or a whole segment removed**
+  (genesis and all), leaves a file that verifies: nothing after the cut
+  refers to what was cut. So does the **first** segment with every
+  chain record taken out, genesis included: its lines then read as
+  lines written before the first genesis. The defence is a copy of the
+  head kept off the file: `--report` prints it (§4), and `--verify`
+  must list that run's segment with that head, or a chain record of that
+  `seq` in it.
+- **Up to `N - 1` lines after a segment's last chain record** are a
+  possible crash tail. Anyone can change them, or remove the last seal
+  and change the up to `N - 1` lines it covered, and the file verifies,
+  with those lines reported as not covered or pending. A clean stop
+  leaves none; a smaller `N` bounds it.
 - **A file rewritten whole**, chain and all, by someone who can run the
   writer, verifies. Only a key the rewriter does not hold could show
   that (§5).
@@ -155,14 +197,19 @@ before the footer, and `--report-json` a `jsonl_chain` member
 ```
 ## Record integrity
 
-- **JSONL chain head**: seq `3`, sha256 `d470613b…`
+- **JSONL chain head**: seq `3`, sha256 `…64 hex…`
 ```
 
 Asking for the head seals the pending block first, so the head is a
 line the file holds when the report is written. A printed report
 therefore names one point of the file; anything up to that point that
 is later changed fails `--verify`, and a file that ends before that
-point no longer contains the head the report names.
+point no longer contains the head the report names. Under `--report`
+the section reads as above; `--report-json`'s member is
+`"jsonl_chain": {"seq":3,"sha256":"…"}`, after `risky_devices`.
+`tests/test_jsonl_chain.c :: test_report_prints_the_head` holds both
+against the line the file holds after the seal, and their absence with
+the chain off.
 
 ## 5. Not built: signing
 
@@ -173,8 +220,9 @@ stolen signs for whoever holds the sensor ([[sensor-compromise]]), so a
 signature proves less than it seems unless the key is revoked the
 moment the sensor is lost, and sloth has no key handling at all yet
 (the per-installation keys of #184 Stage 6 are not built). The chain
-and a head kept off the sensor (the report, the handoff packet) give
-integrity against later change without one.
+and a head kept off the sensor (a printed or copied report) give
+integrity against later change without one. The handoff packet
+([[handoff]], #250) does not carry the head today.
 
 ## 6. Checking by hand
 
@@ -197,5 +245,6 @@ built and agreed with both fields.
 - [[pcap-export]] § 5 — the evidence manifest `--verify` reads.
 - [[sensor-compromise]] — what a lost sensor holds, and why no key here.
 - [[cli-reference]] — `--jsonl-chain`, `--verify`.
-- [[posture-report]] · [[handoff]] — where a head is kept off the file.
+- [[posture-report]] — where a head is kept off the file.
+- [[handoff]] — the packet; it does not carry the chain head.
 - [[threat-model]]

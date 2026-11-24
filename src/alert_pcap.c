@@ -15,6 +15,7 @@
 #include "tune.h"
 #include "secure_file.h"
 #include "evidence_manifest.h"
+#include "jsonl_chain.h"
 #include "eapol_log.h"
 
 /* pcap-on-alert: when a rule fires with a concrete match_ip (and optional
@@ -259,6 +260,10 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
             snprintf(out_path, (size_t)out_sz, "%s", name);
     }
     return written;
+}
+
+int alert_pcap_sha256(const char *name, char hex[65]) {
+    return jc_sha256_at(g_dirfd, name, hex);
 }
 
 /* ── Age sweep (#166) ──────────────────────────────────────────────── */

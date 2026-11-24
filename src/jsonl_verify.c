@@ -42,6 +42,7 @@ static void line_hex(const char *rec, size_t n, char hex[JC_HEX_LEN]) {
 
 typedef struct {
     long long          ts;
+    unsigned           n;
     unsigned long long seq;
     unsigned           lines;
     char               blk[JC_HEX_LEN], prev[JC_HEX_LEN];
@@ -60,16 +61,19 @@ static int is_hex64(const char *s) {
 static int parse_rec(const char *line, size_t n, jc_rec_t *r) {
     char blk[80], prev[80];
     memset(r, 0, sizeof(*r));
-    if (sscanf(line, CHAIN_PREFIX "\"ts\":%lld,\"v\":1,\"seq\":%llu,\"lines\":%u,"
+    if (sscanf(line, CHAIN_PREFIX "\"ts\":%lld,\"v\":1,\"n\":%u,\"seq\":%llu,"
+               "\"lines\":%u,"
                "\"block_sha256\":\"%79[^\"]\",\"prev_sha256\":\"%79[^\"]\"}",
-               &r->ts, &r->seq, &r->lines, blk, prev) != 5)
+               &r->ts, &r->n, &r->seq, &r->lines, blk, prev) != 6)
         return -1;
+    if (r->n == 0 || r->n > JC_MAX_BLOCK) return -1;
     if (strlen(blk) != 64 || strlen(prev) != 64 || !is_hex64(blk) || !is_hex64(prev))
         return -1;
     memcpy(r->blk, blk, JC_HEX_LEN);
     memcpy(r->prev, prev, JC_HEX_LEN);
     char again[JC_RECORD_MAX];
-    int m = jc_format(again, sizeof(again), r->ts, r->seq, r->lines, r->blk, r->prev);
+    int m = jc_format(again, sizeof(again), r->ts, r->n, r->seq, r->lines,
+                      r->blk, r->prev);
     if (m <= 0 || (size_t)m != n || memcmp(again, line, n) != 0) return -1;
     return 0;
 }
@@ -88,7 +92,29 @@ static void set_break(jc_verify_t *v, uint64_t seg, uint64_t seq, uint64_t first
 static const char EMPTY_HEX[JC_HEX_LEN] =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
+/* After a segment's last chain record the writer leaves at most n-1
+ * lines (a crash between seals). More is chain records taken out, or a
+ * run without the flag appending to a chained file; the file cannot
+ * say which, so it is a break and the message names both. */
+static int tail_too_long(jc_verify_t *v, uint64_t since, uint64_t first,
+                         uint64_t last, uint64_t at) {
+    if (since < (uint64_t)v->head_n) return 0;
+    char what[240];
+    snprintf(what, sizeof(what), "%llu unchained lines after the segment's "
+             "last chain record (line %llu), where the writer leaves at most "
+             "%u: chain records were removed, or a run without --jsonl-chain "
+             "appended to this file", (unsigned long long)since,
+             (unsigned long long)v->head_line, v->head_n - 1);
+    set_break(v, v->head_segment, 0, first, last, at, what);
+    return 1;
+}
+
 void jc_verify_stream(FILE *f, jc_verify_t *v) {
+    jc_verify_stream_segs(f, v, NULL, NULL);
+}
+
+void jc_verify_stream_segs(FILE *f, jc_verify_t *v, jc_seg_head_fn seg_head,
+                           void *ctx) {
     memset(v, 0, sizeof(*v));
     if (!f) { v->status = 2; return; }
     char *line = NULL;
@@ -131,6 +157,10 @@ void jc_verify_stream(FILE *f, jc_verify_t *v) {
                     "a genesis record (seq 1) that claims lines");
                 break;
             }
+            if (in_chain && tail_too_long(v, since, first, last, ln)) break;
+            if (in_chain && seg_head)
+                seg_head(ctx, v->head_segment, v->head_seq, v->head_line,
+                         v->head_sha);
             if (since) {
                 if (!v->uncovered_first) v->uncovered_first = since_first;
                 v->uncovered += since;
@@ -141,6 +171,11 @@ void jc_verify_stream(FILE *f, jc_verify_t *v) {
         } else if (!in_chain) {
             set_break(v, seg, r.seq, first, last, ln,
                 "a chain record with no genesis before it");
+            break;
+        } else if (r.n != v->head_n) {
+            snprintf(what, sizeof(what), "n %u where the segment's genesis "
+                     "says %u", r.n, v->head_n);
+            set_break(v, seg, r.seq, first, last, ln, what);
             break;
         } else if (r.seq != v->head_seq + 1) {
             snprintf(what, sizeof(what), "seq %llu follows seq %llu",
@@ -153,9 +188,10 @@ void jc_verify_stream(FILE *f, jc_verify_t *v) {
                      (unsigned long long)v->head_line);
             set_break(v, seg, r.seq, first, last, ln, what);
             break;
-        } else if ((uint64_t)r.lines != since) {
-            snprintf(what, sizeof(what), "the record covers %u lines, the "
-                     "file holds %llu", r.lines, (unsigned long long)since);
+        } else if ((uint64_t)r.lines != since || r.lines > r.n) {
+            snprintf(what, sizeof(what), "the record covers %u lines (at most "
+                     "%u), the file holds %llu", r.lines, r.n,
+                     (unsigned long long)since);
             set_break(v, seg, r.seq, first, last, ln, what);
             break;
         } else if (strcmp(r.blk, got_hex) != 0) {
@@ -166,6 +202,7 @@ void jc_verify_stream(FILE *f, jc_verify_t *v) {
             v->blocks++;
         }
         v->records++;
+        v->head_n = r.n;
         v->head_segment = seg;
         v->head_seq = r.seq;
         v->head_line = ln;
@@ -179,6 +216,10 @@ void jc_verify_stream(FILE *f, jc_verify_t *v) {
     }
     free(line);
     if (v->status) return;
+    if (in_chain &&
+        tail_too_long(v, since, since ? since_first : 0, since ? v->lines : 0,
+                      v->lines))
+        return;
     v->pending = in_chain ? since : 0;
     if (!in_chain) {
         v->uncovered += since;
@@ -188,7 +229,10 @@ void jc_verify_stream(FILE *f, jc_verify_t *v) {
         v->status = 2;
         snprintf(v->brk_what, sizeof(v->brk_what), "no chain record: the file "
                  "was written without --jsonl-chain");
+        return;
     }
+    if (seg_head)
+        seg_head(ctx, v->head_segment, v->head_seq, v->head_line, v->head_sha);
 }
 
 /* ── --verify on an evidence directory ─────────────────────────────── */
@@ -424,6 +468,32 @@ void jc_verify_evidence_dir(const char *dir, jc_evdir_t *v) {
 
 /* ── sloth --verify PATH ───────────────────────────────────────────── */
 
+/* Each segment's head, kept until the summary is printed under them. */
+typedef struct {
+    char  *buf;
+    size_t len, cap;
+} seg_text_t;
+
+static void seg_line(void *ctx, uint64_t segment, uint64_t seq, uint64_t line,
+                     const char *sha) {
+    seg_text_t *t = ctx;
+    char one[200];
+    int n = snprintf(one, sizeof(one), "  segment %llu head: seq %llu at line "
+                     "%llu, sha256 %s\n", (unsigned long long)segment,
+                     (unsigned long long)seq, (unsigned long long)line, sha);
+    if (n <= 0 || (size_t)n >= sizeof(one)) return;
+    if (t->len + (size_t)n + 1 > t->cap) {
+        size_t nc = t->cap ? t->cap * 2 : 1024;
+        while (nc < t->len + (size_t)n + 1) nc *= 2;
+        char *nb = realloc(t->buf, nc);
+        if (!nb) return;
+        t->buf = nb;
+        t->cap = nc;
+    }
+    memcpy(t->buf + t->len, one, (size_t)n + 1);
+    t->len += (size_t)n;
+}
+
 static int verify_jsonl(const char *path, FILE *out) {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     FILE *f = fd >= 0 ? fdopen(fd, "r") : NULL;
@@ -433,10 +503,12 @@ static int verify_jsonl(const char *path, FILE *out) {
         return 2;
     }
     jc_verify_t v;
-    jc_verify_stream(f, &v);
+    seg_text_t segs = { NULL, 0, 0 };
+    jc_verify_stream_segs(f, &v, seg_line, &segs);
     fclose(f);
     fprintf(out, "verify: %s: JSONL hash chain (--jsonl-chain)\n", path);
     if (v.status == 2) {
+        free(segs.buf);
         fprintf(out, "  cannot verify: %s\n", v.brk_what);
         return 2;
     }
@@ -444,6 +516,10 @@ static int verify_jsonl(const char *path, FILE *out) {
             "checked %llu\n", (unsigned long long)v.lines,
             (unsigned long long)v.records, (unsigned long long)v.segments,
             v.segments == 1 ? "" : "s", (unsigned long long)v.blocks);
+    /* One head per run that wrote here: a report written during that
+     * run names its segment's head, or a chain record before it. */
+    if (segs.buf) fputs(segs.buf, out);
+    free(segs.buf);
     if (v.status == 1) {
         fprintf(out, "  BREAK at line %llu: segment %llu", 
                 (unsigned long long)v.brk_line, (unsigned long long)v.brk_segment);
@@ -473,8 +549,10 @@ static int verify_jsonl(const char *path, FILE *out) {
         fprintf(out, "  pending: %llu line%s after the head not yet chained%s\n",
                 (unsigned long long)v.pending, v.pending == 1 ? "" : "s",
                 v.fragment ? ", and a final line with no newline" : "");
-    fprintf(out, "  compare the head with the one a report printed: lines cut "
-            "after a chain record, or a whole segment removed, verify here\n");
+    fprintf(out, "  compare a report's head with its segment's head above, or "
+            "with the chain record of that seq in that segment (sha256 of its "
+            "line): lines cut after a chain record, or a whole segment "
+            "removed, verify here\n");
     fprintf(out, "  result: intact\n");
     return 0;
 }

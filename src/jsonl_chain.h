@@ -22,9 +22,13 @@
  * block they saw half of) gets one `chain` record after every N
  * records:
  *
- *   {"type":"chain","ts":T,"v":1,"seq":S,"lines":L,
+ *   {"type":"chain","ts":T,"v":1,"n":N,"seq":S,"lines":L,
  *    "block_sha256":"<64 hex>","prev_sha256":"<64 hex>"}
  *
+ *   n             the run's --jsonl-chain N, the same on every record
+ *                 of a segment: the writer never leaves N or more
+ *                 lines unchained, so --verify can tell a crash tail
+ *                 (at most N-1 lines) from chain records taken out
  *   block_sha256  SHA-256 of the exact bytes of the L lines between
  *                 the previous chain record and this one, each with
  *                 its '\n'
@@ -36,13 +40,18 @@
  * before any record of the run. The -o file is appended to across
  * runs, and a run does not read back what an earlier one wrote, so the
  * lines between one segment's last chain record and the next genesis
- * (an earlier run's tail after a crash, or a run without the flag) are
- * not covered, and --verify says how many there are and where. A
- * whole segment removed from the middle of the file, or the end of
- * the file cut off at a chain record, leaves a file that verifies:
- * only something kept off the file can show that, which is why
- * --report prints the head (the last chain record, with its SHA-256)
- * and why the issue's optional signature is a later step (not built:
+ * (an earlier run's tail after a crash) are not covered, and --verify
+ * says how many there are and where. More
+ * than N-1 of them after a segment's last chain record is a break:
+ * either chain records were taken out, or a run without the flag
+ * appended to a chained file, and the file cannot say which. A whole
+ * segment removed from the middle of the file (genesis and all), the
+ * first segment's chain records all removed, or the end of the file
+ * cut off at a chain record leaves a file that verifies: only
+ * something kept off the file can show that, which is why --report
+ * prints the head (the last chain record, with its SHA-256), why
+ * --verify prints every segment's head, and why the issue's optional
+ * signature is a later step (not built:
  * a key on a sensor that can be stolen proves less than it seems,
  * docs/wiki/sensor-compromise.md).
  *
@@ -83,12 +92,17 @@ int jc_writer_add(jc_writer_t *w, const char *bytes, size_t len);
 int jc_writer_seal(jc_writer_t *w, time_t ts, char *out, size_t cap);
 
 /* The record's exact bytes, which --verify re-renders to compare. */
-int jc_format(char *out, size_t cap, long long ts, unsigned long long seq,
-              unsigned lines, const char *block_hex, const char *prev_hex);
+int jc_format(char *out, size_t cap, long long ts, unsigned n,
+              unsigned long long seq, unsigned lines,
+              const char *block_hex, const char *prev_hex);
 
-/* SHA-256 of a regular file (not followed if a symlink), lowercase
- * hex. 0, or -1. For the alert records' pcap_sha256. */
-int jc_sha256_file(const char *path, char hex[JC_HEX_LEN]);
+/* SHA-256 of the regular file `name` (one path component, not followed
+ * if a symlink) in the directory dirfd, lowercase hex. 0, or -1. For
+ * the alert records' pcap_sha256: each exporter hashes through the
+ * directory descriptor it pinned and wrote through, never through a
+ * printable path, which can be a bare name or name another directory
+ * by now. */
+int jc_sha256_at(int dirfd, const char *name, char hex[JC_HEX_LEN]);
 
 /* ── --verify on a JSONL file ──────────────────────────────────────── */
 
@@ -103,6 +117,7 @@ typedef struct {
     uint64_t pending;             /* lines after the head */
     int      fragment;            /* the file ends without '\n' */
     /* The head: the last chain record. */
+    unsigned head_n;              /* its segment's n */
     uint64_t head_segment, head_seq, head_line;
     char     head_sha[JC_HEX_LEN];
     /* The first break. */
@@ -112,6 +127,15 @@ typedef struct {
 
 /* Reads `f` to its end or to the first break. */
 void jc_verify_stream(FILE *f, jc_verify_t *v);
+
+/* The same, calling seg_head once per segment that ended before the
+ * end of the file or the break, and for the last one when the file
+ * verifies, with that segment's head: what a report written during
+ * that run is compared with. */
+typedef void (*jc_seg_head_fn)(void *ctx, uint64_t segment, uint64_t seq,
+                               uint64_t line, const char *sha);
+void jc_verify_stream_segs(FILE *f, jc_verify_t *v, jc_seg_head_fn seg_head,
+                           void *ctx);
 
 /* ── --verify on an evidence directory (the #92 manifests) ────────── */
 

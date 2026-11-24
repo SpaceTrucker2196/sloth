@@ -149,6 +149,8 @@ static const alert_exporter_t wifi_exporter = {
     evidence_export_alert_name,
     evidence_export_pcap_unique,
     evidence_export_path,
+    alert_pcap_sha256,
+    evidence_export_sha256,
 };
 
 /* The table sloth-wifi selects (src/capture_side.c), and the test

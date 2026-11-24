@@ -55,12 +55,13 @@ bad:
     return -1;
 }
 
-int jc_format(char *out, size_t cap, long long ts, unsigned long long seq,
-              unsigned lines, const char *block_hex, const char *prev_hex) {
+int jc_format(char *out, size_t cap, long long ts, unsigned n_per,
+              unsigned long long seq, unsigned lines,
+              const char *block_hex, const char *prev_hex) {
     int n = snprintf(out, cap,
-        CHAIN_PREFIX "\"ts\":%lld,\"v\":1,\"seq\":%llu,\"lines\":%u,"
+        CHAIN_PREFIX "\"ts\":%lld,\"v\":1,\"n\":%u,\"seq\":%llu,\"lines\":%u,"
         "\"block_sha256\":\"%s\",\"prev_sha256\":\"%s\"}",
-        ts, seq, lines, block_hex, prev_hex);
+        ts, n_per, seq, lines, block_hex, prev_hex);
     return (n > 0 && (size_t)n < cap) ? n : 0;
 }
 
@@ -84,7 +85,7 @@ int jc_writer_add(jc_writer_t *w, const char *bytes, size_t len) {
 static int seal(jc_writer_t *w, time_t ts, char *out, size_t cap, int genesis) {
     char blk[JC_HEX_LEN];
     ctx_hex(&w->blk, blk);
-    int n = jc_format(out, cap, (long long)ts,
+    int n = jc_format(out, cap, (long long)ts, w->n,
                       (unsigned long long)(w->seq + 1), w->blk_lines, blk,
                       genesis ? ZERO_HEX : w->prev);
     if (!n) return 0;
@@ -107,9 +108,15 @@ int jc_writer_seal(jc_writer_t *w, time_t ts, char *out, size_t cap) {
 }
 
 
-int jc_sha256_file(const char *path, char hex[JC_HEX_LEN]) {
+int jc_sha256_at(int dirfd, const char *name, char hex[JC_HEX_LEN]) {
     hex[0] = '\0';
-    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    if (dirfd < 0 || !name || !name[0] || strchr(name, '/') ||
+        !strcmp(name, ".") || !strcmp(name, ".."))
+        return -1;
+    /* O_NOCTTY and O_NONBLOCK: nothing at the name is a terminal to
+     * acquire or a FIFO to wait on before the S_ISREG test. */
+    int fd = openat(dirfd, name,
+                    O_RDONLY | O_NOFOLLOW | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
     if (fd < 0) return -1;
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) { close(fd); return -1; }

@@ -205,6 +205,10 @@ int  eapol_export_commit(const char *tmp, const char *name,
 void eapol_export_discard(const char *tmp);
 int  eapol_export_ready(void);
 int  eapol_export_path(const char *name, char *out, size_t outsz);
+/* SHA-256 of the committed file `name`, read through the pinned
+ * directory it was written through (#251's pcap_sha256), not through
+ * the printable path. 0, or -1 when export is off or it cannot be read. */
+int  eapol_export_sha256(const char *name, char hex[65]);
 
 /* Count a failed write by another module into this directory (today
  * the evidence export) in eapol_export_failures() / eapol_export_error(),

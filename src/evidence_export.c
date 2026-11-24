@@ -59,6 +59,10 @@ int evidence_export_path(const char *name, char *out, size_t outsz) {
     return eapol_export_path(name, out, outsz);
 }
 
+int evidence_export_sha256(const char *name, char hex[65]) {
+    return eapol_export_sha256(name, hex);
+}
+
 int evidence_export_alert_name(const char *incident_id, uint64_t event_id,
                                const char *rule, char *out, size_t outsz) {
     if (!out || !outsz) return -1;

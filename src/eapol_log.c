@@ -11,6 +11,7 @@
 #include "pcap_format.h"
 #include "secure_file.h"
 #include "evidence_manifest.h"
+#include "jsonl_chain.h"
 #include "eap_track.h"
 #include "wps_track.h"
 #include "beacon_snoop.h"
@@ -1133,6 +1134,15 @@ int eapol_export_path(const char *name, char *out, size_t outsz) {
         if (n > 0 && (size_t)n < outsz) rc = 0;
         else out[0] = '\0';
     }
+    pthread_mutex_unlock(&g_mu);
+    return rc;
+}
+
+int eapol_export_sha256(const char *name, char hex[65]) {
+    hex[0] = '\0';
+    if (!bare_name(name)) return -1;
+    pthread_mutex_lock(&g_mu);
+    int rc = (g_collect && g_out_fd >= 0) ? jc_sha256_at(g_out_fd, name, hex) : -1;
     pthread_mutex_unlock(&g_mu);
     return rc;
 }

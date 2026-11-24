@@ -478,10 +478,12 @@ static int render_md(FILE *out, const sloth_state_t *s,
         if (jsonl_chain_head(&seq, hex)) {
             fprintf(out, "## Record integrity\n\n");
             fprintf(out, "- **JSONL chain head**: seq `%llu`, sha256 `%s`\n", seq, hex);
-            fprintf(out, "- `sloth --verify FILE` on the -o file prints its head; "
-                         "the same seq and sha256 there (or a later head whose "
-                         "chain passes through this one) ties this report to "
-                         "the file.\n\n");
+            fprintf(out, "- `sloth --verify FILE` on the -o file prints each "
+                         "segment's head (one segment per run). This run's "
+                         "segment ending on the same seq and sha256, or holding "
+                         "a chain record of this seq whose line hashes to this "
+                         "sha256 (a later head of the same segment chains "
+                         "through it), ties this report to the file.\n\n");
         }
     }
 

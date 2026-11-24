@@ -100,10 +100,23 @@ announced as written.
   nothing designated it names `--my-ssid`, `--my-bssid`, `--known-mac`
   and `--known-macs` instead of listing the neighbourhood.
   [[exposure-report]].
+- **Record integrity** (#251), the last section before the footer, only
+  with `--jsonl-chain N` and `-o`: the `-o` file's chain head, `seq` and
+  the SHA-256 of that chain record's line. Asking for it seals the
+  pending block, so it names a line the file holds; `sloth --verify` on
+  the file lists each run's segment head to compare it with.
+  [[record-integrity]] § 4.
+
+### The JSON report's `jsonl_chain` member
+
+Only with `--jsonl-chain N` and `-o` (absent otherwise, and every other
+key keeps its place): `{"seq":S,"sha256":"<64 hex>"}`, after
+`risky_devices` and before `exposure`. The same head as the Markdown
+section. [[record-integrity]] § 4.
 
 ### The JSON report's `exposure` member
 
-After `risky_devices`, before `findings` (#243):
+After `risky_devices` (and after `jsonl_chain` when the chain is on), before `findings` (#243):
 `{"designated":false,"needs":[...]}` with nothing designated, else
 `{"designated":true,"ssids","bssids","rostered","groups":[{"group",
 "title","state","findings","evidence","outside","assessed","rules"
@@ -121,7 +134,7 @@ alerts.
 
 ### The JSON report's `coverage` member
 
-The last member of the object, after `risky_devices`, `exposure` and `findings`;
+The last member of the object, after `risky_devices`, `jsonl_chain` (chain on only), `exposure` and `findings`;
 every earlier key keeps its place.
 
 | Key | Content |
@@ -182,5 +195,6 @@ sign-off document."
 - [[jsonl-schema]] — the streaming event log the report summarises.
 - [[coverage-assessment]] — the Collection coverage section.
 - [[exposure-report]] — the What this site reveals section.
+- [[record-integrity]] — the Record integrity section and `jsonl_chain`.
 - [`cleartext_cred` in the JSONL schema](jsonl-schema.md#cleartext_cred) —
   the "no password field, ever" rule.

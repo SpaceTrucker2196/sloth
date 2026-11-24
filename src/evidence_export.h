@@ -74,6 +74,10 @@ int evidence_export_alert_name(const char *incident_id, uint64_t event_id,
  * out = "" when export is off or the path does not fit. */
 int evidence_export_path(const char *name, char *out, size_t outsz);
 
+/* SHA-256 of the committed evidence file `name`, through the export
+ * directory's pinned descriptor (#251). 0, or -1. */
+int evidence_export_sha256(const char *name, char hex[65]);
+
 /* Write the frames for `ids` (n of them) as a libpcap savefile named
    `name` in the gated export directory.
  *

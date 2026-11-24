@@ -1017,8 +1017,11 @@ static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
         int written = ev
             ? dump_alert_evidence(a, a->pcap_path, sizeof(a->pcap_path))
             : x->ip_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
-        if (ev && written == 0 && ip_on && a->match_ip[0])
+        int via_ev = ev;    /* which exporter's directory holds the file */
+        if (ev && written == 0 && ip_on && a->match_ip[0]) {
             written = x->ip_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
+            via_ev = 0;
+        }
         if (written < 0) {
             a->pcap_write_failures++;
             a->pcap_path[0] = '\0';
@@ -1038,18 +1041,27 @@ static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
                 snprintf(sd->pcap_path, sizeof(sd->pcap_path), "%s", a->pcap_path);
                 /* #251: under --jsonl-chain the alert records that name
                  * the capture carry its SHA-256, so the chain covers the
-                 * capture and not only its name. Read back from the path
-                 * just written, as the manifest reads its file back; a
-                 * path that cannot be read (a bare name that did not
-                 * fit) gets no hash rather than a guess. Off, nothing is
-                 * read and nothing is emitted. Kept here, beside the
-                 * path, and not on alert_t: sloth_state_t holds 128 of
-                 * those, and the suite builds several states on the
-                 * stack. */
+                 * capture and not only its name. Read back by bare name
+                 * through the directory descriptor the exporter pinned
+                 * and wrote through, as the manifest reads its file
+                 * back: never through the printable path, which is a
+                 * bare name when the full one did not fit (relative to
+                 * the daemon's cwd, it names some other file) and names
+                 * whatever sits at that path now if the directory was
+                 * moved. A file that cannot be read gets no hash. Off,
+                 * nothing is read and nothing is emitted. Kept here,
+                 * beside the path, and not on alert_t: sloth_state_t
+                 * holds 128 of those, and the suite builds several
+                 * states on the stack. */
                 sd->pcap_sha256[0] = '\0';
-                if (jsonl_chain_enabled() &&
-                    jc_sha256_file(sd->pcap_path, sd->pcap_sha256) != 0)
-                    sd->pcap_sha256[0] = '\0';
+                if (jsonl_chain_enabled()) {
+                    const char *slash = strrchr(a->pcap_path, '/');
+                    const char *base = slash ? slash + 1 : a->pcap_path;
+                    int (*hash)(const char *, char[65]) =
+                        via_ev ? x->ev_sha256 : x->ip_sha256;
+                    if (!hash || hash(base, sd->pcap_sha256) != 0)
+                        sd->pcap_sha256[0] = '\0';
+                }
             }
         }
     }

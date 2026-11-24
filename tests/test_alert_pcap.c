@@ -20,6 +20,7 @@
 #include "tmp_dir.h"
 #include "jsonl.h"
 #include "sha256.h"
+#include "jsonl_chain.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -1094,7 +1095,7 @@ static void test_sweep_detects_a_shared_eapol_dir(void) {
 
 /* #251: the alert that names its capture carries the capture's SHA-256
  * under --jsonl-chain, and nothing new without it. The hash here is
- * taken over the file as stdio reads it, not through jc_sha256_file(). */
+ * taken over the file as stdio reads it, not through jc_sha256_at(). */
 static void test_pcap_sha256_only_under_the_chain(void) {
     for (int chain = 0; chain <= 1; chain++) {
         ap87_setup();
@@ -1162,6 +1163,85 @@ static void test_pcap_sha256_only_under_the_chain(void) {
     }
 }
 
+/* #251 review: pcap_sha256 is read through the directory the exporter
+ * pinned and wrote through, never through the printable path. Here
+ * --pcap-dir is moved after it was set and an empty directory made at
+ * its old path: the capture is written through the pinned descriptor
+ * into the moved directory, pcap_path names a file that is not at the
+ * old path, and the hash must still be the written capture's. Seen red
+ * with the engine hashing sd->pcap_path (no hash at all: rc -1). The
+ * bare-name case (a path too long for pcap_path) reaches the same
+ * lookup by name through the same descriptor. */
+static void test_pcap_sha256_reads_through_the_pinned_dir(void) {
+    ap87_setup();
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    char moved[TEST_TMP_MAX + 16];
+    snprintf(moved, sizeof(moved), "%s.moved", g_ap87);
+    ASSERT_EQ(rename(g_ap87, moved), 0);
+    ASSERT_EQ(mkdir(g_ap87, 0700), 0);
+    alerts_clear();
+    jsonl_chain_set(5u);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    conn_t *c = &s.conns[s.conn_count++];
+    snprintf(c->local_addr,  sizeof(c->local_addr),  "192.168.1.5");
+    snprintf(c->remote_addr, sizeof(c->remote_addr), "192.0.2.66");
+    c->local_port  = 33445;
+    c->remote_port = 443;
+    c->proto       = PROTO_TCP;
+    seed_packet(&s, "192.168.1.5", "192.0.2.66", 33445, 443, 1700000000);
+    alerts_update(&s);
+    int idx = find_threat_ip(&s);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const alert_t *a = &s.alerts[idx];
+        const char *base = strrchr(a->pcap_path, '/');
+        base = base ? base + 1 : a->pcap_path;
+        ASSERT(base[0] != '\0');
+        char at_path[TEST_TMP_MAX + 300], real[TEST_TMP_MAX + 300];
+        snprintf(at_path, sizeof(at_path), "%s/%s", g_ap87, base);
+        snprintf(real, sizeof(real), "%s/%s", moved, base);
+        struct stat st;
+        ASSERT(stat(at_path, &st) != 0);        /* nothing at the old path */
+        char got[65];
+        ASSERT_EQ(alerts_pcap_sha256(a, got), 0);
+        static uint8_t buf[1 << 16];
+        FILE *f = fopen(real, "rb");
+        ASSERT(f != NULL);
+        size_t n = f ? fread(buf, 1, sizeof(buf), f) : 0;
+        if (f) fclose(f);
+        ASSERT(n > 24);
+        char want[65];
+        sha256_hex(buf, n, want);
+        ASSERT_STR(got, want);
+        unlink(real);
+    }
+    jsonl_chain_set(0);
+    alerts_clear();
+    alert_pcap_set_dir(NULL);
+    /* The moved directory's manifest, then the directory. */
+    DIR *d = opendir(moved);
+    struct dirent *e;
+    while (d && (e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char p2[TEST_TMP_MAX + 300];
+        snprintf(p2, sizeof(p2), "%s/%s", moved, e->d_name);
+        unlink(p2);
+    }
+    if (d) closedir(d);
+    rmdir(moved);
+    ap87_cleanup();
+}
+
+/* jc_sha256_at() takes one path component and nothing else. */
+static void test_sha256_at_takes_a_bare_name(void) {
+    char hex[65];
+    ASSERT_EQ(jc_sha256_at(AT_FDCWD, "a/b", hex), -1);
+    ASSERT_EQ(jc_sha256_at(AT_FDCWD, "..", hex), -1);
+    ASSERT_EQ(jc_sha256_at(AT_FDCWD, "", hex), -1);
+    ASSERT_EQ(jc_sha256_at(-1, "x", hex), -1);
+    ASSERT_STR(hex, "");
+}
+
 void run_alert_pcap_tests(void) {
     TEST_SUITE("alert_pcap dir gating");
     RUN_TEST(test_set_dir_enables_disables);
@@ -1198,6 +1278,8 @@ void run_alert_pcap_tests(void) {
     RUN_TEST(test_write_failures_survive_reopen);
     RUN_TEST(test_dump_records_path_on_success);
     RUN_TEST(test_pcap_sha256_only_under_the_chain);
+    RUN_TEST(test_pcap_sha256_reads_through_the_pinned_dir);
+    RUN_TEST(test_sha256_at_takes_a_bare_name);
 
     TEST_SUITE("alert_pcap age sweep (#166)");
     RUN_TEST(test_sweep_name_shape);

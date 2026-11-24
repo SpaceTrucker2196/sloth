@@ -44,6 +44,10 @@ typedef struct {
                           char *name_out, size_t name_outsz,
                           char *err, size_t errsz);
     int (*ev_path)(const char *name, char *out, size_t outsz);
+    /* SHA-256 of a file each wrote, by bare name, through the directory
+     * descriptor it wrote through (#251's pcap_sha256). */
+    int (*ip_sha256)(const char *name, char hex[65]);
+    int (*ev_sha256)(const char *name, char hex[65]);
 } alert_exporter_t;
 
 /* A rule table is data the application selects (#213), as its poll

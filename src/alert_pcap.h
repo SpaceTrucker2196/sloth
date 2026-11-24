@@ -123,4 +123,11 @@ const char *alert_pcap_sweep_error(void);
 int  alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
                      char *out_path, int out_sz);
 
+/* SHA-256 of the dumped file `name` (a bare name: the last component of
+ * the path alert_pcap_dump() reported), read through the directory
+ * descriptor pinned at alert_pcap_set_dir() and written through, so it
+ * is the file just written even when --pcap-dir's path is too long to
+ * report or has since been moved (#251's pcap_sha256). 0, or -1. */
+int  alert_pcap_sha256(const char *name, char hex[65]);
+
 #endif /* ALERT_PCAP_H */

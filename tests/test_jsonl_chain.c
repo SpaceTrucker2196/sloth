@@ -24,6 +24,8 @@
 #include "sha256.h"
 #include "sloth_clock.h"
 #include "tmp_dir.h"
+#include "sloth.h"
+#include "posture.h"
 
 #define T0 1700000000
 
@@ -105,7 +107,7 @@ static size_t expected_file(char *out, size_t cap) {
     size_t o = 0;
     char rec[JC_RECORD_MAX + 2];
     int n = snprintf(rec, sizeof(rec), "{\"type\":\"chain\",\"ts\":%d,\"v\":1,"
-                     "\"seq\":1,\"lines\":0,\"block_sha256\":\"%s\","
+                     "\"n\":3,\"seq\":1,\"lines\":0,\"block_sha256\":\"%s\","
                      "\"prev_sha256\":\"%s\"}\n", T0, empty, Z);
     memcpy(out + o, rec, (size_t)n); o += (size_t)n;
     sha256_hex((const uint8_t *)rec, (size_t)n, prev);
@@ -121,7 +123,7 @@ static size_t expected_file(char *out, size_t cap) {
         }
         sha256_hex((const uint8_t *)out + start, o - start, blk);
         n = snprintf(rec, sizeof(rec), "{\"type\":\"chain\",\"ts\":%d,\"v\":1,"
-                     "\"seq\":%d,\"lines\":%d,\"block_sha256\":\"%s\","
+                     "\"n\":3,\"seq\":%d,\"lines\":%d,\"block_sha256\":\"%s\","
                      "\"prev_sha256\":\"%s\"}\n", T0, b + 2, sizes[b], blk, prev);
         memcpy(out + o, rec, (size_t)n); o += (size_t)n;
         sha256_hex((const uint8_t *)rec, (size_t)n, prev);
@@ -369,7 +371,7 @@ static void test_removals(void) {
         verify_path(path, &v);
         ASSERT_EQ(v.status, 1);
         ASSERT_EQ(v.brk_seq, 2u);
-        ASSERT(strstr(v.brk_what, "covers 3 lines, the file holds 2") != NULL);
+        ASSERT(strstr(v.brk_what, "covers 3 lines (at most 3), the file holds 2") != NULL);
         free(c);
     }
     /* The second block and its record (lines 6-9) out: the next
@@ -393,6 +395,207 @@ static void test_removals(void) {
     }
     free(b);
     teardown();
+}
+
+/* Drop every line of b (n bytes) for which drop(line_no) is true;
+ * returns the new length. Line numbers from 1. */
+static size_t drop_lines(char *b, size_t n, int (*drop)(int ln)) {
+    size_t o = 0, i = 0;
+    int ln = 1;
+    while (i < n) {
+        char *e = memchr(b + i, '\n', n - i);
+        size_t l = e ? (size_t)(e - (b + i)) + 1 : n - i;
+        if (!drop(ln)) { memmove(b + o, b + i, l); o += l; }
+        i += l;
+        ln++;
+    }
+    return o;
+}
+
+/* Two runs, --jsonl-chain 3, 7 lines each: segment 1 is lines 1-11
+ * (genesis, blocks at 5, 9, 11), segment 2 lines 12-22. */
+static void two_runs(const char *path) {
+    write_chained(path, 3, 7);
+    write_chained(path, 3, 7);
+}
+
+static int drop_seg1_records(int ln) { return ln == 5 || ln == 9 || ln == 11; }
+static int drop_seg2_records(int ln) { return ln == 16 || ln == 20 || ln == 22; }
+static int drop_last_seal(int ln)    { return ln == 22; }
+
+/* #251 review: a segment's chain records taken out, its genesis kept.
+ * The writer never leaves N or more lines unchained, so 7 lines after
+ * a genesis (or after a segment's last record) is a break, whether a
+ * genesis follows (segment 1) or the file ends (segment 2), and the
+ * lines in it were edited. Seen red with tail_too_long() returning 0:
+ * both read as "intact" (not covered / pending). The control: the last
+ * seal alone removed leaves 1 line, a crash tail, which still verifies
+ * (the limit the page states). */
+static void test_removed_chain_records(void) {
+    if (setup() != 0) { ASSERT(0); return; }
+    char path[TEST_TMP_MAX + 16];
+    snprintf(path, sizeof(path), "%s/c.jsonl", g_dir);
+    int (*const cuts[3])(int) = { drop_seg1_records, drop_seg2_records,
+                                  drop_last_seal };
+    for (int k = 0; k < 3; k++) {
+        unlink(path);
+        two_runs(path);
+        size_t n = 0;
+        char *b = slurp(path, &n);
+        ASSERT(b != NULL);
+        if (!b) break;
+        n = drop_lines(b, n, cuts[k]);
+        char *p = strstr(b, "\"s\":\"x\"");     /* an edit in segment 1 */
+        if (k == 0 && p) p[5] = 'y';
+        ASSERT_EQ(spit(path, b, n), 0);
+        free(b);
+        jc_verify_t v;
+        verify_path(path, &v);
+        if (k < 2) {
+            ASSERT_EQ(v.status, 1);
+            ASSERT_EQ(v.brk_first, k == 0 ? 2u : 13u);
+            ASSERT_EQ(v.brk_last,  k == 0 ? 8u : 19u);
+            ASSERT(strstr(v.brk_what, "7 unchained lines") != NULL);
+            ASSERT(strstr(v.brk_what, "at most 2") != NULL);
+        } else {
+            ASSERT_EQ(v.status, 0);
+            ASSERT_EQ(v.pending, 1u);
+            ASSERT_EQ(v.head_seq, 3u);
+        }
+    }
+    teardown();
+}
+
+/* A record whose n is not its genesis's is a break. Seen red with the
+ * n test removed: the head's own n edited verified as intact, with a
+ * new head sha. */
+static void test_n_is_held_per_segment(void) {
+    if (setup() != 0) { ASSERT(0); return; }
+    char path[TEST_TMP_MAX + 16];
+    snprintf(path, sizeof(path), "%s/c.jsonl", g_dir);
+    write_chained(path, 3, 7);
+    size_t n = 0;
+    char *b = slurp(path, &n);
+    ASSERT(b != NULL);
+    char *last = b ? strstr(b, "\"seq\":4,") : NULL;
+    ASSERT(last != NULL);
+    if (last) {
+        ASSERT(memcmp(last - 6, "\"n\":3,", 6) == 0);
+        last[-2] = '4';
+        ASSERT_EQ(spit(path, b, n), 0);
+        jc_verify_t v;
+        verify_path(path, &v);
+        ASSERT_EQ(v.status, 1);
+        ASSERT(strstr(v.brk_what, "n 4 where the segment's genesis says 3") != NULL);
+    }
+    free(b);
+    teardown();
+}
+
+/* SHA-256 of line `want` (from 1) of the file, with its newline. */
+static int line_sha(const char *path, int want, char hex[65]) {
+    size_t n = 0;
+    char *b = slurp(path, &n);
+    const char *ln = b;
+    for (int k = 1; ln && k < want; k++) { ln = strchr(ln, '\n'); if (ln) ln++; }
+    const char *end = ln ? strchr(ln, '\n') : NULL;
+    int rc = -1;
+    if (end) {
+        sha256_hex((const uint8_t *)ln, (size_t)(end + 1 - ln), hex);
+        rc = 0;
+    }
+    free(b);
+    return rc;
+}
+
+/* #251 review: --verify prints every segment's head, so a report from
+ * an earlier run can be checked. Seen red with the seg_line() output
+ * not printed. */
+static void test_verify_prints_each_segment_head(void) {
+    if (setup() != 0) { ASSERT(0); return; }
+    char path[TEST_TMP_MAX + 16];
+    snprintf(path, sizeof(path), "%s/c.jsonl", g_dir);
+    two_runs(path);
+    char h1[65], h2[65];
+    ASSERT_EQ(line_sha(path, 11, h1), 0);
+    ASSERT_EQ(line_sha(path, 22, h2), 0);
+    char out[TEST_TMP_MAX + 16];
+    snprintf(out, sizeof(out), "%s/verify.txt", g_dir);
+    FILE *o = fopen(out, "w");
+    ASSERT(o != NULL);
+    if (o) {
+        ASSERT_EQ(jc_verify_main(path, o), 0);
+        fclose(o);
+        size_t tn = 0;
+        char *t = slurp(out, &tn);
+        char want[200];
+        snprintf(want, sizeof(want), "segment 1 head: seq 4 at line 11, sha256 %s\n", h1);
+        ASSERT(t && strstr(t, want) != NULL);
+        snprintf(want, sizeof(want), "segment 2 head: seq 4 at line 22, sha256 %s\n", h2);
+        ASSERT(t && strstr(t, want) != NULL);
+        free(t);
+    }
+    teardown();
+}
+
+/* #251 review: --report and --report-json print the head, which is the
+ * chain record the file holds after the seal; with the chain off they
+ * print neither. Seen red: the Markdown block deleted, the JSON member
+ * deleted, seq and sha swapped, and (the absence half) both printed
+ * whatever jsonl_chain_head() returned. */
+static void test_report_prints_the_head(void) {
+    static sloth_state_t st;
+    static char md[1 << 16], js[1 << 16];
+    for (int chain = 0; chain <= 1; chain++) {
+        if (setup() != 0) { ASSERT(0); return; }
+        char path[TEST_TMP_MAX + 16];
+        snprintf(path, sizeof(path), "%s/c.jsonl", g_dir);
+        memset(&st, 0, sizeof(st));
+        jsonl_chain_set(chain ? 3u : 0u);
+        ASSERT_EQ(jsonl_open(path), 1);
+        for (int i = 0; i < 4; i++) jsonl_emit_line(LINES[i]);
+        memset(md, 0, sizeof(md));
+        memset(js, 0, sizeof(js));
+        FILE *f = fmemopen(md, sizeof(md) - 1, "w");
+        ASSERT(f != NULL);
+        if (f) { posture_render_md(f, &st, T0, NULL); fclose(f); }
+        f = fmemopen(js, sizeof(js) - 1, "w");
+        ASSERT(f != NULL);
+        if (f) { posture_render_json(f, &st, T0); fclose(f); }
+        jsonl_emit_line(LINES[4]);
+        jsonl_close();
+        if (!chain) {
+            ASSERT(strstr(md, "Record integrity") == NULL);
+            ASSERT(strstr(js, "jsonl_chain") == NULL);
+            ASSERT(strstr(md, "## ") != NULL);      /* it did render */
+            ASSERT(strstr(js, "\"risky_devices\"") != NULL);
+            teardown();
+            continue;
+        }
+        /* genesis 1, three lines, seq 2 at 5, one line, the md render's
+         * seal seq 3 at 7 (the JSON render finds nothing pending). */
+        char h7[65];
+        ASSERT_EQ(line_sha(path, 7, h7), 0);
+        char want[200];
+        snprintf(want, sizeof(want),
+                 "## Record integrity\n\n- **JSONL chain head**: seq `3`, sha256 `%s`\n", h7);
+        ASSERT(strstr(md, want) != NULL);
+        snprintf(want, sizeof(want),
+                 "  \"jsonl_chain\": {\"seq\":3,\"sha256\":\"%s\"},\n", h7);
+        const char *jc = strstr(js, want);
+        ASSERT(jc != NULL);
+        const char *rd = strstr(js, "\"risky_devices\"");
+        const char *ex = strstr(js, "\"exposure\"");
+        ASSERT(rd && jc && ex && rd < jc && jc < ex);
+        /* The member closes the line before it and the next opens. */
+        ASSERT(jc && jc > js + 3 && memcmp(jc - 3, "],\n", 3) == 0);
+        /* And the file verifies with that line as a chain record. */
+        jc_verify_t v;
+        verify_path(path, &v);
+        ASSERT_EQ(v.status, 0);
+        ASSERT_EQ(v.head_seq, 4u);
+        teardown();
+    }
 }
 
 static void test_parse_block(void) {
@@ -496,6 +699,10 @@ void run_jsonl_chain_tests(void) {
     RUN_TEST(test_off_is_byte_identical);
     RUN_TEST(test_segments_and_pending);
     RUN_TEST(test_removals);
+    RUN_TEST(test_removed_chain_records);
+    RUN_TEST(test_n_is_held_per_segment);
+    RUN_TEST(test_verify_prints_each_segment_head);
+    RUN_TEST(test_report_prints_the_head);
     TEST_SUITE("verify an evidence directory (#251)");
     RUN_TEST(test_evidence_dir);
 }

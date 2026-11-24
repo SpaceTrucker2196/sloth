@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: issue #251 part 2 (from #241 item 19); FM 6-02.43 (2009) 2-42 (compromise procedures belong where every unit can read them, not only in one unit's own procedures); [[deployment]] (paths, the unit's `StateDirectory=`), [[fleet]] § The transport (tailnet, `--web-allow`, `--peer`), [[retention]], [[pcap-export]], [[record-integrity]]; `src/preflight.c` (`check_at_rest()`), `src/preflight_gather.c` (`pf_block_crypt()`), `src/preflight.h` (`PF_PLAIN_RETAIN_DAYS`); `tests/test_preflight.c`; Linux `Documentation/ABI/testing/sysfs-block-dm` (`dm/uuid`, `dm/name`) and `sysfs-block` (`slaves/`); cryptsetup sets a dm-crypt mapping's uuid to `CRYPT-<type>-…`.
 
-**Last updated**: 2026-11-24 (#251: the page, and the `--preflight` at-rest check).
+**Last updated**: 2026-11-24 (#251 review: step 3 no longer counts a handoff packet as holding the chain head, which it does not), 2026-11-24 (#251: the page, and the `--preflight` at-rest check).
 
 ---
 
@@ -51,8 +51,10 @@ In this order, the first two as soon as the loss is known:
    to be in hand. Records from it after that time are not trusted:
    fleet imports from it, its JSONL, its reports. Records before it
    stay trusted only as far as something kept off the sensor ties
-   them: a printed or copied report's chain head, a handoff packet
-   ([[record-integrity]] § 4). A sensor that comes back is rebuilt, not
+   them: a printed or copied report's chain head ([[record-integrity]]
+   § 4), checked against the segment heads `sloth --verify` lists. A
+   handoff packet does not carry the chain head today, so it ties
+   nothing. A sensor that comes back is rebuilt, not
    resumed: its files may have been changed while it was away.
 4. **Change what it knew.** The passphrases of networks whose handshakes
    were under `--eapol-dir` (the material is offline-crackable, and the
