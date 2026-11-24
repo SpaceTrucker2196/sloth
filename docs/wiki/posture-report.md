@@ -87,7 +87,7 @@ announced as written.
   never changes), its incident id, and the four quality fields on one
   line, `complete partial (hop), latency 1700 ms, corroboration 1
   radio, source ok`, parts not known left out; `not assessed` when none
-  is known (a `--replay`). [[coverage-assessment]] § 9.
+  is known (a `--replay`, which carries no corroboration either). [[coverage-assessment]] § 9.
 
 ### The JSON report's `findings` member
 

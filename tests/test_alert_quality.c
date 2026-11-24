@@ -10,6 +10,7 @@
 #include "alert_quality_capture.h"
 #include "beacon_snoop.h"
 #include "capture_side.h"
+#include "cov_interval_capture.h"
 #include "cov_timeline.h"
 #include "deauth_snoop.h"
 #include "evidence_ring.h"
@@ -201,6 +202,26 @@ static void test_judge_precedence(void) {
     ASSERT_EQ(judge(COV_BLIND, COV_R_BAND, 1, 1, 0, 0, &w), AQ_COMPLETE_NONE);
     ASSERT_EQ(w, COV_R_NONE);
     ASSERT_EQ(judge(COV_BLIND, COV_R_NO_SOURCE, 0, 0, 0, 0, &w), AQ_COMPLETE_NONE);
+
+    /* A cited frame has left the ring (review fix): the window the rest
+     * span is not the incident's, so a clean-looking window does not
+     * make it full. Seen red with the `lost` branch removed from
+     * aq_judge() (full). The source words, which need no window, still
+     * decide, and so does the rule's own `partly, hop`. */
+    aq_in_t in;
+    memset(&in, 0, sizeof(in));
+    in.st = COV_OBSERVABLE; in.why = COV_R_NONE; in.window = 1; in.lost = 1;
+    in.uncovered_ms = 0; in.drops = 0;
+    ASSERT_EQ(aq_judge(&in, &w), AQ_COMPLETE_NONE);
+    ASSERT_EQ(w, COV_R_NONE);
+    in.window = 0;
+    ASSERT_EQ(aq_judge(&in, &w), AQ_COMPLETE_NONE);
+    in.st = COV_PARTLY; in.why = COV_R_HOP; in.hopping = 1;
+    ASSERT_EQ(aq_judge(&in, &w), AQ_COMPLETE_PARTIAL);
+    ASSERT_EQ(w, COV_R_HOP);
+    in.why = COV_R_SOURCE_STALE;
+    ASSERT_EQ(aq_judge(&in, &w), AQ_COMPLETE_PARTIAL);
+    ASSERT_EQ(w, COV_R_SOURCE_STALE);
 }
 
 /* ── the dwell and drop history ───────────────────────────────────── */
@@ -258,6 +279,20 @@ static void test_timeline_uncovered(void) {
     ASSERT_EQ(cov_tl_radio_last(COV_TL_RADIOS, &f, &ms), 0);
     cov_tl_reset();
     ASSERT_EQ(cov_tl_dwell_count(), 0);
+
+    /* Many pieces from two radios (the review fix reverses the newest-
+     * first walk before the sort): radio 0 on 2412 at +0 of each 200 ms
+     * cycle, radio 1 at +50, each 100 ms; 150 of every 200 ms covered,
+     * 100 cycles, 200 pieces. */
+    for (int k = 0; k < 100; k++) {
+        cov_tl_hop_note(0, 2412, 1000 + 200 * k);
+        cov_tl_hop_note(1, 2412, 1050 + 200 * k);
+        cov_tl_hop_note(0, 2437, 1100 + 200 * k);
+        cov_tl_hop_note(1, 2462, 1150 + 200 * k);
+    }
+    ASSERT_EQ(cov_tl_uncovered_ms(2412, 1000, 21000), 5000);
+    ASSERT_EQ(cov_tl_uncovered_ms(2437, 1000, 21000), 10000);
+    cov_tl_reset();
 }
 
 static void test_timeline_drops(void) {
@@ -621,8 +656,9 @@ static void test_drops_inside_the_window(void) {
 /* ── not assessed ─────────────────────────────────────────────────── */
 
 /* Before the first status sample, and in a --replay run, nothing is
- * judged: no complete, no src_state, no latency. The radios that
- * delivered the cited frames are still known. Seen red with the stamp's
+ * judged: no complete, no src_state, no latency. Before the sample the
+ * radios that delivered the cited frames are still known; in a replay
+ * they are not this sensor's radios. Seen red with the stamp's
  * `assessed` forced to 1 (complete full, src_state empty word). */
 static void test_not_assessed_before_a_sample_or_on_replay(void) {
     begin();
@@ -651,8 +687,114 @@ static void test_not_assessed_before_a_sample_or_on_replay(void) {
     if (i >= 0) {
         ASSERT_EQ(g_s.alerts[i].quality.complete, AQ_COMPLETE_NONE);
         ASSERT_EQ(g_s.alerts[i].quality.has_latency, 0);
+        /* A replayed frame's radio is not one of this sensor's: no
+         * corroboration (review fix). Seen red with the stamp ORing the
+         * mask whatever the live state (1). */
+        ASSERT_EQ(aq_corroboration(&g_s.alerts[i].quality), 0);
+    }
+    end();
+}
+
+
+/* ── review fixes: a judged incident keeps its word; lost frames ──── */
+
+/* An incident judged full stays full when a later evaluation cannot
+ * judge (here the monitor source is no longer configured: blind, no
+ * source), as sloth.db's upsert keeps it. Seen red with the stamp
+ * writing aq_judge()'s NONE back (complete 0). */
+static void test_full_stays_full_when_the_rule_goes_blind(void) {
+    begin();
+    monitor_up();
+    health();
+    uint64_t ids[1] = { note(T0_MS, 2437, 0) };
+    set_wall_ms(T0_MS + 300);
+    alerts_fire_ev_for_test(ALERT_TYPE_DEAUTH_FLOOD, ALERT_SEV_WARN, "q:full",
+                            "x", NULL, 0, ids, 1);
+    alerts_update(&g_s);
+    int i = find_key("q:full");
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(g_s.alerts[i].quality.complete, AQ_COMPLETE_FULL);
+    g_s.probe_iface[0] = '\0';
+    memset(&g_s.mon_health, 0, sizeof(g_s.mon_health));
+    health();
+    cov_status_t st = COV_OBSERVABLE; cov_reason_t why = COV_R_NONE;
+    ASSERT_EQ(cov_live_get(ALERT_TYPE_DEAUTH_FLOOD, &st, &why), 1);
+    ASSERT_EQ(st, COV_BLIND);
+    ASSERT(why != COV_R_SOURCE_DOWN);
+    set_wall_ms(T0_MS + 1300);
+    alerts_fire_ev_for_test(ALERT_TYPE_DEAUTH_FLOOD, ALERT_SEV_WARN, "q:full",
+                            "x", NULL, 0, ids, 1);
+    alerts_update(&g_s);
+    i = find_key("q:full");
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(g_s.alerts[i].quality.complete, AQ_COMPLETE_FULL);
+        ASSERT_EQ(g_s.alerts[i].quality.complete_why, COV_R_NONE);
+    }
+    end();
+}
+
+/* A finding some of whose cited frames have left the evidence ring is
+ * not stamped full: the frames still held span a window that is not
+ * the incident's, and a flood that turns the ring over must not hide a
+ * drop or a hop gap behind `full`. No latency either: the oldest held
+ * frame is not the oldest cited. A never-issued id misses exactly as an
+ * evicted one does (evidence_ring_get()'s range test). Seen red with
+ * `lost` forced to 0 in the stamp (both full, the first with a 300 ms
+ * latency). */
+static void test_cited_frames_gone_from_the_ring_are_not_full(void) {
+    begin();
+    monitor_up();
+    health();
+    uint64_t some[2] = { 999990, note(T0_MS, 2437, 0) };
+    uint64_t none[1] = { 999991 };
+    set_wall_ms(T0_MS + 300);
+    alerts_fire_ev_for_test(ALERT_TYPE_DEAUTH_FLOOD, ALERT_SEV_WARN, "q:some",
+                            "x", NULL, 0, some, 2);
+    alerts_fire_ev_for_test(ALERT_TYPE_DEAUTH_FLOOD, ALERT_SEV_WARN, "q:none",
+                            "x", NULL, 0, none, 1);
+    alerts_update(&g_s);
+    int i = find_key("q:some"), j = find_key("q:none");
+    ASSERT(i >= 0 && j >= 0);
+    if (i >= 0 && j >= 0) {
+        ASSERT_EQ(g_s.alerts[i].quality.complete, AQ_COMPLETE_NONE);
+        ASSERT_EQ(g_s.alerts[i].quality.has_latency, 0);
+        ASSERT_EQ(g_s.alerts[j].quality.complete, AQ_COMPLETE_NONE);
+        /* Still assessed: the source is known. */
+        ASSERT_EQ(g_s.alerts[i].quality.src_state, AQ_SRC_OK);
+        /* The held frame's radio still delivered it. */
         ASSERT_EQ(aq_corroboration(&g_s.alerts[i].quality), 1);
     }
+    end();
+}
+
+/* The capture stage writes the monitor handle's drop total each tick,
+ * ps_drop plus ps_ifdrop, only while pcap_stats() answers. Seen red
+ * with the cov_tl_drops_note() call removed from cov_iv_capture_poll()
+ * (count 0), with ps_ifdrop left out of the sum (the rise at +1500 not
+ * seen: 0), and with the stats_ok() guard removed (a fourth entry). */
+static void test_the_capture_stage_writes_the_drop_totals(void) {
+    begin();
+    cov_iv_capture_reset();
+    monitor_up();
+    g_s.mon_health.stats_valid = 1;
+    g_s.mon_health.ps_drop = 10;
+    set_wall_ms(T0_MS - 500);
+    cov_iv_capture_poll(&g_s, g_wall, g_mono += 1000);
+    set_wall_ms(T0_MS + 500);
+    cov_iv_capture_poll(&g_s, g_wall, g_mono += 1000);
+    g_s.mon_health.ps_ifdrop = 3;
+    set_wall_ms(T0_MS + 1500);
+    cov_iv_capture_poll(&g_s, g_wall, g_mono += 1000);
+    ASSERT_EQ(cov_tl_drop_count(), 3);
+    ASSERT_EQ(cov_tl_drops_in(T0_MS - 400, T0_MS - 100), 0);
+    ASSERT_EQ(cov_tl_drops_in(T0_MS + 800, T0_MS + 1200), 1);
+    g_s.mon_health.stats_valid = 0;
+    g_s.mon_health.ps_drop = 50;
+    set_wall_ms(T0_MS + 2500);
+    cov_iv_capture_poll(&g_s, g_wall, g_mono += 1000);
+    ASSERT_EQ(cov_tl_drop_count(), 3);
+    cov_iv_capture_reset();
     end();
 }
 
@@ -939,6 +1081,9 @@ void run_alert_quality_tests(void) {
     RUN_TEST(test_a_rule_with_no_frames_takes_its_status);
     RUN_TEST(test_drops_inside_the_window);
     RUN_TEST(test_not_assessed_before_a_sample_or_on_replay);
+    RUN_TEST(test_full_stays_full_when_the_rule_goes_blind);
+    RUN_TEST(test_cited_frames_gone_from_the_ring_are_not_full);
+    RUN_TEST(test_the_capture_stage_writes_the_drop_totals);
     RUN_TEST(test_the_hop_stage_writes_each_radios_dwells);
     RUN_TEST(test_the_stream_carries_the_fields);
     RUN_TEST(test_the_line_and_the_title_tag);

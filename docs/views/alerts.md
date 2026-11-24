@@ -375,7 +375,7 @@ title line:
 ```
 
 Parts not known are left out; `(not assessed)` when none is (a
-`--replay`). The tag is the panel's: the alert's title, in the stream
+`--replay`, which carries no corroboration either). The tag is the panel's: the alert's title, in the stream
 and in sloth.db, stays the rule name. What each field means:
 [coverage-assessment](../wiki/coverage-assessment.md) § 9.
 

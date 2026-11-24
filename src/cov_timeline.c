@@ -98,8 +98,17 @@ int64_t cov_tl_uncovered_ms(int freq_mhz, int64_t t0_ms, int64_t t1_ms) {
         if (b <= a || n == TL_SPANS) continue;
         s[n] = a; e[n] = b; n++;
     }
-    /* Union of the pieces: sorted by start (insertion; the pieces of one
-     * radio already arrive in order, so this is near-linear), merged. */
+    /* The walk above went newest first, so the pieces are in descending
+     * start order, the insertion sort's worst case (quadratic, on the
+     * poll loop, per cited channel of every finding judged). Reversed,
+     * one radio's pieces are ascending and the sort only interleaves
+     * the radios: near-linear. */
+    for (int i = 0, j = n - 1; i < j; i++, j--) {
+        int64_t ts = s[i], te = e[i];
+        s[i] = s[j]; e[i] = e[j];
+        s[j] = ts;   e[j] = te;
+    }
+    /* Union of the pieces: sorted by start (insertion), merged. */
     for (int i = 1; i < n; i++) {
         int64_t ks = s[i], ke = e[i];
         int j = i - 1;

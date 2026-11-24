@@ -105,6 +105,8 @@ typedef struct {
     cov_reason_t why;
     int          hopping;        /* a radio is retuned on a schedule */
     int          window;         /* cited frames are held: the window is known */
+    int          lost;           /* a cited frame has left the ring: the
+                                  * window is not the incident's */
     int64_t      uncovered_ms;   /* -1 unknown */
     int          drops;          /* 1, 0, -1 unknown */
 } aq_in_t;

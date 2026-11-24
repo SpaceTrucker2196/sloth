@@ -4162,13 +4162,24 @@ static void test_v13_migration_failure_leaves_file_unchanged(void) {
  * the five quality columns dropped, since the unconditional schema
  * writes them and the v18 -> v19 ALTER would meet a duplicate column.
  * Every fixture of a version before 19 that starts from a current file
- * runs it. */
+ * runs it. Rebuilt from the v18 DDL, as write_v15_file() rebuilds
+ * victron_readings, not with ALTER TABLE DROP COLUMN: that arrived in
+ * SQLite 3.35.0 and sloth's floor is 3.31.0 (src/db.c). The table is
+ * empty on a fresh file, so nothing is lost. */
 #define PRE_V19_INCIDENTS_SQL \
-    "ALTER TABLE alert_incidents DROP COLUMN complete;" \
-    "ALTER TABLE alert_incidents DROP COLUMN complete_why;" \
-    "ALTER TABLE alert_incidents DROP COLUMN latency_ms;" \
-    "ALTER TABLE alert_incidents DROP COLUMN corroboration;" \
-    "ALTER TABLE alert_incidents DROP COLUMN src_state;"
+    "DROP TABLE alert_incidents;" \
+    "CREATE TABLE alert_incidents (key TEXT NOT NULL," \
+    " incident_id TEXT NOT NULL, type INTEGER NOT NULL," \
+    " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL," \
+    " sev INTEGER NOT NULL, peak_sev INTEGER NOT NULL," \
+    " count INTEGER NOT NULL DEFAULT 0," \
+    " observations INTEGER NOT NULL DEFAULT 0," \
+    " closed_at INTEGER, reason TEXT," \
+    " PRIMARY KEY (key, incident_id));" \
+    "CREATE INDEX idx_alert_incidents_key" \
+    " ON alert_incidents(key, first_seen);" \
+    "CREATE INDEX idx_alert_incidents_last_seen" \
+    " ON alert_incidents(last_seen);"
 
 /* ── Schema v15: the Victron tables ────────────────────────────── */
 
