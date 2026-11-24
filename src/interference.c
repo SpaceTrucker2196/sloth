@@ -2,6 +2,7 @@
 
 #include <fcntl.h>
 #include <stdint.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -50,6 +51,10 @@ typedef struct {
     long long ch_frames;           /* on the channel asked for */
     long long ch_ms[8];            /* per radio, on that channel */
     int       radios;              /* highest radio index seen + 1 */
+    /* The bands the channel number was heard on, and their names in
+     * the order first met: RF_DEGRADED's key holds the number only. */
+    int       nbands;
+    char      band[4][16];
     /* For an episode with no channel: the radios' time per channel. */
     int       nch;
     int       ch_no[32];
@@ -70,6 +75,10 @@ static void add_chans(cov_sum_t *c, const char *json, int channel) {
         if (channel > 0 && ch == channel) {
             c->ch_frames += (long long)fr;
             if (radio >= 0 && radio < 8) c->ch_ms[radio] += (long long)ms;
+            int b;
+            for (b = 0; b < c->nbands && strcmp(c->band[b], band); b++) {}
+            if (b == c->nbands && c->nbands < 4)
+                snprintf(c->band[c->nbands++], sizeof(c->band[0]), "%s", band);
         }
         int k;
         for (k = 0; k < c->nch && c->ch_no[k] != ch; k++) {}
@@ -78,18 +87,27 @@ static void add_chans(cov_sum_t *c, const char *json, int channel) {
     }
 }
 
+/* The rows for [a, b]. `closed_by_b` takes only the rows that ended by
+ * b (the "before" window: an interval still open when the episode
+ * began holds the episode's own first frames, and counting it on both
+ * sides would make "before" read the same as "during"); otherwise every
+ * row overlapping [a, b]. Either way the scan is a range of the
+ * last_seen index: a row is about a minute of wall time, so one ending
+ * more than IFR_IV_SPAN_MAX_S after b cannot overlap it unless the
+ * clock stepped, and such a row's rates mean nothing. */
 static int cov_window(const site_db_t *d, time_t a, time_t b, int channel,
-                      cov_sum_t *c) {
+                      int closed_by_b, cov_sum_t *c) {
     memset(c, 0, sizeof(*c));
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(d->h,
             "SELECT dur_ms, f_ctrl, f_beacon + f_probe + f_auth + f_assoc +"
             " f_deauth + f_action + f_ctrl + f_data + f_eapol + f_other, chans"
             " FROM coverage_intervals WHERE last_seen >= ?1 AND start <= ?2"
-            " ORDER BY start", -1, &st, NULL) != SQLITE_OK)
+            " AND last_seen <= ?3 ORDER BY start", -1, &st, NULL) != SQLITE_OK)
         return -1;
     sqlite3_bind_int64(st, 1, (sqlite3_int64)a);
     sqlite3_bind_int64(st, 2, (sqlite3_int64)b);
+    sqlite3_bind_int64(st, 3, (sqlite3_int64)(closed_by_b ? b : b + IFR_IV_SPAN_MAX_S));
     while (sqlite3_step(st) == SQLITE_ROW) {
         c->rows++;
         c->dur_ms     += sqlite3_column_int64(st, 0);
@@ -133,20 +151,6 @@ static int detail_of(const site_db_t *d, const char *key, const char *iid,
     return ok;
 }
 
-/* A detail is the rule's own text, but it names addresses and, for an
- * SSID-bearing kind, could carry on-air bytes: keep it on one line and
- * inert in Markdown. */
-static void md_line(const char *in, char *out, size_t cap) {
-    size_t o = 0;
-    for (const unsigned char *p = (const unsigned char *)in; *p && o + 5 < cap; p++) {
-        if (*p < 0x20 || *p == 0x7f || strchr("`|<>*_[]#!~&\\", *p))
-            o += (size_t)snprintf(out + o, cap - o, "\\x%02x", *p);
-        else
-            out[o++] = (char)*p;
-    }
-    out[o] = '\0';
-}
-
 static void coverage_lines(FILE *out, const site_db_t *d, time_t f, time_t l,
                            int channel) {
     if (!site_db_has_table(d, "coverage_intervals")) {
@@ -157,8 +161,8 @@ static void coverage_lines(FILE *out, const site_db_t *d, time_t f, time_t l,
     long long ep_s = (long long)(l - f) + 1;
     long long before_s = ep_s < IFR_BEFORE_MAX_S ? ep_s : IFR_BEFORE_MAX_S;
     cov_sum_t during, before;
-    if (cov_window(d, f, l, channel, &during) != 0 ||
-        cov_window(d, f - (time_t)before_s, f - 1, channel, &before) != 0) {
+    if (cov_window(d, f, l, channel, 0, &during) != 0 ||
+        cov_window(d, f - (time_t)before_s, f - 1, channel, 1, &before) != 0) {
         fprintf(out, "- Coverage: could not be read: %s.\n", sqlite3_errmsg(d->h));
         return;
     }
@@ -181,11 +185,22 @@ static void coverage_lines(FILE *out, const site_db_t *d, time_t f, time_t l,
         fprintf(out, "- Frames heard on channel %d per minute of radio time:"
                 " %lld during", channel, per_min(during.ch_frames, during.dur_ms));
         if (before.rows)
-            fprintf(out, ", %lld in the %lld s before.\n",
-                    per_min(before.ch_frames, before.dur_ms), before_s);
+            fprintf(out, ", %lld before (the %d interval%s that closed in the"
+                    " %lld s before it opened).\n",
+                    per_min(before.ch_frames, before.dur_ms), before.rows,
+                    before.rows == 1 ? "" : "s", before_s);
         else
-            fprintf(out, "; no coverage interval covers the %lld s before.\n",
-                    before_s);
+            fprintf(out, "; no coverage interval closed in the %lld s before"
+                    " it opened.\n", before_s);
+        if (during.nbands > 1) {
+            fprintf(out, "- Channel %d was heard on more than one band in these"
+                    " intervals (", channel);
+            for (int b = 0; b < during.nbands; b++)
+                fprintf(out, "%s%s", b ? ", " : "", during.band[b]);
+            fprintf(out, "). The alert records the channel number only, so the"
+                    " figures above, and the access points below, are those"
+                    " bands together.\n");
+        }
     } else if (during.nch > 0) {
         fprintf(out, "- The radios' time in the episode, by channel:");
         for (int k = 0; k < during.nch; k++)
@@ -220,9 +235,12 @@ static void aps_lines(FILE *out, const site_db_t *d, time_t f, time_t l,
     int n = 0;
     while (sqlite3_step(st) == SQLITE_ROW) {
         if (n == 0)
-            fprintf(out, "- Access points on channel %d whose sightings span the"
-                    " episode (clients: associations seen in it; QBSS load: the"
-                    " AP's latest, 0-255, not its value then):\n", channel);
+            fprintf(out, "- Access points on channel %d (by number: sloth.db"
+                    " records no band for an AP) heard at some time between"
+                    " the episode's start and its end, by their first and last"
+                    " sighting (clients: associations whose first and last"
+                    " sighting overlap it; QBSS load: the AP's latest, 0-255,"
+                    " not its value then):\n", channel);
         n++;
         if (n > IFR_MAX_APS) continue;
         char ss[32 * 4 * 4 + 1];
@@ -289,23 +307,59 @@ static void one_episode(FILE *out, const site_db_t *d, int idx,
             " change%s.\n", sev_word(sev), sev_word(peak), cnt,
             cnt == 1 ? "" : "s", obs, obs == 1 ? "" : "s");
 
-    char det[ALERT_DETAIL_LEN + 64], md[(ALERT_DETAIL_LEN + 64) * 4];
+    /* The stored detail is read for its numbers and never copied: it is
+     * a column the packet's readers withhold (handoff.h, WITHHELD), and
+     * only the figures below are what this report needs. */
+    char det[ALERT_DETAIL_LEN + 64];
     if (detail_of(d, key, iid, det, sizeof(det))) {
-        md_line(det, md, sizeof(md));
-        fprintf(out, "- Figures the rule recorded at its last evaluation: %s\n", md);
+        int said = 0;
         int ch, retry, fcs;
         unsigned frames;
         if (type == ALERT_TYPE_RF_DEGRADED &&
             sscanf(det, "ch %d: %d%% retries, %d%% bad-FCS over %u frames",
-                   &ch, &retry, &fcs, &frames) == 4)
+                   &ch, &retry, &fcs, &frames) == 4) {
+            /* rf_quality_observe() counts every frame the monitor radio
+             * heard on the channel, control and management included. */
             fprintf(out, "- Retry ratio %d%% and bad-FCS share %d%% over %u"
-                    " data frames.\n", retry, fcs, frames);
+                    " frames of every type heard on the channel, at the"
+                    " rule's last evaluation.\n", retry, fcs, frames);
+            said = 1;
+        }
         int n, dur, nav;
         if (type == ALERT_TYPE_RTS_FLOOD &&
             sscanf(det, "%*17s sent %d RTS over %ds (~%*d/s), max NAV %dus",
-                   &n, &dur, &nav) == 3)
+                   &n, &dur, &nav) == 3) {
             fprintf(out, "- Control-frame volume: %d RTS frames over %d s from"
-                    " one transmitter, longest NAV %d us.\n", n, dur, nav);
+                    " one transmitter, longest NAV %d us, at the rule's last"
+                    " evaluation.\n", n, dur, nav);
+            said = 1;
+        }
+        if (type == ALERT_TYPE_GNSS_JAMMING) {
+            const char *p;
+            int b1, b2, l1, l2;
+            if ((p = strstr(det, "tracked median C/N0 ")) &&
+                sscanf(p, "tracked median C/N0 %d.%d -> %d.%d dB-Hz",
+                       &b1, &b2, &l1, &l2) == 4) {
+                fprintf(out, "- Median C/N0 of the tracked satellites fell"
+                        " from %d.%d to %d.%d dB-Hz.\n", b1, b2, l1, l2);
+                said = 1;
+            }
+            int jam;
+            unsigned long secs;
+            if ((p = strstr(det, "u-blox jamInd >= ")) &&
+                sscanf(p, "u-blox jamInd >= %d for %lu s", &jam, &secs) == 2) {
+                fprintf(out, "- The receiver's own jamming indicator (u-blox"
+                        " jamInd) stayed at or above %d for %lu s.\n", jam, secs);
+                said = 1;
+            }
+            if (strstr(det, "; fix lost")) {
+                fprintf(out, "- The receiver lost its fix.\n");
+                said = 1;
+            }
+        }
+        if (!said)
+            fprintf(out, "- Figures: stored in a form this build does not"
+                    " read; they are in sloth.db.\n");
     } else {
         fprintf(out, "- Figures: not stored for this episode (sloth.db keeps"
                 " the figures of a finding's latest episode only).\n");
@@ -377,26 +431,41 @@ int interference_report(const site_db_t *d, const char *db_path,
 
     fprintf(out, "Episodes: RF_DEGRADED %d, RTS_FLOOD %d, GNSS_JAMMING %d.\n\n",
             counts[0], counts[1], counts[2]);
+    int total = counts[0] + counts[1] + counts[2];
+    if (total > IFR_MAX_EPISODES)
+        fprintf(out, "%d episodes overlap the window; the latest %d are written"
+                " below. A narrower --from / --to gives the others.\n\n",
+                total, IFR_MAX_EPISODES);
+    /* Which daemon wrote a row is not recorded, and a sloth.db from
+     * before the cutover (#216) keeps sloth-wifi's own GNSS rows: the
+     * report gives the counts and the newest GNSS row, not an owner. */
     long long gnss = site_db_has_table(d, "gnss_fixes")
                    ? site_db_scalar(d, "SELECT COUNT(*) FROM gnss_fixes", 0) : 0;
+    long long gnss_last = gnss ? site_db_scalar(d, "SELECT MAX(last_seen) FROM"
+                                                " gnss_fixes", 0) : 0;
     long long wifi = site_db_scalar(d, "SELECT COUNT(*) FROM beacon_aps", 0) +
                      (site_db_has_table(d, "coverage_intervals")
                       ? site_db_scalar(d, "SELECT COUNT(*) FROM coverage_intervals", 0) : 0);
+    char gs[32];
+    site_db_iso((time_t)gnss_last, gs, sizeof(gs));
     fprintf(out, "RF_DEGRADED and RTS_FLOOD are sloth-wifi's alerts and"
-            " GNSS_JAMMING is sloth-rf's. Wi-Fi rows in this file: %s; GNSS"
-            " rows: %s; so %s.\n",
-            wifi ? "yes" : "none", gnss ? "yes" : "none",
-            gnss && wifi ? "both daemons wrote to it"
-            : gnss ? "only sloth-rf wrote to it"
-            : wifi ? "only sloth-wifi wrote to it: GNSS jamming is not reported"
-                     " here unless sloth-rf writes to the same file"
-                     " (sloth-rf --db the same path)"
-            : "neither daemon has written observations to it yet");
+            " GNSS_JAMMING is sloth-rf's. Since the cutover (#216, ADR 0010)"
+            " sloth-rf keeps its own database, /var/lib/sloth-rf/sloth-rf.db"
+            " in the shipped unit, and its GNSS jamming episodes are reported"
+            " by this command run again with --db that file. In this file:"
+            " Wi-Fi rows %s; GNSS fixes ",
+            wifi ? "yes" : "none");
+    if (gnss)
+        fprintf(out, "%lld, the newest %s.\n", gnss, gs);
+    else
+        fprintf(out, "none.\n");
 
     if (sqlite3_prepare_v2(d->h,
-            "SELECT key, incident_id, type, first_seen, last_seen, sev, peak_sev,"
-            " count, observations, closed_at, reason FROM alert_incidents"
+            "SELECT * FROM (SELECT key, incident_id, type, first_seen, last_seen,"
+            " sev, peak_sev, count, observations, closed_at, reason"
+            " FROM alert_incidents"
             " WHERE type IN (?1,?2,?3) AND last_seen >= ?4 AND first_seen <= ?5"
+            " ORDER BY first_seen DESC, key DESC LIMIT ?6)"
             " ORDER BY first_seen, key", -1, &st, NULL) != SQLITE_OK) {
         snprintf(err, errsz, "%s", sqlite3_errmsg(d->h));
         return -1;
@@ -404,6 +473,7 @@ int interference_report(const site_db_t *d, const char *db_path,
     for (int k = 0; k < NKINDS; k++) sqlite3_bind_int(st, 1 + k, (int)KINDS[k]);
     sqlite3_bind_int64(st, 4, (sqlite3_int64)a);
     sqlite3_bind_int64(st, 5, (sqlite3_int64)b);
+    sqlite3_bind_int(st, 6, IFR_MAX_EPISODES);
     int n = 0;
     while (sqlite3_step(st) == SQLITE_ROW)
         one_episode(out, d, ++n, st);
@@ -425,6 +495,26 @@ int interference_report(const site_db_t *d, const char *db_path,
 
 #endif /* WITH_SQLITE */
 
+/* FILE is truncated, so it must not be the database being read or a
+ * file SQLite keeps beside it: one mistyped path would empty the live
+ * sensor's store. Compared by device and inode, so another spelling of
+ * the path, or a link to it, is caught too. Checked after the open,
+ * which may have created the -shm. */
+static int names_the_db(const char *out_path, const char *db) {
+    struct stat o;
+    if (stat(out_path, &o) != 0) return 0;     /* not there: created new */
+    static const char *const SUF[] = { "", "-wal", "-shm", "-journal" };
+    for (size_t k = 0; k < sizeof(SUF) / sizeof(SUF[0]); k++) {
+        char p[4200];
+        struct stat b;
+        if (strlen(db) + 9 > sizeof(p)) return 1;   /* cannot check: refuse */
+        snprintf(p, sizeof(p), "%s%s", db, SUF[k]);
+        if (stat(p, &b) == 0 && b.st_dev == o.st_dev && b.st_ino == o.st_ino)
+            return 1;
+    }
+    return 0;
+}
+
 int interference_main(const char *db, const char *out_path, time_t from,
                       time_t to, FILE *msg) {
     char err[SFILE_ERR_MAX];
@@ -435,6 +525,12 @@ int interference_main(const char *db, const char *out_path, time_t from,
     }
     FILE *out = stdout;
     int to_stdout = !strcmp(out_path, "-");
+    if (!to_stdout && names_the_db(out_path, db)) {
+        fprintf(msg, "sloth: --interference-report: %s is the --db file or"
+                " one of its -wal, -shm, -journal: not written\n", out_path);
+        site_db_close(&d);
+        return 2;
+    }
     if (!to_stdout) {
         out = sfile_fopen(AT_FDCWD, out_path, SFILE_TRUNC, err, sizeof(err));
         if (!out) {

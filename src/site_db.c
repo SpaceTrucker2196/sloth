@@ -31,8 +31,11 @@ static int digits(const char *p, int len, int *v) {
     return 1;
 }
 
-int site_db_parse_time(const char *s, time_t *out) {
+/* *span: the seconds the form names past *out (a day, a minute or one
+ * second), so an end bound can include them. */
+static int parse_time(const char *s, time_t *out, long *span) {
     if (!s || !s[0] || !out) return -1;
+    *span = 0;
     size_t n = strlen(s);
     int all_digits = 1;
     for (size_t i = 0; i < n; i++)
@@ -53,19 +56,35 @@ int site_db_parse_time(const char *s, time_t *out) {
     if (d < 0) return -1;
     int hh = 0, mm = 0, ss = 0;
     const char *p = s + 10;
+    *span = 86399;
     if (*p == 'T') {
+        *span = 59;
         if (!digits(p + 1, 2, &hh) || p[3] != ':' || !digits(p + 4, 2, &mm))
             return -1;
         p += 6;
         if (*p == ':') {
             if (!digits(p + 1, 2, &ss)) return -1;
             p += 3;
+            *span = 0;
         }
         if (hh > 23 || mm > 59 || ss > 60) return -1;
     }
     if (*p == 'Z') p++;
     if (*p) return -1;
     *out = (time_t)d * 86400 + hh * 3600 + mm * 60 + ss;
+    return 0;
+}
+
+int site_db_parse_time(const char *s, time_t *out) {
+    long span;
+    return parse_time(s, out, &span);
+}
+
+int site_db_parse_time_end(const char *s, time_t *out) {
+    long span;
+    time_t t;
+    if (parse_time(s, &t, &span) != 0) return -1;
+    *out = t + (time_t)span;
     return 0;
 }
 

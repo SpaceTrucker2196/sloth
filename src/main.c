@@ -790,7 +790,8 @@ static void print_usage(const char *argv0) {
             "                     frames, radio time on the channel, APs.\n"
             "                     Exit 0 written, 2 not.\n"
             "  --from T, --to T   bound --interference-report: epoch seconds\n"
-            "                     or UTC YYYY-MM-DD[THH:MM[:SS]][Z].\n"
+            "                     or UTC YYYY-MM-DD[THH:MM[:SS]][Z]; --to\n"
+            "                     includes the day or minute it names.\n"
             "  --with-research FILE\n"
             "                     load the research corpus for per-alert\n"
             "                     citations in --report. Additive: an\n"
@@ -1334,7 +1335,7 @@ int main(int argc, char **argv) {
     if (ifr_out) {
         time_t ifr_from = 0, ifr_to = 0;
         if ((ifr_from_arg && site_db_parse_time(ifr_from_arg, &ifr_from) != 0) ||
-            (ifr_to_arg && site_db_parse_time(ifr_to_arg, &ifr_to) != 0)) {
+            (ifr_to_arg && site_db_parse_time_end(ifr_to_arg, &ifr_to) != 0)) {
             fprintf(stderr, "sloth: --from / --to: a time is epoch seconds or "
                             "UTC YYYY-MM-DD[THH:MM[:SS]][Z]\n");
             return 2;
@@ -1485,9 +1486,10 @@ int main(int argc, char **argv) {
      * so a run that cannot use it loses nothing by going on, and it is
      * also ignored under --replay, which takes neither source flag. By
      * here --replay and WITH_PCAP=0 have refused both source flags.
-     * Not under --preflight: it starts nothing, so no key is drawn and
-     * no "on" is announced. */
-    if (ble_rotation_hints && !preflight) {
+     * Not under --preflight or --handoff: they start nothing, so no key
+     * is drawn and no "on" is announced. */
+    const int offline_cmd = preflight || handoff_dir != NULL;
+    if (ble_rotation_hints && !offline_cmd) {
         if (!bt_monitor && !bt_capture)
             fprintf(stderr, "sloth: --ble-rotation-hints ignored: it needs "
                             "--bt-monitor or --bt-capture PATH\n");
@@ -1536,9 +1538,10 @@ int main(int argc, char **argv) {
     }
     if (prof.active_allowed)   observe_set_active_allowed(1);
     if (prof.resolver_enabled) dns_resolver_set_enabled(1);
-    /* --preflight starts nothing, so it announces no opt-in as enabled;
-     * its passive line names the sending opt-ins instead. */
-    if (prof.active_allowed && !preflight) {
+    /* --preflight and --handoff start nothing, so they announce no
+     * opt-in as enabled; the preflight's passive line names the sending
+     * opt-ins instead. */
+    if (prof.active_allowed && !offline_cmd) {
         /* Never silent. A passive tool that quietly becomes active is
          * the failure mode #84 exists to prevent, so the opt-in names
          * exactly what it turned on — one line, on stderr, before any

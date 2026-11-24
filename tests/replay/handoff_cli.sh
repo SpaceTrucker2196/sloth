@@ -7,6 +7,8 @@
 #   --from without --interference-report    exits 2
 #   --handoff with --preflight              exits 2
 #   --interference-report without --db      exits 2
+#   --handoff DIR --allow-active            exits 0 and says no opt-in is
+#                                           enabled: nothing starts
 #   --handoff DIR --db replay.db            exits 0; every file 0600, DIR
 #                                           0700; no file holds the replay's
 #                                           clear-text credential user name
@@ -21,7 +23,7 @@ set -u
 B=$1
 R=$2
 D=$R/handoff
-rm -rf "$D"
+rm -rf "$D" "$D.active"
 fail() { echo "handoff_cli: $*" >&2; exit 1; }
 
 "$B" --from 2026-01-01 >/dev/null 2>&1
@@ -53,6 +55,17 @@ if grep -rq 'HTTP-Basic user\|cred:192\.0\.2\.10' "$D"; then
 fi
 grep -q '^CLEARTEXT_CRED' "$D/findings_open.tsv" ||
     fail "findings_open.tsv does not list the replay's CLEARTEXT_CRED"
+
+# --handoff starts nothing, so --allow-active announces nothing as
+# enabled (as under --preflight); the packet is still written.
+"$B" --handoff "$D.active" --db "$R/replay.db" --no-privdrop --allow-active \
+    >/dev/null 2>"$R/handoff_active.err"
+rc=$?
+[ "$rc" -eq 0 ] || fail "--handoff --allow-active exited $rc: $(cat "$R/handoff_active.err")"
+if grep -q 'allow-active enabled' "$R/handoff_active.err"; then
+    fail "--handoff announced --allow-active as enabled"
+fi
+rm -rf "$D.active"
 
 "$B" --headless --replay "$R/wired.pcap,$R/monitor.pcap,$R/bt.pcap" \
     --ticks 3 --refresh-ms 100 --baseline-in "$D/snapshot.tsv" \

@@ -24,18 +24,23 @@
  *   - the episode's times, severity, evaluations;
  *   - its channel (RF_DEGRADED's key), its transmitter (RTS_FLOOD's);
  *   - the figures the rule wrote (retry ratio and bad-FCS share over N
- *     frames; RTS count, rate and NAV; GNSS C/N0 and jamming
- *     indicator), when the finding's stored detail is this episode's:
- *     sloth.db keeps a finding's latest detail only, so an earlier
- *     episode of the same key says "not stored";
- *   - from coverage_intervals (v18), for the episode and for the same
- *     length before it (at most IFR_BEFORE_MAX_S): frames heard on its
- *     channel and control frames per minute, and the share of the
- *     covered time each radio spent on the channel;
+ *     frames of every type; RTS count, span and NAV; GNSS C/N0 and
+ *     jamming indicator), parsed out of the finding's stored detail
+ *     when it is this episode's, and never the detail's text: sloth.db
+ *     keeps a finding's latest detail only, so an earlier episode of
+ *     the same key says "not stored";
+ *   - from coverage_intervals (v18), for the rows overlapping the
+ *     episode and the rows that closed in the same length before it
+ *     opened (at most IFR_BEFORE_MAX_S): frames heard on its channel
+ *     and control frames per minute, and the share of the covered time
+ *     each radio spent on the channel. The channel is a number (the
+ *     alert's key has no band); when the rows hold it on two bands the
+ *     section says so;
  *   - channel utilisation: not stored as a history; the APs' latest
  *     QBSS load is shown, labelled as such;
- *   - the access points on the channel whose sightings span the
- *     episode, each with a count of the clients associated in it.
+ *   - the access points on the channel number whose first-to-last
+ *     sighting overlaps the episode, each with a count of the clients
+ *     whose association overlaps it.
  *     Client addresses are not written: the reader is outside the
  *     site and the count is what the report needs;
  *   - "not located": one sensor measures what reaches it. A location
@@ -45,9 +50,11 @@
  * the edge of range cause (the RF_DEGRADED rule's own comment), and a
  * GNSS receiver cannot tell interference from jamming (DHS 2017).
  *
- * GNSS_JAMMING is sloth-rf's alert. It is here only when sloth-rf
- * wrote to the same file (`sloth-rf --db` the same path); the report
- * says which daemons' rows the file holds. */
+ * GNSS_JAMMING is sloth-rf's alert, and sloth-rf has its own database
+ * since the cutover (ADR 0010; /var/lib/sloth-rf/sloth-rf.db in the
+ * shipped unit): its episodes are reported by a run with --db that
+ * file. A sloth.db from before the cutover may hold GNSS rows and
+ * episodes of its own; the report gives the counts, not an owner. */
 
 /* The "before" window: the episode's own length, at most this. Ten
  * minutes is ten coverage intervals, enough to see the channel's
@@ -55,6 +62,16 @@
 #define IFR_BEFORE_MAX_S 600
 /* The access points listed per episode; the rest are counted. */
 #define IFR_MAX_APS 20
+/* The episodes written per report, the latest; the rest are counted.
+ * A transmitter that changes its address opens a new RTS_FLOOD
+ * incident each time, and each episode scans coverage_intervals inside
+ * the read transaction that holds back the daemon's WAL checkpoint, so
+ * the report's length and run time are bounded here. */
+#define IFR_MAX_EPISODES 200
+/* A coverage_interval row is a minute of wall time; one ending this
+ * long after a window cannot overlap it unless the clock stepped. It
+ * bounds each scan to a range of the last_seen index. */
+#define IFR_IV_SPAN_MAX_S 3600
 
 /* Write the report for [from, to] (0: open) from an open file; the
  * number of episodes written, or -1 on a query failure (the reason in

@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154, #170 and #239.
 
-**Last updated**: 2026-11-23 (#246: schema v19, the quality columns of `alert_incidents`, `complete`, `complete_why`, `latency_ms`, `corroboration` and `src_state`, their order-free upsert; the v18 → v19 step and its two tests), 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
+**Last updated**: 2026-11-24 (#250 review: `alert_incidents` and `coverage_intervals` name their offline readers, `--handoff` and `--interference-report`, and what of each they parse), 2026-11-23 (#246: schema v19, the quality columns of `alert_incidents`, `complete`, `complete_why`, `latency_ms`, `corroboration` and `src_state`, their order-free upsert; the v18 → v19 step and its two tests), 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
 in the entity tier and `victron_readings` in the observation tier, at
 most one reading row a minute per device, the stamp-only v14 → v15 step
 and its two tests; slothweb's Victron tab charts `victron_readings`).
@@ -343,6 +343,11 @@ the handle was not measured at both ends, never 0 for that. `chans` and
 `coverage_interval` line writes them ([[jsonl-schema]]), so
 `json_each()` reads them. Counts, channels and states only: no
 address, no SSID. Not written in a `--replay` run. Observation tier.
+Read by `--interference-report` ([[handoff]]), which parses `chans`
+with `sscanf()` in the writer's key order (`radio`, `ch`, `freq_mhz`,
+`band`, `ms`, `frames`; `add_chans()` in `src/interference.c`): an
+entry in another shape is skipped, so a change to that order is a
+change to that reader.
 
 **`random_devices_daily`** `(day TEXT, sources INTEGER, count,
 first_seen, last_seen, PRIMARY KEY (day, sources))`. `day` is the UTC
@@ -855,7 +860,17 @@ range holding only a LOW incident reads LOW; a key with no incident rows
 (an incident recorded before v11, or past the bound) is read from its
 `alerts` row as before. The alert page (`/api/alert`) builds its runs
 from the incidents and carries one incident's figures as `db_incident`
-([[slothweb]]).
+([[slothweb]]). sloth's own offline exports read it too, read-only
+(`src/site_db.c`, [[handoff]]): `--handoff` lists the open incidents and
+counts the closed ones by `type` and `peak_sev`; `--interference-report`
+(and the packet's `interference.md`) reads the `RF_DEGRADED`,
+`RTS_FLOOD` and `GNSS_JAMMING` rows' times, `reason`, `count` and
+`observations`, parses the channel or transmitter out of `key` and the
+figures out of the matching `alerts.detail` (by the rule's own format:
+a change to `rule_rf_degraded()`'s, `rule_rts_flood()`'s or
+`rule_gnss_jamming()`'s detail text is a change to this reader), and
+reads `beacon_aps` (`channel`, `has_qbss`, `qbss_chan_util`) and
+`assocs` over the episode.
 
 Tests (`tests/test_db.c`): `test_incident_rows_keep_each_incidents_figures`
 (the issue's case through the engine: one `alerts` row reading CRIT, two

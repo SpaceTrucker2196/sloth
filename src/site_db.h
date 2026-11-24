@@ -57,5 +57,10 @@ void site_db_iso(time_t t, char *out, size_t n);
  * or UTC "YYYY-MM-DD", "YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM:SS" with
  * an optional trailing 'Z'. 0 and *out, or -1. */
 int  site_db_parse_time(const char *s, time_t *out);
+/* The same forms as an end bound, inclusive of what the form names:
+ * "2026-11-24" is 23:59:59 that day, "...T10:15" is 10:15:59, a form
+ * with seconds or epoch seconds is that second. So --from D --to D is
+ * the whole day D. */
+int  site_db_parse_time_end(const char *s, time_t *out);
 
 #endif /* SLOTH_SITE_DB_H */

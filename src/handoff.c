@@ -546,6 +546,10 @@ static void write_readme(ho_t *h, const handoff_cfg_t *c, const char *host,
             "  rdp_flows.last_cookie, rogue_radius.last_identity), and no file\n"
             "  here does. A finding is listed by kind, severity, times and\n"
             "  incident id; its detail is in sloth.db and on the dashboard.\n"
+            "  interference.md reads the key and detail of RF_DEGRADED,\n"
+            "  RTS_FLOOD and GNSS_JAMMING alone, for the channel number, the\n"
+            "  transmitter's address and the rule's figures, and copies\n"
+            "  neither text.\n"
             "  The --inventory file is named, not copied.\n");
     ho_close(h, f, "README.txt");
 }

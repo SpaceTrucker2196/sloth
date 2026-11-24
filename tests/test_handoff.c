@@ -68,12 +68,12 @@ static int seed_db(const char *path) {
         " count,incident_id) VALUES"
         " ('rfdegraded:6',%lld,%lld,%d,1,'RF_DEGRADED',"
         "  'ch 6: 42%% retries, 3%% bad-FCS over 1200 frames - interference,"
-        " hidden node or jamming',33,'rf2'),"
+        " hidden node or jamming SENTINELDETAIL',33,'rf2'),"
         " ('rtsflood:02:00:00:00:00:99',%lld,%lld,%d,2,'RTS_FLOOD',"
         "  '02:00:00:00:00:99 sent 600 RTS over 60s (~10/s), max NAV 32767us"
-        " - above the legal maximum',5,'rts1'),"
+        " - above the legal maximum SENTINELDETAIL',5,'rts1'),"
         " ('gnssjam',%lld,%lld,%d,1,'GNSS_JAMMING','u-blox jamInd >= 200 for"
-        " 30 s - interference or jamming',9,'gj1'),"
+        " 30 s - interference or jamming SENTINELDETAIL',9,'gj1'),"
         " ('cred:192.0.2.10:198.51.100.80:80:HTTP-Basic:SECRETUSERKEY',%lld,%lld,"
         "  %d,1,'SECRETTITLE','HTTP-Basic user SECRETUSERDETAIL in the clear',1,'cc1');"
         "INSERT INTO cleartext_creds (ts,src,dst,dst_port,protocol,username,"
@@ -191,6 +191,20 @@ static void test_parse_time(void) {
     ASSERT_EQ(site_db_parse_time("yesterday", &t), -1);
     ASSERT_EQ(site_db_parse_time("", &t), -1);
     ASSERT_EQ(site_db_parse_time("17950000001234", &t), -1);
+
+    /* As an end bound the form's whole extent is included, so
+     * --from D --to D is the day D and not its first second. */
+    ASSERT_EQ(site_db_parse_time_end("2026-11-24", &t), 0);
+    ASSERT_EQ((long long)t, 1795478400LL + 86399);
+    ASSERT_EQ(site_db_parse_time_end("2026-11-24Z", &t), 0);
+    ASSERT_EQ((long long)t, 1795478400LL + 86399);
+    ASSERT_EQ(site_db_parse_time_end("2026-11-24T01:02", &t), 0);
+    ASSERT_EQ((long long)t, 1795478400LL + 3720 + 59);
+    ASSERT_EQ(site_db_parse_time_end("2026-11-24T01:02:03Z", &t), 0);
+    ASSERT_EQ((long long)t, 1795478400LL + 3723);
+    ASSERT_EQ(site_db_parse_time_end("1795000000", &t), 0);
+    ASSERT_EQ((long long)t, 1795000000LL);
+    ASSERT_EQ(site_db_parse_time_end("2026-11-24T25:00", &t), -1);
 }
 
 static void test_interference_report(void) {
@@ -213,15 +227,18 @@ static void test_interference_report(void) {
         /* The earlier episode's figures were overwritten by the later's. */
         const char *nf = strstr(r, "not stored for this episode");
         ASSERT(nf && e1 && e2 && nf > e1 && nf < e2);
+        /* rf_quality_observe() counts every frame type: never "data". */
         ASSERT(strstr(r, "- Retry ratio 42% and bad-FCS share 3% over 1200"
-                         " data frames.") != NULL);
+                         " frames of every type heard on the channel") != NULL);
+        ASSERT(strstr(r, "data frames") == NULL);
         ASSERT(strstr(r, "- Closed 2026-") != NULL);
         /* Coverage of the later episode: two minutes, half on ch 6. */
         ASSERT(strstr(r, "- Coverage: 2 one-minute coverage intervals overlap"
                          " the episode (120 s") != NULL);
         ASSERT(strstr(r, "- Radio 0 spent 50% of that time on channel 6.") != NULL);
         ASSERT(strstr(r, "- Frames heard on channel 6 per minute of radio time:"
-                         " 600 during, 60 in the 300 s before.") != NULL);
+                         " 600 during, 60 before (the 1 interval that closed in"
+                         " the 300 s before it opened).") != NULL);
         ASSERT(strstr(r, "- Control frames per minute, every channel heard:"
                          " 120 during, 30 before.") != NULL);
         /* The earlier episode had no coverage rows: said, not zeroed. */
@@ -233,15 +250,25 @@ static void test_interference_report(void) {
         ASSERT(strstr(r, "0a:00:00:00:00:01") == NULL);   /* no client address */
         /* RTS: the volume, and what is not stored. */
         ASSERT(strstr(r, "- Control-frame volume: 600 RTS frames over 60 s"
-                         " from one transmitter, longest NAV 32767 us.") != NULL);
+                         " from one transmitter, longest NAV 32767 us, at the rule's"
+                         " last evaluation.") != NULL);
         ASSERT(strstr(r, "- The radios' time in the episode, by channel: channel"
                          " 11 100%. The alert does not record the channel.") != NULL);
         ASSERT(strstr(r, "- Control frames per minute, every channel heard:"
                          " 900 during; before not covered.") != NULL);
         /* GNSS: open, its figures, the other daemon named. */
         ASSERT(strstr(r, "No close recorded in this file") != NULL);
-        ASSERT(strstr(r, "u-blox jamInd") != NULL);
-        ASSERT(strstr(r, "GNSS rows: none; so only sloth-wifi wrote to it") != NULL);
+        ASSERT(strstr(r, "- The receiver's own jamming indicator (u-blox jamInd)"
+                         " stayed at or above 200 for 30 s.") != NULL);
+        ASSERT(strstr(r, "In this file: Wi-Fi rows yes; GNSS fixes none.") != NULL);
+        ASSERT(strstr(r, "/var/lib/sloth-rf/sloth-rf.db") != NULL);
+        ASSERT(strstr(r, "the same path") == NULL);
+        /* The detail's text is parsed, never copied: a word that is in
+         * each of the three details and is no figure is not written.
+         * Seen red with the verbatim "Figures the rule recorded" line
+         * restored. */
+        ASSERT(strstr(r, "SENTINELDETAIL") == NULL);
+        ASSERT(strstr(r, "hidden node or jamming") == NULL);
         /* Every episode: not located. Never a word about intent. */
         int nl = 0;
         for (const char *p = r; (p = strstr(p, "- Location: not located.")); p++) nl++;
@@ -304,7 +331,124 @@ static void test_interference_main_refusals(void) {
     struct stat sb;
     ASSERT_EQ(stat(out, &sb), 0);
     ASSERT_EQ((int)(sb.st_mode & 0777), 0600);
+
+    /* FILE naming the database, or its -wal while a writer holds it
+     * open, is refused before anything is truncated: both keep their
+     * size. Seen red with names_the_db() returning 0. */
+    struct stat b0, b1;
+    ASSERT_EQ(stat(db, &b0), 0);
+    ASSERT_EQ(interference_main(db, db, 0, 0, null), 2);
+    ASSERT_EQ(stat(db, &b1), 0);
+    ASSERT_EQ((long long)b1.st_size, (long long)b0.st_size);
+    ASSERT(b0.st_size > 0);
+    char viadot[TEST_TMP_MAX + 32];
+    snprintf(viadot, sizeof(viadot), "%s/./s.db", dir);
+    ASSERT_EQ(interference_main(db, viadot, 0, 0, null), 2);
+    ASSERT_EQ(stat(db, &b1), 0);
+    ASSERT_EQ((long long)b1.st_size, (long long)b0.st_size);
+
+    sqlite3 *w = NULL;
+    ASSERT_EQ(sqlite3_open(db, &w), SQLITE_OK);
+    ASSERT_EQ(exec_sql(w, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+                          " INSERT INTO meta (key,value) VALUES ('t','1');"),
+              SQLITE_OK);
+    char walp[TEST_TMP_MAX + 32];
+    snprintf(walp, sizeof(walp), "%s-wal", db);
+    ASSERT_EQ(stat(walp, &b0), 0);
+    ASSERT(b0.st_size > 0);
+    ASSERT_EQ(interference_main(db, walp, 0, 0, null), 2);
+    ASSERT_EQ(stat(walp, &b1), 0);
+    ASSERT_EQ((long long)b1.st_size, (long long)b0.st_size);
+    sqlite3_close(w);
     fclose(null);
+    test_rm_tree(dir);
+}
+
+/* What the seeded fixture does not reach. An episode shorter than the
+ * interval it falls in: that interval is "during" only, so "before"
+ * is not the same row read twice (seen red with the before window
+ * matching by overlap: it printed the during rate again). A channel
+ * number heard on two bands is said to be (the key has no band). GNSS
+ * rows in a sloth.db are counted with their newest time and no owner
+ * is claimed (a pre-cutover file keeps sloth-wifi's own). More
+ * episodes than IFR_MAX_EPISODES: the latest are written and the rest
+ * counted (seen red with the LIMIT removed). */
+static void test_interference_edges(void) {
+    char dir[TEST_TMP_MAX] = "", db[TEST_TMP_MAX + 16];
+    ASSERT(mkdtemp(test_tmp_tpl(dir, sizeof(dir), "sloth_ife_XXXXXX")) != NULL);
+    if (!dir[0]) return;
+    snprintf(db, sizeof(db), "%s/s.db", dir);
+    ASSERT_EQ(db_open(db), 1);
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db, &h), SQLITE_OK);
+    snprintf(g_sql, sizeof(g_sql),
+        "INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,"
+        " sev,peak_sev,count,observations,closed_at,reason) VALUES"
+        " ('rfdegraded:3','m1',%d,%lld,%lld,1,1,3,1,%lld,'quiet'),"
+        " ('rfdegraded:1','b1',%d,%lld,%lld,1,1,3,1,%lld,'quiet');"
+        "INSERT INTO coverage_intervals (start,last_seen,dur_ms,f_ctrl,f_data,chans)"
+        " VALUES"
+        " (%lld,%lld,60000,10,500,'[{\"radio\":0,\"ch\":3,\"freq_mhz\":2422,"
+        "\"band\":\"2g4\",\"ms\":60000,\"frames\":510}]'),"
+        " (%lld,%lld,60000,10,500,'[{\"radio\":0,\"ch\":1,\"freq_mhz\":2412,"
+        "\"band\":\"2g4\",\"ms\":30000,\"frames\":300},{\"radio\":0,\"ch\":1,"
+        "\"freq_mhz\":5955,\"band\":\"6g\",\"ms\":30000,\"frames\":210}]');"
+        "INSERT INTO gnss_fixes (last_seen,src,mode) VALUES (%lld,'gpsd',3);"
+        "WITH RECURSIVE i(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM i"
+        " WHERE n < %d)"
+        " INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,"
+        " sev,peak_sev,count,observations) SELECT"
+        " printf('rtsflood:02:00:00:00:%%02x:%%02x', n / 256, n %% 256),"
+        " 'r' || n, %d, %lld + n * 100, %lld + n * 100 + 10, 1, 1, 1, 1 FROM i;",
+        ALERT_TYPE_RF_DEGRADED, T0 + 30, T0 + 50, T0 + 60,
+        ALERT_TYPE_RF_DEGRADED, T0 + 10010, T0 + 10030, T0 + 10100,
+        T0, T0 + 59, T0 + 10000, T0 + 10059,
+        T0 - 86400,
+        IFR_MAX_EPISODES + 4,
+        ALERT_TYPE_RTS_FLOOD, T0 + 20000, T0 + 20000);
+    ASSERT_EQ(exec_sql(h, g_sql), SQLITE_OK);
+    sqlite3_close(h);
+
+    char *r = report(db, 0, (time_t)(T0 + 15000));
+    ASSERT(r != NULL);
+    if (r) {
+        const char *m = strstr(r, "## 1. RF_DEGRADED on channel 3");
+        const char *b = strstr(r, "## 2. RF_DEGRADED on channel 1");
+        ASSERT(m != NULL && b != NULL && m < b);
+        ASSERT(strstr(r, "- Frames heard on channel 3 per minute of radio time:"
+                         " 510 during; no coverage interval closed in the 21 s"
+                         " before it opened.") != NULL);
+        ASSERT(strstr(r, "510 during, 510 before") == NULL);
+        ASSERT(strstr(r, "- Control frames per minute, every channel heard:"
+                         " 10 during; before not covered.") != NULL);
+        ASSERT(strstr(r, "- Channel 1 was heard on more than one band in these"
+                         " intervals (2g4, 6g).") != NULL);
+        ASSERT(strstr(r, "- Channel 3 was heard on more than one band") == NULL);
+        ASSERT(strstr(r, "GNSS fixes 1, the newest 2026-") != NULL);
+        ASSERT(strstr(r, "both daemons") == NULL);
+        ASSERT(strstr(r, "episodes overlap the window; the latest") == NULL);
+        free(r);
+    }
+
+    r = report(db, 0, 0);
+    ASSERT(r != NULL);
+    if (r) {
+        char want[160];
+        snprintf(want, sizeof(want), "%d episodes overlap the window; the latest"
+                 " %d are written below.", IFR_MAX_EPISODES + 7, IFR_MAX_EPISODES);
+        ASSERT(strstr(r, want) != NULL);
+        int nh = 0;
+        for (const char *p = r; (p = strstr(p, "\n## ")); p++) nh++;
+        ASSERT_EQ(nh, IFR_MAX_EPISODES);
+        /* The latest are kept: the RF episodes and the first RTS go. */
+        ASSERT(strstr(r, "RF_DEGRADED on channel") == NULL);
+        ASSERT(strstr(r, "from 02:00:00:00:00:00") == NULL);
+        snprintf(want, sizeof(want), "from 02:00:00:00:00:%02x,",
+                 IFR_MAX_EPISODES + 4);
+        ASSERT(strstr(r, want) != NULL);
+        free(r);
+    }
     test_rm_tree(dir);
 }
 
@@ -625,6 +769,7 @@ void run_handoff_tests(void) {
     RUN_TEST(test_parse_time);
     RUN_TEST(test_interference_report);
     RUN_TEST(test_interference_main_refusals);
+    RUN_TEST(test_interference_edges);
     RUN_TEST(test_handoff_packet);
     RUN_TEST(test_handoff_reads_the_wal);
     RUN_TEST(test_handoff_refusals_and_no_db);

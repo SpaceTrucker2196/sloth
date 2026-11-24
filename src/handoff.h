@@ -46,7 +46,11 @@
  * rdp_flows.last_cookie are the names themselves. A finding is written
  * as its kind, severity, times and incident id. interference.md reads
  * detail and key for RF_DEGRADED, RTS_FLOOD and GNSS_JAMMING alone,
- * whose text is sloth's own figures. The --inventory file is not
+ * and writes what it parses out of them (the channel number, the RTS
+ * transmitter's address, the rule's figures), never their text: a
+ * word in those kinds' detail does not reach the packet either. The
+ * transmitter's address is written because it is what the report's
+ * reader looks for; it is heard over the air. The --inventory file is not
  * copied (it is the operator's JSON, whose unknown keys sloth parses
  * and does not read, so it could hold anything); its identity is. The
  * packet is a local file for the site's operator and not a fleet
