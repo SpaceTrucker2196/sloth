@@ -45,6 +45,10 @@ void mon_frame_class_totals(uint64_t out[COV_FC_N]);
 /* The frequency of radio 0's newest frame in MHz, 0 before the first:
    where a radio that is not retuned is listening. */
 int mon_radio0_freq_mhz(void);
+/* Back to 0 (not known). Unlike the lifetime tallies beside it this is a
+   current value with no lifetime meaning, so sloth_reset_all() clears it
+   and a test of a fixed radio never reads an earlier test's channel. */
+void mon_radio0_freq_reset(void);
 
 /* Frames whose capture timestamp was <= 0 — the epoch or before it,
    which no live kernel produces (#92). Nothing is substituted when it
@@ -137,6 +141,7 @@ static inline uint64_t mon_frame_total(void)                            { return
 static inline void mon_frame_class_totals(uint64_t out[COV_FC_N])
     { if (out) memset(out, 0, sizeof(uint64_t) * COV_FC_N); }
 static inline int mon_radio0_freq_mhz(void)                             { return 0; }
+static inline void mon_radio0_freq_reset(void)                          {}
 static inline uint64_t mon_bad_clock_total(void)                        { return 0; }
 static inline uint64_t mon_radiotap_reject_total(void)                  { return 0; }
 static inline void probe_clear(void)                                    {}

@@ -35,7 +35,9 @@
  * (CHANHOP_MAX). Under --hop the radios' shares are disjoint, so this
  * is every channel; a re-deal after a radio is lost can put one channel
  * on two radios in one interval, and an entry beyond the bound is
- * counted in chan_overflow rather than written. */
+ * counted in chan_overflow rather than written. Its time still counts
+ * in band_ms and radio_ms, so the band shares cover the whole minute;
+ * radio_ms less the listed channels' ms is the time not itemised. */
 #define COV_IV_CHAN_MAX 32
 
 /* Closed intervals kept for the database, whose write tick can be

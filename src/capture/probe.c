@@ -103,6 +103,12 @@ int mon_radio0_freq_mhz(void) {
     return f;
 }
 
+void mon_radio0_freq_reset(void) {
+    pthread_mutex_lock(&g_frame_mu);
+    g_radio0_freq = 0;
+    pthread_mutex_unlock(&g_frame_mu);
+}
+
 uint64_t mon_frame_total(void) {
     pthread_mutex_lock(&g_frame_mu);
     uint64_t t = g_frame_total;

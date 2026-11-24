@@ -52,7 +52,17 @@ void cov_iv_add(int radio, int freq_mhz, int channel, uint64_t ms,
     while (i < c->nchan && !(c->chan[i].radio == radio && c->chan[i].freq_mhz == freq_mhz))
         i++;
     if (i == c->nchan) {
-        if (c->nchan >= COV_IV_CHAN_MAX) { c->chan_overflow++; return; }
+        if (c->nchan >= COV_IV_CHAN_MAX) {
+            /* The entry is not written, but its time was radio time on
+             * a known band: kept in the band and radio totals (which
+             * cov_iv_close() adds the listed channels to), so the
+             * shares describe the whole minute and only the per-channel
+             * breakdown is short. */
+            c->chan_overflow++;
+            c->band_ms[cov_ivb_of_mhz(freq_mhz)] += ms;
+            c->radio_ms += ms;
+            return;
+        }
         c->nchan++;
         c->chan[i].radio    = radio;
         c->chan[i].freq_mhz = freq_mhz;

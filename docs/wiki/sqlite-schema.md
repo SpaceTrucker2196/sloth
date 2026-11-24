@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154, #170 and #239.
 
-**Last updated**: 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
+**Last updated**: 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
 in the entity tier and `victron_readings` in the observation tier, at
 most one reading row a minute per device, the stamp-only v14 → v15 step
 and its two tests; slothweb's Victron tab charts `victron_readings`).
@@ -274,6 +274,19 @@ contract bump on its side.
 new table, `coverage_intervals`, with an index on `last_seen`; no
 existing table or value changes.
 
+**Not additive for slothweb.** sloth-mesh's `WEB_SDB_SCHEMA_MAX`
+(`src/web_slothdb.h`) is still 17 when this is written, and slothweb
+refuses a file newer than that whole ("written by a newer sloth
+(schema v18 ...): not read; update slothweb"), not just the new table:
+every sloth.db and `--rf-db` read on the dashboard goes blank (devices,
+History, GNSS, ADS-B, Victron). Both daemons migrate their file to v18
+when they open it. So the companion change, sloth-mesh's
+`WEB_SDB_SCHEMA_MAX` moved to 18 with a contract re-pin (its
+`test_schema_max_is_sloths` holds the two equal and goes red against
+this contract until then, as does sloth's CI `mesh-against-contract`
+job), has to land and be installed **before** this sloth is installed,
+as at v13 to v17.
+
 **The v17 → v18 migration.** `db_schema_migrate_v17_sql()` is the
 table's and the index's `CREATE ... IF NOT EXISTS`, the same DDL the
 unconditional schema carries (`COVERAGE_INTERVALS_DDL` in
@@ -298,7 +311,9 @@ loses none of the last eight). `start` / `last_seen` are the interval's
 two ends (wall clock), `dur_ms` its length on the monotonic clock,
 `radio_ms` the monitor radios' time and `ms_*` that time by band
 (`5dfs`: channels 52-64 and 100-144; `unknown`: a fixed radio that has
-heard nothing). `f_*` are the frames received by class, summing to the
+heard nothing). `radio_ms` is the sum of the `ms_*`, and includes the
+time of channel entries beyond the 32 that `chans` does not list
+(counted in `chan_overflow`). `f_*` are the frames received by class, summing to the
 frames the monitor path recorded. The four drop columns are NULL when
 the handle was not measured at both ends, never 0 for that. `chans` and
 `sources` are the record's two arrays as JSON text, exactly as the

@@ -85,6 +85,7 @@
     X(mdns_clear) \
     X(mle_clear) \
     X(mon_radios_reset) \
+    X(mon_radio0_freq_reset) \
     X(mqtt_snoop_clear) \
     X(nbns_clear) \
     X(ndp_snoop_clear) \

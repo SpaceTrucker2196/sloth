@@ -19,6 +19,8 @@
 #include "cov_interval.h"
 #include "cov_interval_capture.h"
 #include "capture/probe.h"
+#include "poll.h"
+#include "reset_all.h"
 #ifdef WITH_SQLITE
 #include <sqlite3.h>
 #endif
@@ -492,6 +494,72 @@ static void test_no_sink_no_burst(void) {
     end();
 }
 
+/* A sink that is open while several intervals close between two emits
+ * gets each of them, in order, once; more than the ring holds and it
+ * gets the newest COV_IV_RING. Seen red with cov_iv_emit() writing only
+ * the newest seq (one record each time). */
+static void test_emit_catches_up_several(void) {
+    begin();
+    monitor_up();
+    sink_open();
+    sample();
+    for (int i = 1; i <= 180; i++) { g_mono += 1000; g_wall += 1; sample(); }
+    ASSERT_EQ(cov_iv_seq(), 3);
+    cov_iv_emit();
+    const char *out = sink_read();
+    ASSERT_EQ(count_of(out, "\"type\":\"coverage_interval\""), 3);
+    const char *a = strstr(out, "\"seq\":1,"), *b = strstr(out, "\"seq\":2,"),
+               *c = strstr(out, "\"seq\":3,");
+    ASSERT(a != NULL && b != NULL && c != NULL);
+    ASSERT(a < b && b < c);
+
+    sink_open();
+    for (int i = 1; i <= 600; i++) { g_mono += 1000; g_wall += 1; sample(); }
+    ASSERT_EQ(cov_iv_seq(), 13);
+    cov_iv_emit();
+    out = sink_read();
+    ASSERT_EQ(count_of(out, "\"type\":\"coverage_interval\""), COV_IV_RING);
+    ASSERT(strstr(out, "\"seq\":5,") == NULL);     /* out of the ring */
+    ASSERT(strstr(out, "\"seq\":6,") != NULL);
+    ASSERT(strstr(out, "\"seq\":13,") != NULL);
+    end();
+}
+
+/* The sampler's stage reads the clock as it runs, after the hop stage
+ * has stamped this tick's retune on its own later reading. Fed the
+ * tick's start instead, an interval whose closing tick retunes credits
+ * the closed slot past its end: here the closing tick's stages before
+ * the sampler take 40 ms, and the channel time came to 60000 against a
+ * dur_ms of 59960. Seen red with st_coverage_iv() passing ctx->mono_ms. */
+static void test_closing_retune_on_the_stage_clock(void) {
+    begin();
+    monitor_up();
+    static const int ch[3] = { 1, 36, 52 };
+    ASSERT_EQ(chanhop_init(&g_h0, ch, 3), 3);
+    cov_iv_capture_set_hop0(&g_h0);
+    int k = poll_stage_index(&g_poll_wifi, "coverage_iv");
+    ASSERT(k >= 0);
+    poll_ctx_t ctx;
+    for (int i = 0; i <= 60; i++) {
+        if (i) { g_mono += 1000; g_wall += 1; }
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.wall = g_wall;
+        ctx.mono_ms = g_mono;
+        if (i == 60) { ctx.mono_ms = g_mono; g_mono += 40; }   /* the tick began 40 ms ago */
+        hop0(10);
+        sys_status_poll(&g_s, ctx.wall, ctx.mono_ms);
+        g_poll_wifi.stages[k].fn(&g_s, &ctx);
+    }
+    cov_iv_t iv;
+    ASSERT_EQ(cov_iv_get(1, &iv), 1);
+    uint64_t listed = 0;
+    for (int i = 0; i < iv.nchan; i++) listed += iv.chan[i].ms;
+    ASSERT_EQ(iv.dur_ms, 60040);
+    ASSERT_EQ(listed, iv.dur_ms);
+    ASSERT_EQ(iv.radio_ms, iv.dur_ms);
+    end();
+}
+
 /* The channel list is bounded; the excess is counted. */
 static void test_channel_bound(void) {
     begin();
@@ -508,6 +576,15 @@ static void test_channel_bound(void) {
     ASSERT_EQ(iv.nchan, COV_IV_CHAN_MAX);
     ASSERT_EQ(iv.chan_overflow, 3);
     ASSERT_EQ(iv.chan[0].ms, 15);
+    /* The three entries not written are still radio time: 35 entries of
+     * 10 ms and the merged 5. Seen red with the overflow branch of
+     * cov_iv_add() not adding to the totals (325). */
+    ASSERT_EQ(iv.radio_ms, 355);
+    uint64_t listed = 0, banded = 0;
+    for (int i = 0; i < iv.nchan; i++) listed += iv.chan[i].ms;
+    for (int b = 0; b < COV_IVB_N; b++) banded += iv.band_ms[b];
+    ASSERT_EQ(listed, 325);
+    ASSERT_EQ(banded, iv.radio_ms);
     /* The ring holds COV_IV_RING; an older seq is gone. */
     for (int k = 0; k < COV_IV_RING; k++) {
         g_mono += COV_IV_MS;
@@ -601,6 +678,12 @@ static void test_classes_through_the_monitor_path(void) {
     ASSERT(strstr(out, "\"frames\":{\"beacon\":1,\"probe\":1,\"auth\":0,"
                        "\"assoc\":0,\"deauth\":1,\"action\":0,\"ctrl\":1,"
                        "\"data\":0,\"eapol\":1,\"other\":0,\"fcs_bad\":1}") != NULL);
+    /* Radio 0's frequency is a current value, cleared between tests by
+     * the registry: the next test of a fixed radio reads unknown, not
+     * this 5180. Seen red with mon_radio0_freq_reset left out of
+     * SLOTH_RESETS. */
+    sloth_reset_all();
+    ASSERT_EQ(mon_radio0_freq_mhz(), 0);
     end();
 }
 #endif
@@ -647,6 +730,49 @@ static void test_rows_in_the_database(void) {
     unlink(path);
     end();
 }
+
+/* A write tick longer than an interval writes every interval closed
+ * since the last one, and past the ring's depth the newest COV_IV_RING.
+ * Seen red with write_coverage_intervals() writing only the newest seq
+ * (two rows). */
+static void test_db_catches_up_several(void) {
+    begin();
+    char path[TEST_TMP_MAX];
+    int fd = mkstemp(test_tmp_tpl(path, sizeof(path), "sloth_covdb_XXXXXX"));
+    if (fd >= 0) close(fd);
+    unlink(path);
+    ASSERT_EQ(db_open(path), 1);
+    monitor_up();
+    const time_t w0 = g_wall;
+    sample();
+    /* --db-interval-secs 300: five intervals per write. */
+    for (int i = 1; i <= 300; i++) { g_mono += 1000; g_wall += 1; sample(); }
+    db_tick(&g_s, g_wall);
+    /* Then thirteen minutes with no write: the ring keeps eight. */
+    for (int i = 1; i <= 780; i++) { g_mono += 1000; g_wall += 1; sample(); }
+    db_tick(&g_s, g_wall);
+    ASSERT_EQ(cov_iv_seq(), 18);
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(path, &h), SQLITE_OK);
+    sqlite3_stmt *st = NULL;
+    ASSERT_EQ(sqlite3_prepare_v2(h,
+        "SELECT COUNT(*), COUNT(DISTINCT start), MIN(start), MAX(start),"
+        " SUM(start >= ?1 + 300 AND start < ?1 + 600)"
+        " FROM coverage_intervals", -1, &st, NULL), SQLITE_OK);
+    sqlite3_bind_int64(st, 1, (sqlite3_int64)w0);
+    ASSERT_EQ(sqlite3_step(st), SQLITE_ROW);
+    ASSERT_EQ(sqlite3_column_int(st, 0), 5 + COV_IV_RING);
+    ASSERT_EQ(sqlite3_column_int(st, 1), 5 + COV_IV_RING);
+    ASSERT_EQ(sqlite3_column_int64(st, 2), (sqlite3_int64)w0);
+    ASSERT_EQ(sqlite3_column_int64(st, 3), (sqlite3_int64)(w0 + 17 * 60));
+    /* Seqs 6..10 fell out of the ring before the second write. */
+    ASSERT_EQ(sqlite3_column_int(st, 4), 0);
+    sqlite3_finalize(st);
+    sqlite3_close(h);
+    unlink(path);
+    end();
+}
 #endif
 
 void run_cov_interval_tests(void) {
@@ -662,11 +788,14 @@ void run_cov_interval_tests(void) {
     RUN_TEST(test_sources_at_the_end);
     RUN_TEST(test_replay_writes_none);
     RUN_TEST(test_no_sink_no_burst);
+    RUN_TEST(test_emit_catches_up_several);
+    RUN_TEST(test_closing_retune_on_the_stage_clock);
     RUN_TEST(test_channel_bound);
 #ifdef WITH_PCAP
     RUN_TEST(test_classes_through_the_monitor_path);
 #endif
 #ifdef WITH_SQLITE
     RUN_TEST(test_rows_in_the_database);
+    RUN_TEST(test_db_catches_up_several);
 #endif
 }

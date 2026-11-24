@@ -64,6 +64,7 @@
 #include "rf_distance.h"
 #include "ownership.h"
 #include "cov_interval_capture.h"
+#include "sloth_clock.h"
 
 /* The Wi-Fi, wired and BLE stage bodies, and the table that uses
  * them: g_poll_wifi, what sloth-wifi runs. The runner and
@@ -405,7 +406,14 @@ static void st_chanhop(sloth_state_t *s, const poll_ctx_t *ctx) {
  * so a retune this tick has closed its dwell, and before the emit and
  * the database stages that write a closed interval. */
 static void st_coverage_iv(sloth_state_t *s, const poll_ctx_t *ctx) {
-    cov_iv_capture_poll(s, ctx->wall, ctx->mono_ms);
+    /* A fresh reading, not ctx->mono_ms (the tick's start): the hop
+     * stage closes a dwell and stamps the next on its own later
+     * sloth_mono_ms(), and the sampler reads the slots' time at the
+     * instant it passes. With the tick's start, a retune in the closing
+     * tick credited the closed slot past the interval's end and the
+     * interval's channel time exceeded dur_ms by the stages between
+     * (the next interval short by as much). */
+    cov_iv_capture_poll(s, ctx->wall, sloth_mono_ms());
 }
 
 /* ── EMIT ─────────────────────────────────────────────────── */
