@@ -312,6 +312,69 @@ static void test_gaps_wrap_at_the_terminal_width(void) {
     gaps_end();
 }
 
+/* At the 100x33 minimum (AGENTS.md) the view does not scroll, and the
+ * traffic sections under the gaps were there before them. A hopping
+ * sensor's full list (the hop group wraps to six rows, the limits to
+ * four) would push Connections, Top 5, the geography and the capture
+ * count below the last row; there the gaps are one count per reason
+ * and the report is named for the rest. The view is drawn from row 2,
+ * under the tab bar and its rule, as tui_draw() places it. */
+static void stats_33_fill(void) {
+    push_iface(&g_gs, "eth0", 1, 1, 1, 1);
+    push_iface(&g_gs, "wlan0", 1, 1, 1, 1);
+    push_iface(&g_gs, "mon0", 1, 1, 1, 1);
+    push_iface(&g_gs, "lo", 1, 1, 1, 1);
+    for (int i = 0; i < 3; i++) {
+        g_gs.conns[i].proto = PROTO_TCP;
+        g_gs.conns[i].state = 1;
+    }
+    g_gs.conn_count = 3;
+}
+
+static void test_gaps_short_screen_keeps_the_traffic(void) {
+    gaps_begin();
+    gaps_one_hopping_radio();
+    stats_33_fill();
+    ASSERT_EQ(tui_init_offscreen(33, 100), 0);
+    tui_test_erase();
+    move(2, 0);
+    view_stats_draw(&g_gs);
+    int ob = 0, pa = 0, bl = 0;
+    cov_live_counts(&ob, &pa, &bl);
+    char want[160];
+    snprintf(want, sizeof(want), "  blind no_source 30, no_own_net 3, no_db 1, band 1"
+             "   partly hop %d", pa);
+    ASSERT_SCREEN_HAS(want);
+    ASSERT_SCREEN_HAS("(kinds and limits: --report)");
+    /* Every section under the gaps is on the screen and nothing is
+     * dropped below it. Seen red with gap_budget() returning 1 << 30
+     * (the full list: Top 5, the geography and the capture count
+     * fell below the last row). */
+    ASSERT_SCREEN_HAS("Connections (3 total)");
+    ASSERT_SCREEN_HAS("Top 5 by bandwidth");
+    ASSERT_SCREEN_HAS("(no connections tracked)");
+    ASSERT_SCREEN_HAS("Connection geography");
+#ifdef WITH_PCAP
+    ASSERT_SCREEN_HAS("Captured: 0");
+#endif
+    ASSERT_EQ(tui_test_overflow(), 0);
+    /* The names wait for the report; seen red under the same mutation. */
+    ASSERT_SCREEN_LACKS("DEAUTH_FLOOD");
+    ASSERT_SCREEN_LACKS("Observable means");
+
+    /* With the rows to spare, the whole list. */
+    ASSERT_EQ(tui_init_offscreen(80, 100), 0);
+    tui_test_erase();
+    move(2, 0);
+    view_stats_draw(&g_gs);
+    ASSERT_SCREEN_HAS("  dot11: DEAUTH_FLOOD");
+    ASSERT_SCREEN_HAS("  Observable means");
+    ASSERT_SCREEN_LACKS("(kinds and limits: --report)");
+    ASSERT_SCREEN_HAS("Connection geography");
+    ASSERT_EQ(tui_test_overflow(), 0);
+    gaps_end();
+}
+
 /* ── Entry point ─────────────────────────────────────────── */
 
 void run_stats_tests(void) {
@@ -336,4 +399,5 @@ void run_stats_tests(void) {
     RUN_TEST(test_gaps_not_assessed);
     RUN_TEST(test_gaps_populated);
     RUN_TEST(test_gaps_wrap_at_the_terminal_width);
+    RUN_TEST(test_gaps_short_screen_keeps_the_traffic);
 }

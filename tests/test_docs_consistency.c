@@ -1312,6 +1312,19 @@ static void test_usage_strict_claims_no_total_coverage(void) {
  * that has to name them is sloth-rf's (src/rf/rf_args.c rf_usage()),
  * and sloth-wifi's --help has to say the six decoder flags are refused
  * and whose they are - not document them as if it took them. */
+/* --report and --report-json describe what the report holds, and since
+ * #242 item 3 it holds the collection coverage: docs/wiki/cli-reference.md
+ * says so, and that page names print_usage() as the source of truth.
+ * Seen red on the --help text of 3c8f7db0, which listed only alerts,
+ * credentials and devices. */
+static void test_usage_report_names_collection_coverage(void) {
+    char b[4096];
+    ASSERT_EQ(usage_option_block("--report", b, sizeof(b)), 1);
+    ASSERT(has_ci(b, "collection coverage"));
+    ASSERT_EQ(usage_option_block("--report-json", b, sizeof(b)), 1);
+    ASSERT(has_ci(b, "coverage"));
+}
+
 static void test_usage_adsb_names_both_refused_schemes(void) {
     char *rf = slurp("src/rf/rf_args.c");
     ASSERT(rf != NULL);
@@ -2827,6 +2840,7 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_usage_hop_claims_no_sole_kernel_state_write);
     RUN_TEST(test_usage_strict_claims_no_total_coverage);
     RUN_TEST(test_usage_adsb_names_both_refused_schemes);
+    RUN_TEST(test_usage_report_names_collection_coverage);
     RUN_TEST(test_set_channel_comments_claim_no_total);
     TEST_SUITE("wiki + rule-table integrity (#103)");
     RUN_TEST(test_wiki_link_scanner_skips_code);

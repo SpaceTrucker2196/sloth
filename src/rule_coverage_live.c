@@ -4,6 +4,7 @@
 #include "sloth_clock.h"
 #include "jsonl.h"
 #include "jsonl_internal.h"
+#include "sloth_compat.h"
 
 /* Coverage assessment, the running half (#242 slice 2). Contract:
  * rule_coverage_live.h. */
@@ -130,30 +131,52 @@ const char *cov_kind_name(alert_type_t t) {
     return name;
 }
 
+/* cov_rule_status()'s precedence (rule_coverage.h): blind in enum
+ * order, then partly with `suppressed` after `source_stale`. Every
+ * reason is listed once, so a reason appended to cov_reason_t fails the
+ * build here until it is given its place. */
+static const struct { cov_status_t st; cov_reason_t why; } gap_order[] = {
+    { COV_BLIND,  COV_R_NO_SOURCE },    { COV_BLIND,  COV_R_SOURCE_DOWN },
+    { COV_BLIND,  COV_R_NO_OWN_NET },   { COV_BLIND,  COV_R_NO_ROSTER },
+    { COV_BLIND,  COV_R_NO_DB },        { COV_BLIND,  COV_R_BAND },
+    { COV_PARTLY, COV_R_SOURCE_STALE }, { COV_PARTLY, COV_R_SUPPRESSED },
+    { COV_PARTLY, COV_R_FIXED_CHANNEL },{ COV_PARTLY, COV_R_HOP },
+};
+SLOTH_STATIC_ASSERT(sizeof(gap_order) / sizeof(*gap_order) == COV_R_COUNT - 1,
+                    gap_order_lists_every_reason);
+
+static int gap_listed(cov_status_t st, cov_reason_t why) {
+    for (size_t o = 0; o < sizeof(gap_order) / sizeof(*gap_order); o++)
+        if (gap_order[o].st == st && gap_order[o].why == why) return 1;
+    return 0;
+}
+
+/* Fill one group; 1 when it holds a kind. */
+static int gap_fill(cov_gap_t *gp, cov_status_t st, cov_reason_t why) {
+    gp->st = st;
+    gp->why = why;
+    gp->n = 0;
+    for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
+        if (!cov_daemon_raises(g.daemon, (alert_type_t)t)) continue;
+        if (g.st[t] == (uint8_t)st && g.why[t] == (uint8_t)why)
+            gp->kind[gp->n++] = (alert_type_t)t;
+    }
+    return gp->n > 0;
+}
+
 int cov_live_gaps(cov_gap_t *out, int max) {
-    /* cov_rule_status()'s precedence (rule_coverage.h): blind in enum
-     * order, then partly with `suppressed` after `source_stale`. */
-    static const struct { cov_status_t st; cov_reason_t why; } order[] = {
-        { COV_BLIND,  COV_R_NO_SOURCE },    { COV_BLIND,  COV_R_SOURCE_DOWN },
-        { COV_BLIND,  COV_R_NO_OWN_NET },   { COV_BLIND,  COV_R_NO_ROSTER },
-        { COV_BLIND,  COV_R_NO_DB },        { COV_BLIND,  COV_R_BAND },
-        { COV_PARTLY, COV_R_SOURCE_STALE }, { COV_PARTLY, COV_R_SUPPRESSED },
-        { COV_PARTLY, COV_R_FIXED_CHANNEL },{ COV_PARTLY, COV_R_HOP },
-    };
     if (!g.valid || !out) return 0;
     int n = 0;
-    for (size_t o = 0; o < sizeof(order) / sizeof(*order) && n < max; o++) {
-        cov_gap_t *gp = &out[n];
-        gp->st = order[o].st;
-        gp->why = order[o].why;
-        gp->n = 0;
-        for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
-            if (!cov_daemon_raises(g.daemon, (alert_type_t)t)) continue;
-            if (g.st[t] == (uint8_t)gp->st && g.why[t] == (uint8_t)gp->why)
-                gp->kind[gp->n++] = (alert_type_t)t;
-        }
-        if (gp->n) n++;
-    }
+    for (size_t o = 0; o < sizeof(gap_order) / sizeof(*gap_order) && n < max; o++)
+        n += gap_fill(&out[n], gap_order[o].st, gap_order[o].why);
+    /* A pairing the table does not name (a reason given under the other
+     * status) is still a gap: listed after the named ones, never left
+     * out, so the groups always hold every partly and blind kind. */
+    static const cov_status_t sts[2] = { COV_BLIND, COV_PARTLY };
+    for (int i = 0; i < 2; i++)
+        for (int r = COV_R_NONE + 1; r < COV_R_COUNT && n < max; r++)
+            if (!gap_listed(sts[i], (cov_reason_t)r))
+                n += gap_fill(&out[n], sts[i], (cov_reason_t)r);
     return n;
 }
 

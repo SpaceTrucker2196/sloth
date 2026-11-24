@@ -108,9 +108,9 @@ void posture_coverage_md(FILE *out, const sloth_state_t *s) {
         fprintf(out, "| observable | %d |\n| partly | %d |\n| blind | %d |\n\n",
                 ob, pa, bl);
 
-        cov_gap_t gaps[COV_R_COUNT];
-        int ng = cov_live_gaps(gaps, COV_R_COUNT);
-        if (ng == 0)
+        cov_gap_t gaps[COV_GAP_MAX];
+        int ng = cov_live_gaps(gaps, COV_GAP_MAX);
+        if (pa + bl == 0)
             fprintf(out, "Every rule is observable.\n\n");
         for (int i = 0; i < ng; i++) {
             fprintf(out, "**%s, `%s`** (%d)\n\n", cov_status_name(gaps[i].st),
@@ -197,8 +197,8 @@ void posture_coverage_json(FILE *out, const sloth_state_t *s) {
         fprintf(out, "\"assessed\":true,\"rules\":%d,\"observable\":%d,"
                      "\"partly\":%d,\"blind\":%d,\"gaps\":[",
                 ob + pa + bl, ob, pa, bl);
-        cov_gap_t gaps[COV_R_COUNT];
-        int ng = cov_live_gaps(gaps, COV_R_COUNT);
+        cov_gap_t gaps[COV_GAP_MAX];
+        int ng = cov_live_gaps(gaps, COV_GAP_MAX);
         for (int i = 0; i < ng; i++) {
             fprintf(out, "%s{\"status\":\"%s\",\"why\":\"%s\",\"kinds\":[",
                     i ? "," : "", cov_status_name(gaps[i].st),

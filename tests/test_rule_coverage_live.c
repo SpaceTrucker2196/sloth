@@ -427,6 +427,82 @@ static void test_suppressed_reaches_the_statuses(void) {
     end();
 }
 
+/* ── the gap groups (#242 item 3, review of 3c8f7db0) ─────────────── */
+
+/* Every partly and blind kind is in exactly one group, whatever the
+ * reasons in play: the report, the JSON `gaps` and the Stats view list
+ * the groups under the counts, and a kind in no group would be counted
+ * and never named. Checked against the counts, a per-kind sweep and
+ * each group's own (status, reason), across the environments the
+ * suite can build: no radio, a fixed radio, the hop list, an own
+ * network, an open SENSOR_SUPPRESSED, and sloth-rf. Seen red with
+ * gap_order[]'s COV_R_HOP entry given COV_BLIND and the fallback loop
+ * removed (the hop kinds in no group), and with that entry made a
+ * second COV_R_FIXED_CHANNEL (its kinds in two groups); green with the
+ * fallback kept under the COV_BLIND mutation. Dropping an entry
+ * outright fails the build (gap_order_lists_every_reason). */
+static void gaps_cover_every_kind(void) {
+    static cov_gap_t gaps[COV_GAP_MAX];
+    int ob = 0, pa = 0, bl = 0;
+    cov_live_counts(&ob, &pa, &bl);
+    int ng = cov_live_gaps(gaps, COV_GAP_MAX);
+    int sum = 0;
+    int seen[ALERT_TYPE_COUNT];
+    memset(seen, 0, sizeof(seen));
+    for (int i = 0; i < ng; i++) {
+        ASSERT(gaps[i].n > 0);
+        ASSERT(gaps[i].st != COV_OBSERVABLE);
+        sum += gaps[i].n;
+        for (int k = 0; k < gaps[i].n; k++) {
+            cov_status_t st = COV_OBSERVABLE;
+            cov_reason_t why = COV_R_NONE;
+            ASSERT_EQ(cov_live_get(gaps[i].kind[k], &st, &why), 1);
+            ASSERT_EQ((int)st, (int)gaps[i].st);
+            ASSERT_EQ((int)why, (int)gaps[i].why);
+            seen[gaps[i].kind[k]]++;
+        }
+    }
+    ASSERT_EQ(sum, pa + bl);
+    for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
+        cov_status_t st = COV_OBSERVABLE;
+        if (!cov_live_get((alert_type_t)t, &st, NULL)) continue;
+        ASSERT_EQ(seen[t], st == COV_OBSERVABLE ? 0 : 1);
+    }
+}
+
+static void test_gaps_hold_every_partly_and_blind_kind(void) {
+    begin();
+    tick();                         /* nothing configured */
+    gaps_cover_every_kind();
+    monitor_up();
+    capture_up();
+    tick();                         /* a fixed radio */
+    gaps_cover_every_kind();
+    hop_default();
+    tick();                         /* the hop list */
+    gaps_cover_every_kind();
+    ASSERT(ownership_add_ssid("homenet"));
+    tick();                         /* an own network, no roster */
+    gaps_cover_every_kind();
+
+    alerts_clear();
+    sh_evict_reset();
+    tick();
+    alerts_update(&g_s);
+    for (int i = 0; i < 700; i++) sh_evict_note(SH_EVICT_BEACON_AP);
+    for (int i = 0; i < 61; i++) { tick(); alerts_update(&g_s); }
+    ASSERT(status_is(ALERT_TYPE_EVIL_TWIN, COV_PARTLY, COV_R_SUPPRESSED));
+    gaps_cover_every_kind();        /* suppressed beside hop */
+    alerts_clear();
+    sh_evict_reset();
+
+    rf_side_install();
+    cov_live_reset();
+    tick();
+    gaps_cover_every_kind();        /* sloth-rf's six */
+    end();
+}
+
 /* ── sloth-rf ─────────────────────────────────────────────────────── */
 
 static void test_rf_daemon_has_its_own_six(void) {
@@ -467,4 +543,5 @@ void run_rule_coverage_live_tests(void) {
     RUN_TEST(test_sensor_health_counts);
     RUN_TEST(test_suppressed_reaches_the_statuses);
     RUN_TEST(test_rf_daemon_has_its_own_six);
+    RUN_TEST(test_gaps_hold_every_partly_and_blind_kind);
 }

@@ -60,6 +60,7 @@ void stats_take_baseline(sloth_state_t *s) {
 
 #define GEO_TRACK 16
 #define GEO_BAR   32
+#define GEO_SHOW  8
 
 static void draw_geo(const sloth_state_t *s) {
     char codes[GEO_TRACK][4];
@@ -194,20 +195,25 @@ static void gap_addf(char *buf, int *off, const char *fmt, ...) {
     if (*off > GAP_LINE - 1) *off = GAP_LINE - 1;
 }
 
-/* Draw `line` from column 0, broken before a word that would reach the
- * last column, each later row after `indent` spaces; the spaces at a
- * break are dropped, and a word ending in ':' is kept with the word
- * after it. Every string here is ASCII (kind, input and
- * reason names, fixed prose), so an octet is a cell. The ANSI build has
- * no width: one row. A word longer than a row is drawn whole and the
- * terminal folds it. */
-static void gap_put(const char *line, int indent) {
+static int gap_width(void) {
 #ifdef WITH_NCURSES
-    int width = getmaxx(stdscr) - 1;
+    return getmaxx(stdscr) - 1;
 #else
-    int width = 1 << 30;
+    return 1 << 30;
 #endif
-    int x = 0;
+}
+
+/* Lay `line` out from column 0, broken before a word that would reach
+ * the last column, each later row after `indent` spaces; the spaces at
+ * a break are dropped, and a word ending in ':' is kept with the word
+ * after it. Every string here is ASCII (kind, input and reason names,
+ * fixed prose), so an octet is a cell. The ANSI build has no width:
+ * one row. A word longer than a row is drawn whole and the terminal
+ * folds it. Draws when `draw`; returns the rows it takes either way,
+ * so draw_gaps() can measure the section before it draws it. */
+static int gap_lay(const char *line, int indent, int draw) {
+    int width = gap_width();
+    int x = 0, rows = 1;
     const char *p = line;
     while (*p) {
         const char *w = p;
@@ -220,15 +226,52 @@ static void gap_put(const char *line, int indent) {
             for (e++; *e && *e != ' '; e++) {}
         int sp = (int)(w - p), wl = (int)(e - w);
         if (x > indent && x + sp + wl > width) {
-            TPRINT("\n%*s", indent, "");
+            if (draw) TPRINT("\n%*s", indent, "");
             x = indent;
             sp = 0;
+            rows++;
         }
-        TPRINT("%*s%.*s", sp, "", wl, w);
+        if (draw) TPRINT("%*s%.*s", sp, "", wl, w);
         x += sp + wl;
         p = e;
     }
-    TPRINT("\n");
+    if (draw) TPRINT("\n");
+    return rows;
+}
+
+static void gap_put(const char *line, int indent) { (void)gap_lay(line, indent, 1); }
+
+#ifdef WITH_NCURSES
+/* The rows the sections under the gaps take at most (connections, the
+ * top-N table, the geography bars, the capture count), each counted
+ * from what its draw function prints. An upper bound: the top-N table
+ * stops at its first idle row and the geography counts countries, not
+ * connections, so the error only ever makes the gaps section shorter
+ * than it had to be. The short form is not itself bounded: on a screen
+ * too small for it as well, the traffic sections still lose rows. */
+static int traffic_rows(const sloth_state_t *s) {
+    int top = s->conn_bw_count < STATS_TOP ? s->conn_bw_count : STATS_TOP;
+    int geo = s->conn_count < GEO_SHOW ? s->conn_count : GEO_SHOW;
+    int rows = 2                                 /* Connections + bar */
+             + 1 + 3 + (top > 0 ? top : 1)       /* blank, Top N */
+             + 1 + 1 + (geo > 0 ? geo : 1);      /* blank, geography */
+#ifdef WITH_PCAP
+    rows += 3;                                   /* blank, capture */
+#endif
+    return rows;
+}
+#endif
+
+/* The rows left for the gaps under its counts line before the traffic
+ * sections would be pushed below the screen; unbounded without curses
+ * (the ANSI build scrolls). */
+static int gap_budget(const sloth_state_t *s) {
+#ifdef WITH_NCURSES
+    return getmaxy(stdscr) - getcury(stdscr) - traffic_rows(s);
+#else
+    (void)s;
+    return 1 << 30;
+#endif
 }
 
 static void draw_gaps(const sloth_state_t *s) {
@@ -255,11 +298,18 @@ static void draw_gaps(const sloth_state_t *s) {
                          e->radios, e->channels, e->hopping ? "hopping" : "fixed",
                          bands[0] ? bands : "unknown");
 
-    cov_gap_t gaps[COV_R_COUNT];
-    int ng = cov_live_gaps(gaps, COV_R_COUNT);
-    if (ng == 0) { tui_dim(); TPRINT("  none: every rule is observable\n"); }
+    static cov_gap_t gaps[COV_GAP_MAX];
+    static char lines[COV_GAP_MAX][GAP_LINE];
+    int ng = cov_live_gaps(gaps, COV_GAP_MAX);
+    if (pa + bl == 0) { tui_dim(); TPRINT("  none: every rule is observable\n"); }
+    int nsup = 0;
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == ALERT_TYPE_SENSOR_SUPPRESSED && !s->alerts[i].resolved)
+            nsup++;
+
+    int need = nsup;
     for (int i = 0; i < ng; i++) {
-        char line[GAP_LINE];
+        char *line = lines[i];
         int off = 0;
         line[0] = '\0';
         gap_addf(line, &off, "  %s %s (%d)", cov_status_name(gaps[i].st),
@@ -275,8 +325,40 @@ static void draw_gaps(const sloth_state_t *s) {
                 first = 0;
             }
         }
-        if (gaps[i].st == COV_BLIND) tui_bright(); else tui_normal();
-        gap_put(line, 6);
+        need += gap_lay(line, 6, 0);
+    }
+    char lim[COV_LIMIT_COUNT][GAP_LINE];
+    for (int i = 0; i < COV_LIMIT_COUNT; i++) {
+        snprintf(lim[i], sizeof(lim[i]), "  %s", cov_limits[i]);
+        need += gap_lay(lim[i], 4, 0);
+    }
+
+    /* The view does not scroll, and the traffic sections under this one
+     * were there first: when the whole list would push them below the
+     * screen (a 100x33 terminal on a hopping sensor, where the hop
+     * group alone wraps to six rows), each reason is one count and the
+     * names and limits are left to the report, which has the room. */
+    int compact = need > gap_budget(s);
+    if (compact) {
+        char line[GAP_LINE];
+        int off = 0;
+        line[0] = '\0';
+        for (int i = 0; i < ng; i++) {
+            if (i == 0 || gaps[i].st != gaps[i - 1].st)
+                gap_addf(line, &off, "%s%s", i ? "   " : "  ",
+                         cov_status_name(gaps[i].st));
+            else
+                gap_addf(line, &off, ",");
+            gap_addf(line, &off, " %s %d", cov_reason_name(gaps[i].why), gaps[i].n);
+        }
+        if (ng) gap_addf(line, &off, "   (kinds and limits: --report)");
+        tui_normal();
+        if (ng) gap_put(line, 4);
+    } else {
+        for (int i = 0; i < ng; i++) {
+            if (gaps[i].st == COV_BLIND) tui_bright(); else tui_normal();
+            gap_put(lines[i], 6);
+        }
     }
 
     for (int i = 0; i < s->alert_count; i++) {
@@ -285,11 +367,8 @@ static void draw_gaps(const sloth_state_t *s) {
         tui_bright(); TPRINT("  SENSOR_SUPPRESSED open: %s\n", a->key);
     }
     tui_dim();
-    for (int i = 0; i < COV_LIMIT_COUNT; i++) {
-        char line[GAP_LINE];
-        snprintf(line, sizeof(line), "  %s", cov_limits[i]);
-        gap_put(line, 4);
-    }
+    if (!compact)
+        for (int i = 0; i < COV_LIMIT_COUNT; i++) gap_put(lim[i], 4);
     tui_normal();
 }
 

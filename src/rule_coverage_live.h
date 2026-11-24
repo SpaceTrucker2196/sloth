@@ -72,7 +72,11 @@ const char *cov_live_state_why(cov_live_state_t st);
  * the blind groups first, then the partly ones, each in the precedence
  * order of cov_rule_status() (the first thing to fix first), and the
  * kinds of a group in sloth_alerts.def order. Empty groups are left
- * out. Returns the groups written, 0 when nothing is derived. */
+ * out; every partly and blind kind is in exactly one group, so the
+ * groups' sizes add up to cov_live_counts()' partly + blind. `out`
+ * holds COV_GAP_MAX groups to be sure of that. Returns the groups
+ * written, 0 when nothing is derived. */
+#define COV_GAP_MAX (2 * COV_R_COUNT)
 typedef struct {
     cov_status_t st;
     cov_reason_t why;

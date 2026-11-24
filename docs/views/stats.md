@@ -65,7 +65,20 @@ already derives each tick (`cov_live_*`), nothing new.
   observable`.
 - Open `SENSOR_SUPPRESSED` incidents by key (a resolved one is not
   shown).
-- The two limits, always.
+- The two limits.
+
+The view does not scroll, and the traffic sections under this one
+(Connections, Top 5, the geography, the capture count) were there
+first. When the whole list would push them below the last row (a
+100x33 terminal on a hopping sensor: the hop group alone wraps to six
+rows), the reasons are one line of counts and the names and limits are
+left to `--report`:
+
+```
+  blind no_source 30, no_own_net 3, no_db 1, band 1   partly hop 37   (kinds and limits: --report)
+```
+
+The open `SENSOR_SUPPRESSED` lines are kept in both forms.
 
 Before the first status sample, and on a `--replay` run, the section
 reads `not assessed: <why>` and shows no count: zero blind rules would
