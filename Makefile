@@ -85,6 +85,7 @@ CORE_BASE_SRCS = \
        src/cleartext_creds.c \
        src/device_risk.c   \
        src/posture.c       \
+       src/posture_coverage.c \
        src/version.c       \
        src/libver.c        \
        src/libver_pcap.c   \

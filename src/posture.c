@@ -127,6 +127,10 @@ static int render_md(FILE *out, const sloth_state_t *s,
         fprintf(out, "\n");
     }
 
+    /* What the alerts above could and could not have seen (#242 item
+     * 3): beside the summary, so an empty table is read against it. */
+    posture_coverage_md(out, s);
+
     /* Cleartext credential exposures */
     if (s->cleartext_cred_count > 0) {
         fprintf(out, "## Cleartext credential exposures\n\n");
@@ -552,7 +556,10 @@ static int render_json(FILE *out, const sloth_state_t *s,
                 d->risk_signals);
         first = 0;
     }
-    fprintf(out, "]\n");
+    /* Appended after every member that existed before it (#242 item 3),
+     * so a consumer reading the earlier keys in order is unaffected. */
+    fprintf(out, "],\n");
+    posture_coverage_json(out, s);
     fprintf(out, "}\n");
     return 1;
 }

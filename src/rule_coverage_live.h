@@ -56,6 +56,40 @@ void cov_live_emit(void);
 
 /* 1 once a status has been derived. */
 int cov_live_valid(void);
+
+/* Why there is no status, for a reader that must say so rather than
+ * print zero counts (the posture report, the Stats view; #242 item 3):
+ *   COV_LIVE_PENDING   no system sample has been taken yet (the first
+ *                      tick has not run, or this is a test)
+ *   COV_LIVE_DECLINED  the side's filler declined: a --replay run
+ *   COV_LIVE_VALID     a status is kept (cov_live_valid() is 1) */
+typedef enum { COV_LIVE_PENDING = 0, COV_LIVE_DECLINED, COV_LIVE_VALID } cov_live_state_t;
+cov_live_state_t cov_live_state(void);
+/* One sentence for a state that is not VALID; "" for VALID. */
+const char *cov_live_state_why(cov_live_state_t st);
+
+/* The kinds that are not observable, grouped by status and reason:
+ * the blind groups first, then the partly ones, each in the precedence
+ * order of cov_rule_status() (the first thing to fix first), and the
+ * kinds of a group in sloth_alerts.def order. Empty groups are left
+ * out. Returns the groups written, 0 when nothing is derived. */
+typedef struct {
+    cov_status_t st;
+    cov_reason_t why;
+    int          n;
+    alert_type_t kind[ALERT_TYPE_COUNT];
+} cov_gap_t;
+int cov_live_gaps(cov_gap_t *out, int max);
+
+/* "EVIL_TWIN" for ALERT_TYPE_EVIL_TWIN: the spelling of sloth_alerts.def
+ * and of the `kind` of a rule_status record. */
+const char *cov_kind_name(alert_type_t t);
+
+/* The two limits of docs/wiki/coverage-assessment.md § 5 that every
+ * reader of a status needs beside it, as the report and the Stats view
+ * print them. tests/test_posture.c holds each to that page verbatim. */
+#define COV_LIMIT_COUNT 2
+extern const char *const cov_limits[COV_LIMIT_COUNT];
 /* The status of `t` in this daemon; 0 (and nothing written) when the
  * kind is another daemon's, out of range, or nothing is derived yet. */
 int cov_live_get(alert_type_t t, cov_status_t *st, cov_reason_t *why);

@@ -8,11 +8,11 @@ type: reference
 
 **Summary**: a quiet site and a blind sensor give the same empty alert list. Each alert kind now declares what it reads (`include/sloth_alert_inputs.def`), and `cov_rule_status()` (`src/rule_coverage.c`) derives from that and from what the sensor has one of three statuses: `observable`, `partly`, `blind`, with one reason word. This page is the reference for the declaration and the derivation. It is receive-only: nothing here transmits or retunes a radio.
 
-**Status**: slices 1 and 2 of #242 and item 2, 2026-11-23. Built: the declaration for all <!-- count:rules -->101<!-- /count --> kinds, the derivation, and the output in the stream: both daemons derive the status each tick and write `rule_status` and `coverage` records and three counts on `sensor_health` (JSONL 2.8.0, § 4); and the per-interval coverage record, sloth-wifi's `coverage_interval` once a minute and a `coverage_intervals` row in sloth.db (JSONL 2.9.0, schema v18, § 6). Item 4, `SENSOR_SUPPRESSED`, sloth-wifi's own-state alert for a sensor losing evidence while its sources read up, and the reason `suppressed` it puts on the rules it costs (§ 7). **Not built yet**: a `--report` section and a view. sloth-mesh does not read the new records yet, and schema v18 needs a sloth-mesh change first: its slothweb accepts sloth.db up to v17 and refuses a v18 file whole, so `WEB_SDB_SCHEMA_MAX` 18 and a contract re-pin there must be installed before this sloth is ([[sqlite-schema]], v18).
+**Status**: slices 1 and 2 of #242 and item 2, 2026-11-23. Built: the declaration for all <!-- count:rules -->101<!-- /count --> kinds, the derivation, and the output in the stream: both daemons derive the status each tick and write `rule_status` and `coverage` records and three counts on `sensor_health` (JSONL 2.8.0, § 4); and the per-interval coverage record, sloth-wifi's `coverage_interval` once a minute and a `coverage_intervals` row in sloth.db (JSONL 2.9.0, schema v18, § 6). Item 4, `SENSOR_SUPPRESSED`, sloth-wifi's own-state alert for a sensor losing evidence while its sources read up, and the reason `suppressed` it puts on the rules it costs (§ 7). Item 3's remaining parts: a "Collection coverage" section in `--report` and `--report-json`, and a "Collection gaps" section in the Stats view (`6`), § 8. **Not built**: sloth-rf has no report path and no view, so neither carries its assessment; its status is on its stream only (§ 4). sloth-mesh does not read the new records yet, and schema v18 needs a sloth-mesh change first: its slothweb accepts sloth.db up to v17 and refuses a v18 file whole, so `WEB_SDB_SCHEMA_MAX` 18 and a contract re-pin there must be installed before this sloth is ([[sqlite-schema]], v18).
 
-**Sources**: `include/sloth_alert_inputs.def`; `src/rule_coverage.h`, `src/rule_coverage.c`; `src/rule_coverage_live.c`, `src/rule_coverage_capture.c`; `src/cov_interval.h`, `src/cov_interval.c`, `src/cov_interval_capture.c`, `src/wifi_chanhop.c` (`chanhop_slot_time_ms`), `src/capture/probe.c` (`mon_frame_class_totals`); `tests/test_rule_coverage.c`, `tests/test_rule_coverage_live.c`, `tests/test_cov_interval.c`; [[jsonl-schema]]; issue #242 (parent #241); US Army FM 2-0 (2004) 4-48, 4-51, 8-34; [[collection-cycle]].
+**Sources**: `include/sloth_alert_inputs.def`; `src/rule_coverage.h`, `src/rule_coverage.c`; `src/rule_coverage_live.c`, `src/rule_coverage_capture.c`; `src/posture_coverage.c`, `src/views/stats.c`; `src/cov_interval.h`, `src/cov_interval.c`, `src/cov_interval_capture.c`, `src/wifi_chanhop.c` (`chanhop_slot_time_ms`), `src/capture/probe.c` (`mon_frame_class_totals`); `tests/test_rule_coverage.c`, `tests/test_rule_coverage_live.c`, `tests/test_cov_interval.c`; [[jsonl-schema]]; issue #242 (parent #241); US Army FM 2-0 (2004) 4-48, 4-51, 8-34; [[collection-cycle]].
 
-**Last updated**: 2026-11-23 (item 4 review: § 7 says the silent-channel default has no measured baseline, and what an operator's clear keeps; the kind counts follow the build), 2026-11-23 (item 4: § 7, `SENSOR_SUPPRESSED` and the reason `suppressed`), 2026-11-23 (item 2 review: the v18 deploy order; overflowed channel time stays in the band totals; the sampler's clock), 2026-11-23 (item 2: § 6, the per-interval coverage record), 2026-11-23
+**Last updated**: 2026-11-23 (item 3: § 8, the report section and the Stats view's collection gaps; § 5 quotes the two limits they print), 2026-11-23 (item 4 review: § 7 says the silent-channel default has no measured baseline, and what an operator's clear keeps; the kind counts follow the build), 2026-11-23 (item 4: § 7, `SENSOR_SUPPRESSED` and the reason `suppressed`), 2026-11-23 (item 2 review: the v18 deploy order; overflowed channel time stays in the band totals; the sampler's clock), 2026-11-23 (item 2: § 6, the per-interval coverage record), 2026-11-23
 
 ---
 
@@ -103,6 +103,12 @@ One hopping radio on the default list with no IP capture, no BLE and nothing des
 
 ## 5. Limits
 
+The report's "Collection coverage" section and the Stats view's "Collection gaps" print the first two of these as two sentences (`cov_limits[]`, `src/rule_coverage_live.c`; `tests/test_posture.c` holds them to this page):
+
+> Observable means: on the channels the radios visit. A transmitter on a channel in no radio's plan is not heard, and the status does not say so.
+>
+> The status is about the sensor, not the site. Observable with no finding is "looked and found nothing", not "nothing is there".
+
 - **`observable` means: on the channels the radios visit.** A transmitter on a channel in no radio's plan is not heard, and the status does not say so. Only the band is checked. The channel list and the time on each are in the coverage record (§ 6).
 - **The status is about the sensor, not the site.** `observable` with no finding is "looked and found nothing". It is not "nothing is there".
 - **The declaration is written by hand** from the rule functions. A test holds its form, its order and the number of kinds on each input; it cannot prove that a row matches its rule. A change to a rule's inputs changes its row in the same commit.
@@ -154,9 +160,31 @@ Tests: `tests/test_sensor_suppressed.c` (a thousand hand-built probe requests th
 
 **Not covered.** The further `--monitor-iface` radios' drops (they take no `pcap_stats()` sample, § 6). An eviction tally that does not exist: a table with no `evict_*` field loses rows unmeasured (`src/sensor_health.h` lists them).
 
+## 8. In the report and the Stats view
+
+#242 item 3. The status is on the stream (§ 4); an operator reading a report or a terminal needs it beside the alerts, since an empty alert list means nothing without it.
+
+**`--report` / `--report-json`**: a "Collection coverage" section after the alert summary, and a `coverage` object, the JSON report's last member ([[posture-report]] has the fields). In order:
+
+- the three counts of this daemon's rules;
+- every kind that is `blind` or `partly`, grouped by status and reason, the blind groups first and each in the precedence of § 3 (the first thing to fix first), each kind with its input;
+- the radio figures the 802.11 statuses were derived from: radios, channels, hopping, bands;
+- the newest closed `coverage_interval` (§ 6), when one has closed: radio time by band and its share, frames by class, the drops of each handle that was measured ("not measured", absent in the JSON, otherwise);
+- each open `SENSOR_SUPPRESSED` incident, its key and detail (§ 7); a resolved one is not listed;
+- the two limits of § 5, verbatim.
+
+**Not assessed.** Before the first status sample, and on a `--replay` run (§ 4), there is no status: the section says `Not assessed:` and why (the JSON `"assessed": false` and `why`), and prints no count. Zero blind rules would read as full coverage. The limits are printed in both cases.
+
+**The Stats view** (`6`, [`stats.md`](../views/stats.md)): a "Collection gaps" section under the interface totals, the place in the TUI where the session's own figures are. One line with the counts and the radio figures; one line for each reason, its kinds grouped by input (`blind no_source (30)  ip: … ble_adv: …`), broken between words at the terminal's width and indented under the reason, so the list flexes with the screen and no kind name is split; open `SENSOR_SUPPRESSED` incidents by key; the two limits. "not assessed: <why>" and no count when there is no status. The Interfaces view's health strip was the other candidate: it is one fault-only line under a paged table, and a list of up to 90 kinds is not a fault token.
+
+Both read what the daemon already holds (`cov_live_gaps()`, `cov_live_state()`, `cov_iv_get()`, the alert snapshot): no new observation, and the same grouping in both. Tests: `tests/test_posture.c` (not assessed before a sample and on a replay; a hopping radio with a closed interval and an open and a resolved incident; the limits held to § 5), `tests/test_stats.c` (the same states drawn, and the wrap at 100 columns); every absence assertion seen red under a mutation.
+
+**sloth-rf** has neither: it takes no `--report` (it ignores `SIGUSR1`, which writes sloth-wifi's live report) and is headless.
+
 ## Related pages
 
 - [[collection-cycle]] — where the assessment sits in the cycle (the minute step)
 - [[alerts]] — the rules
 - [[monitor-mode]] and [[multi-radio-sensing]] — the radios and the hop list
 - [[contract]] — why the declaration is a sibling file
+- [[posture-report]] — the report the section is in

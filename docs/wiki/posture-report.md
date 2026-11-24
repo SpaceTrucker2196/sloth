@@ -70,6 +70,33 @@ announced as written.
   interfaces or a rostered device; it carries no points, so such a
   device appears here only when it has evidence against it. The
   table is in `docs/views/devices.md`, "Risk bucket".
+- **Collection coverage** (#242 item 3), after the alert summary:
+  which of the daemon's rules could fire, so an empty alert table is
+  read against what was looked at. The three counts (`observable`,
+  `partly`, `blind`); every blind or partly kind grouped by status and
+  reason, each with its input; the radios, channels, hopping and bands;
+  the newest closed coverage interval (radio time by band, frames by
+  class, drops); open `SENSOR_SUPPRESSED` incidents; and the two limits
+  of the assessment ("observable" means on the channels the radios
+  visit; the status is about the sensor, not the site). Before the
+  first status sample, and on a `--replay` run, it reads `Not assessed:`
+  with the reason and no count. [[coverage-assessment]] § 8.
+
+### The JSON report's `coverage` member
+
+The last member of the object, after `risky_devices`; every earlier
+key keeps its place.
+
+| Key | Content |
+|-----|---------|
+| `assessed` | `false` when there is no status; then only `why` and `limits` follow |
+| `why` | when not assessed: the reason, one sentence |
+| `rules`, `observable`, `partly`, `blind` | the counts of this daemon's kinds |
+| `gaps` | `[{"status","why","kinds":[{"kind","input"}]}]`, blind groups first, each in the precedence of [[coverage-assessment]] § 3 |
+| `radios`, `channels`, `hopping`, `bands` | as on the `coverage` stream record ([[jsonl-schema]]) |
+| `interval` | the newest closed `coverage_interval`: `seq`, `end`, `dur_ms`, `radio_ms`, `band_ms` (by band), `frames` (by class), and `cap_drop`/`cap_ifdrop`, `mon_drop`/`mon_ifdrop` only for a handle that was measured; `null` before the first |
+| `suppressed` | open `SENSOR_SUPPRESSED` incidents, `[{"key","detail"}]` |
+| `limits` | the two sentences of [[coverage-assessment]] § 5 |
 
 ## Cadence
 
@@ -116,5 +143,6 @@ sign-off document."
 
 - [[alerts]] — where the ATT&CK tag on each alert comes from.
 - [[jsonl-schema]] — the streaming event log the report summarises.
+- [[coverage-assessment]] — the Collection coverage section.
 - [`cleartext_cred` in the JSONL schema](jsonl-schema.md#cleartext_cred) —
   the "no password field, ever" rule.

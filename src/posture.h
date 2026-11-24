@@ -27,6 +27,15 @@ int posture_render_md  (FILE *out, const sloth_state_t *s, time_t session_start,
                         struct rq_handle *research);
 int posture_render_json(FILE *out, const sloth_state_t *s, time_t session_start);
 
+/* The "Collection coverage" section (#242 item 3, src/posture_coverage.c):
+ * which rules could fire, grouped by why not, the radio figures, the
+ * newest coverage interval, open SENSOR_SUPPRESSED incidents and the
+ * assessment's limits; "not assessed" and why when there is no status.
+ * The Markdown one is a `## ` section; the JSON one is the report's
+ * last member, `  "coverage": {...}` and a newline, no comma. */
+void posture_coverage_md  (FILE *out, const sloth_state_t *s);
+void posture_coverage_json(FILE *out, const sloth_state_t *s);
+
 /* ── Reports while the session runs, and one record per session (#190) ──
  *
  * The shutdown write above is the signed-off record and is unchanged.

@@ -12,6 +12,7 @@ static struct {
     cov_daemon_t daemon;
     cov_side_fn  fill;
     int          valid;
+    int          declined;                /* the filler said no (replay) */
     cov_env_t    env;
     uint8_t      st[ALERT_TYPE_COUNT];    /* cov_status_t */
     uint8_t      why[ALERT_TYPE_COUNT];   /* cov_reason_t */
@@ -81,7 +82,8 @@ void cov_live_poll(const sloth_state_t *s) {
     const sys_snapshot_t *sn = sys_status_get();
     if (!s || !sn || !sn->valid) return;
     cov_env_from_sources(sn, &g.env);
-    if (g.fill && !g.fill(s, &g.env)) { g.valid = 0; return; }
+    if (g.fill && !g.fill(s, &g.env)) { g.valid = 0; g.declined = 1; return; }
+    g.declined = 0;
     g.n[0] = g.n[1] = g.n[2] = 0;
     for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
         if (!cov_daemon_raises(g.daemon, (alert_type_t)t)) continue;
@@ -95,6 +97,65 @@ void cov_live_poll(const sloth_state_t *s) {
 }
 
 int cov_live_valid(void) { return g.valid; }
+
+cov_live_state_t cov_live_state(void) {
+    if (g.valid)    return COV_LIVE_VALID;
+    if (g.declined) return COV_LIVE_DECLINED;
+    return COV_LIVE_PENDING;
+}
+
+const char *cov_live_state_why(cov_live_state_t st) {
+    switch (st) {
+    case COV_LIVE_PENDING:
+        return "no status sample has been taken yet";
+    case COV_LIVE_DECLINED:
+        return "a --replay run reads files, and the assessment is of the "
+               "sensor's own radios and sources";
+    case COV_LIVE_VALID:
+        break;
+    }
+    return "";
+}
+
+const char *const cov_limits[COV_LIMIT_COUNT] = {
+    "Observable means: on the channels the radios visit. A transmitter on "
+    "a channel in no radio's plan is not heard, and the status does not say so.",
+    "The status is about the sensor, not the site. Observable with no "
+    "finding is \"looked and found nothing\", not \"nothing is there\".",
+};
+
+const char *cov_kind_name(alert_type_t t) {
+    const char *name = alert_type_name(t);
+    if (strncmp(name, "ALERT_TYPE_", 11) == 0) name += 11;
+    return name;
+}
+
+int cov_live_gaps(cov_gap_t *out, int max) {
+    /* cov_rule_status()'s precedence (rule_coverage.h): blind in enum
+     * order, then partly with `suppressed` after `source_stale`. */
+    static const struct { cov_status_t st; cov_reason_t why; } order[] = {
+        { COV_BLIND,  COV_R_NO_SOURCE },    { COV_BLIND,  COV_R_SOURCE_DOWN },
+        { COV_BLIND,  COV_R_NO_OWN_NET },   { COV_BLIND,  COV_R_NO_ROSTER },
+        { COV_BLIND,  COV_R_NO_DB },        { COV_BLIND,  COV_R_BAND },
+        { COV_PARTLY, COV_R_SOURCE_STALE }, { COV_PARTLY, COV_R_SUPPRESSED },
+        { COV_PARTLY, COV_R_FIXED_CHANNEL },{ COV_PARTLY, COV_R_HOP },
+    };
+    if (!g.valid || !out) return 0;
+    int n = 0;
+    for (size_t o = 0; o < sizeof(order) / sizeof(*order) && n < max; o++) {
+        cov_gap_t *gp = &out[n];
+        gp->st = order[o].st;
+        gp->why = order[o].why;
+        gp->n = 0;
+        for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
+            if (!cov_daemon_raises(g.daemon, (alert_type_t)t)) continue;
+            if (g.st[t] == (uint8_t)gp->st && g.why[t] == (uint8_t)gp->why)
+                gp->kind[gp->n++] = (alert_type_t)t;
+        }
+        if (gp->n) n++;
+    }
+    return n;
+}
 
 int cov_live_get(alert_type_t t, cov_status_t *st, cov_reason_t *why) {
     if (!g.valid || (int)t < 0 || t >= ALERT_TYPE_COUNT) return 0;
@@ -128,8 +189,7 @@ void cov_live_emit(void) {
         const cov_inputs_t *d = cov_inputs((alert_type_t)t);
         /* "ALERT_TYPE_X" without its prefix: the spelling of
          * sloth_alerts.def and of the contract's alert-daemons.tsv. */
-        const char *name = alert_type_name((alert_type_t)t);
-        if (strncmp(name, "ALERT_TYPE_", 11) == 0) name += 11;
+        const char *name = cov_kind_name((alert_type_t)t);
         const jsonl_field_t f[] = {
             { "ty",     JSONL_F_INT, NULL, t, 0.0, 0 },
             { "kind",   JSONL_F_STR, name, 0, 0.0, 0 },

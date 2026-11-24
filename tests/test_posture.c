@@ -16,6 +16,12 @@
 #include "beacon_snoop.h"
 #include "wifi_snapshot.h"
 #include "tune.h"
+#include "fake_platform.h"
+#include "sys_status.h"
+#include "capture_side.h"
+#include "ownership.h"
+#include "rule_coverage_live.h"
+#include "cov_interval.h"
 
 /* Roadmap #16 phase 5 — posture report export.
  *
@@ -597,7 +603,9 @@ static void test_live_json_is_marked_running(void) {
     ASSERT(contains(r, "\"running\":       true,"));
     ASSERT(contains(r, "\"as_of\":         \"2023-11-14T22:13:50Z\","));
     ASSERT(contains(r, "\"duration_s\":    30,"));
-    ASSERT(pl_ends_with(r, "]\n}\n"));
+    /* The whole report: since #242 item 3 its last member is the
+     * coverage object, whose limits array closes it. */
+    ASSERT(pl_ends_with(r, "]}\n}\n"));
     ASSERT_EQ(pl_count(e.dir, NULL, NULL, 0), 1);
     pl_close(&e);
 }
@@ -1116,6 +1124,246 @@ static void test_live_writes_do_not_race_the_capture_thread(void) {
     pl_close(&e);
 }
 
+/* ── Collection coverage (#242 item 3) ─────────────────────────────
+ *
+ * The status comes from the running half (rule_coverage_live.h) driven
+ * as the poll drives it: the capture side's filler, a system sample,
+ * then cov_live_poll(), with the state fields the source rows are
+ * derived from seeded by hand (tests/test_rule_coverage_live.c does the
+ * same). Both clocks are pinned. */
+
+TEST_STATE(g_cov_s);
+static uint64_t g_cov_mono;
+static time_t   g_cov_wall;
+static uint64_t cov_pin_mono(void) { return g_cov_mono; }
+static time_t   cov_pin_wall(void) { return g_cov_wall; }
+static char     g_cov_buf[1 << 16];
+
+static void cov_begin(void) {
+    capture_side_install();
+    g_cov_mono = 5000000;
+    g_cov_wall = (time_t)1800000000;
+    sloth_clock_test_set(cov_pin_mono, cov_pin_wall);
+    fake_net_reset();
+    sys_status_reset();
+    cov_live_reset();
+    cov_iv_reset();
+    ownership_clear();
+    memset(&g_cov_s, 0, sizeof(g_cov_s));
+}
+
+static void cov_end(void) {
+    fake_net_reset();
+    sys_status_reset();
+    cov_live_reset();
+    cov_iv_reset();
+    ownership_clear();
+    capture_side_install();
+    sloth_clock_test_set(NULL, NULL);
+}
+
+static void cov_tick(void) {
+    g_cov_mono += 1000;
+    g_cov_wall += 1;
+    sys_status_poll(&g_cov_s, g_cov_wall, g_cov_mono);
+    cov_live_poll(&g_cov_s);
+}
+
+/* One monitor radio on the default --hop list (src/wifi_chanhop.c),
+ * no IP capture, nothing designated: the § 4 example of
+ * docs/wiki/coverage-assessment.md. */
+static void cov_one_hopping_radio(void) {
+    static const int ch[] = { 1, 6, 11, 36, 40, 44, 48, 149, 153, 157, 161 };
+    snprintf(g_cov_s.probe_iface, sizeof(g_cov_s.probe_iface), "mon0");
+    g_cov_s.mon_health.open = 1;
+    g_cov_s.mon_health.running = 1;
+    g_cov_s.mon_health.stale_secs = 0;
+    g_cov_s.scan_chan_count = (int)(sizeof(ch) / sizeof(*ch));
+    for (int i = 0; i < g_cov_s.scan_chan_count; i++) g_cov_s.scan_chans[i] = ch[i];
+}
+
+static void cov_seed_suppressed(const char *key, int resolved) {
+    alert_t *a = &g_cov_s.alerts[g_cov_s.alert_count++];
+    memset(a, 0, sizeof(*a));
+    a->type = ALERT_TYPE_SENSOR_SUPPRESSED;
+    a->sev  = ALERT_SEV_WARN;
+    a->resolved = resolved;
+    snprintf(a->title,  sizeof(a->title),  "SENSOR_SUPPRESSED");
+    snprintf(a->key,    sizeof(a->key),    "%s", key);
+    snprintf(a->detail, sizeof(a->detail), "the \"monitor\" handle dropped 1%% %s", key);
+}
+
+static const char *cov_md(void) {
+    FILE *fp = fmemopen(g_cov_buf, sizeof(g_cov_buf), "w");
+    if (!fp) { g_cov_buf[0] = '\0'; return g_cov_buf; }
+    posture_render_md(fp, &g_cov_s, 1800000000, NULL);
+    fclose(fp);
+    return g_cov_buf;
+}
+
+static const char *cov_json(void) {
+    FILE *fp = fmemopen(g_cov_buf, sizeof(g_cov_buf), "w");
+    if (!fp) { g_cov_buf[0] = '\0'; return g_cov_buf; }
+    posture_render_json(fp, &g_cov_s, 1800000000);
+    fclose(fp);
+    return g_cov_buf;
+}
+
+static void test_coverage_not_assessed_before_a_sample(void) {
+    cov_begin();
+    const char *md = cov_md();
+    ASSERT(contains(md, "## Collection coverage"));
+    ASSERT(contains(md, "Not assessed: no status sample has been taken yet."));
+    /* No count of any kind: zero blind rules would read as full
+     * coverage. Seen red with posture_coverage_md()'s VALID test made
+     * always true (the table printed 0 / 0 / 0). */
+    ASSERT(!contains(md, "| observable |"));
+    ASSERT(!contains(md, "| blind |"));
+    ASSERT(!contains(md, "Radios:"));
+    /* The limits are printed whatever the state. */
+    for (int i = 0; i < COV_LIMIT_COUNT; i++) ASSERT(contains(md, cov_limits[i]));
+
+    const char *js = cov_json();
+    ASSERT(contains(js, "\"coverage\": {\"assessed\":false,"
+                        "\"why\":\"no status sample has been taken yet\""));
+    /* Same mutation: "observable":0 appeared. */
+    ASSERT(!contains(js, "\"observable\""));
+    ASSERT(!contains(js, "\"gaps\""));
+    ASSERT(contains(js, "\"limits\":["));
+    /* Appended: every earlier member keeps its place, and the object
+     * still closes. */
+    const char *rd = strstr(js, "\"risky_devices\": [");
+    const char *cv = strstr(js, "\"coverage\": {");
+    ASSERT(rd && cv && rd < cv);
+    ASSERT(contains(js, "\"risky_devices\": [],\n  \"coverage\": {"));
+    ASSERT(contains(js, "]}\n}\n"));
+    cov_end();
+}
+
+static void test_coverage_not_assessed_on_replay(void) {
+    cov_begin();
+    snprintf(g_cov_s.probe_iface, sizeof(g_cov_s.probe_iface), "replay");
+    cov_tick();
+    ASSERT_EQ((int)cov_live_state(), (int)COV_LIVE_DECLINED);
+    const char *md = cov_md();
+    ASSERT(contains(md, "Not assessed: a --replay run reads files"));
+    ASSERT(!contains(md, "| observable |"));
+    ASSERT(contains(cov_json(), "\"assessed\":false,\"why\":\"a --replay run"));
+    /* A live sample after it is assessed again, and says so. */
+    g_cov_s.probe_iface[0] = '\0';
+    cov_tick();
+    ASSERT_EQ((int)cov_live_state(), (int)COV_LIVE_VALID);
+    ASSERT(!contains(cov_md(), "Not assessed"));
+    cov_end();
+}
+
+static void test_coverage_section_populated(void) {
+    cov_begin();
+    cov_one_hopping_radio();
+    cov_tick();
+    ASSERT_EQ(cov_live_valid(), 1);
+    int ob = 0, pa = 0, bl = 0;
+    cov_live_counts(&ob, &pa, &bl);
+    ASSERT(ob > 0 && pa > 0 && bl > 0);
+
+    /* One closed minute: 30 s on channel 1, 30 s on 36; monitor drops
+     * measured, capture not. */
+    ASSERT(cov_iv_open(g_cov_wall, g_cov_mono));
+    cov_iv_add(0, 2412, 1, 30000, 10);
+    cov_iv_add(0, 5180, 36, 30000, 5);
+    uint64_t fr[COV_FC_N] = {0};
+    fr[COV_FC_BEACON] = 10;
+    fr[COV_FC_PROBE]  = 5;
+    cov_iv_close(g_cov_wall + 60, g_cov_mono + 60000, fr, 0, 0, 0, 1, 3, 0);
+
+    cov_seed_suppressed("suppressed:drop", 0);
+    cov_seed_suppressed("suppressed:evict", 1);
+
+    char want[128];
+    const char *md = cov_md();
+    ASSERT(contains(md, "## Collection coverage"));
+    ASSERT(!contains(md, "Not assessed"));
+    snprintf(want, sizeof(want), "| observable | %d |\n| partly | %d |\n| blind | %d |",
+             ob, pa, bl);
+    ASSERT(contains(md, want));
+    snprintf(want, sizeof(want), "Which of this sensor's %d rules", ob + pa + bl);
+    ASSERT(contains(md, want));
+
+    /* Grouped by reason, blind before partly, each kind with its input. */
+    const char *g_src  = strstr(md, "**blind, `no_source`**");
+    const char *g_band = strstr(md, "**blind, `band`**");
+    const char *g_hop  = strstr(md, "**partly, `hop`**");
+    ASSERT(g_src && g_band && g_hop && g_src < g_band && g_band < g_hop);
+    ASSERT(contains(md, "- `THREAT_DOMAIN` (ip)"));
+    ASSERT(contains(md, "- `DFS_MASKING` (dot11)"));
+    ASSERT(contains(md, "- `MY_NETWORK_RECON` (dot11)"));
+    const char *hh = strstr(md, "- `HANDSHAKE_HARVEST` (dot11)");
+    ASSERT(hh && hh > g_hop);
+    /* An observable kind is listed nowhere. Seen red with
+     * cov_live_gaps() given an {observable, none} group. */
+    ASSERT(!contains(md, "`EVIL_TWIN`"));
+
+    ASSERT(contains(md, "Radios: 1; channels: 11; hopping: yes; bands: 2.4,5."));
+    ASSERT(contains(md, "**Last minute** (interval 1, 60000 ms to `"));
+    ASSERT(contains(md, "| 2.4 | 30000 | 50 % |"));
+    ASSERT(contains(md, "| 5 | 30000 | 50 % |"));
+    ASSERT(contains(md, "Frames: 15 (beacon 10, probe 5)."));
+    ASSERT(contains(md, "Drops: capture not measured; monitor 3, interface 0."));
+
+    /* The open incident and not the resolved one. Seen red with the
+     * resolved test removed from suppressed_open(). */
+    ASSERT(contains(md, "**SENSOR_SUPPRESSED open**"));
+    ASSERT(contains(md, "- `suppressed:drop`:"));
+    ASSERT(!contains(md, "suppressed:evict"));
+    for (int i = 0; i < COV_LIMIT_COUNT; i++) ASSERT(contains(md, cov_limits[i]));
+
+    const char *js = cov_json();
+    snprintf(want, sizeof(want), "\"assessed\":true,\"rules\":%d,\"observable\":%d,"
+             "\"partly\":%d,\"blind\":%d,\"gaps\":[", ob + pa + bl, ob, pa, bl);
+    ASSERT(contains(js, want));
+    ASSERT(contains(js, "{\"status\":\"blind\",\"why\":\"no_source\",\"kinds\":["));
+    ASSERT(contains(js, "{\"kind\":\"HANDSHAKE_HARVEST\",\"input\":\"dot11\"}"));
+    ASSERT(!contains(js, "\"EVIL_TWIN\""));
+    ASSERT(contains(js, "\"radios\":1,\"channels\":11,\"hopping\":1,\"bands\":\"2.4,5\""));
+    ASSERT(contains(js, "\"band_ms\":{\"2.4\":30000,\"5\":30000,\"5dfs\":0,\"6\":0,\"unknown\":0}"));
+    ASSERT(contains(js, "\"beacon\":10,\"probe\":5,"));
+    ASSERT(contains(js, ",\"mon_drop\":3,\"mon_ifdrop\":0}"));
+    /* An unmeasured handle is absent, never 0. Seen red with the
+     * has_cap test removed from json_interval(). */
+    ASSERT(!contains(js, "cap_drop"));
+    /* The detail is escaped: its quotes would end the string. */
+    ASSERT(contains(js, "\"suppressed\":[{\"key\":\"suppressed:drop\","
+                        "\"detail\":\"the \\\"monitor\\\" handle dropped 1% suppressed:drop\"}]"));
+    ASSERT(!contains(js, "suppressed:evict"));
+    cov_end();
+}
+
+static void test_coverage_no_interval_no_incident(void) {
+    /* Assessed, before the first minute has closed and with nothing
+     * suppressed: each is said, not left blank. */
+    cov_begin();
+    cov_one_hopping_radio();
+    cov_tick();
+    const char *md = cov_md();
+    ASSERT(contains(md, "**Last minute**: no coverage interval has closed yet"));
+    ASSERT(contains(md, "SENSOR_SUPPRESSED: none open."));
+    ASSERT(contains(cov_json(), "\"interval\":null,\"suppressed\":[]"));
+    cov_end();
+}
+
+/* The limits the report and the Stats view print are the coverage
+ * page's own words (§ 5), so the two cannot drift apart. */
+static void test_coverage_limits_are_the_wiki_page(void) {
+    FILE *f = fopen("docs/wiki/coverage-assessment.md", "r");
+    ASSERT(f != NULL);
+    if (!f) return;
+    static char page[1 << 16];
+    size_t n = fread(page, 1, sizeof(page) - 1, f);
+    page[n] = '\0';
+    fclose(f);
+    for (int i = 0; i < COV_LIMIT_COUNT; i++) ASSERT(contains(page, cov_limits[i]));
+}
+
 void run_posture_tests(void) {
     TEST_SUITE("posture: live snapshot, retention, capture race (#190)");
     RUN_TEST(test_live_snapshot_beside_the_snapshot);
@@ -1146,6 +1394,13 @@ void run_posture_tests(void) {
 
     TEST_SUITE("posture report — JSON");
     RUN_TEST(test_json_shape);
+
+    TEST_SUITE("posture report — collection coverage (#242 item 3)");
+    RUN_TEST(test_coverage_not_assessed_before_a_sample);
+    RUN_TEST(test_coverage_not_assessed_on_replay);
+    RUN_TEST(test_coverage_section_populated);
+    RUN_TEST(test_coverage_no_interval_no_incident);
+    RUN_TEST(test_coverage_limits_are_the_wiki_page);
     TEST_SUITE("posture: research References block (#73)");
     RUN_TEST(test_no_corpus_means_no_references_block);
     RUN_TEST(test_references_block_cites_the_alert);

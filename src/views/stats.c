@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -9,6 +10,7 @@
 #include "services.h"
 #include "views/stats.h"
 #include "geo.h"
+#include "rule_coverage_live.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -164,6 +166,133 @@ static void draw_top_bw(const sloth_state_t *s) {
     }
 }
 
+/* ── Collection gaps (#242 item 3) ───────────────────────────
+ *
+ * The rules that cannot fire, or can and miss part of their evidence,
+ * grouped by reason: the same grouping and order as the posture
+ * report's "Collection coverage" (cov_live_gaps(), the first thing to
+ * fix first). Within a reason the kinds are grouped by the input they
+ * read, so a line says what is missing as well as what it costs. Each
+ * group is one logical line broken between words at the terminal's
+ * width (gap_put()), so the list flexes with the screen, nothing is
+ * cut and no kind name is split. Without a status it says "not
+ * assessed" and why, never zero counts: zero blind rules would read as
+ * full coverage. */
+
+#define GAP_LINE 4096
+
+static void gap_addf(char *buf, int *off, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+static void gap_addf(char *buf, int *off, const char *fmt, ...) {
+    if (*off >= GAP_LINE - 1) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *off, (size_t)(GAP_LINE - *off), fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    *off += n;
+    if (*off > GAP_LINE - 1) *off = GAP_LINE - 1;
+}
+
+/* Draw `line` from column 0, broken before a word that would reach the
+ * last column, each later row after `indent` spaces; the spaces at a
+ * break are dropped, and a word ending in ':' is kept with the word
+ * after it. Every string here is ASCII (kind, input and
+ * reason names, fixed prose), so an octet is a cell. The ANSI build has
+ * no width: one row. A word longer than a row is drawn whole and the
+ * terminal folds it. */
+static void gap_put(const char *line, int indent) {
+#ifdef WITH_NCURSES
+    int width = getmaxx(stdscr) - 1;
+#else
+    int width = 1 << 30;
+#endif
+    int x = 0;
+    const char *p = line;
+    while (*p) {
+        const char *w = p;
+        while (*w == ' ') w++;
+        if (!*w) break;
+        const char *e = w;
+        while (*e && *e != ' ') e++;
+        /* An input's label stays with its first kind ("ip: X"). */
+        if (e > w && e[-1] == ':' && e[0] == ' ' && e[1] && e[1] != ' ')
+            for (e++; *e && *e != ' '; e++) {}
+        int sp = (int)(w - p), wl = (int)(e - w);
+        if (x > indent && x + sp + wl > width) {
+            TPRINT("\n%*s", indent, "");
+            x = indent;
+            sp = 0;
+        }
+        TPRINT("%*s%.*s", sp, "", wl, w);
+        x += sp + wl;
+        p = e;
+    }
+    TPRINT("\n");
+}
+
+static void draw_gaps(const sloth_state_t *s) {
+    tui_dim(); TPRINT(" \xe2\x94\x80\xe2\x94\x80 Collection gaps \xe2\x94\x80\xe2\x94\x80\n");
+    cov_live_state_t st = cov_live_state();
+    if (st != COV_LIVE_VALID) {
+        tui_dim();    TPRINT("  not assessed: ");
+        tui_normal(); TPRINT("%s\n", cov_live_state_why(st));
+        tui_normal();
+        return;
+    }
+    int ob = 0, pa = 0, bl = 0;
+    cov_live_counts(&ob, &pa, &bl);
+    const cov_env_t *e = cov_live_env();
+    char bands[24];
+    cov_bands_str(e->bands, bands, sizeof(bands));
+    tui_dim();    TPRINT("  %d rules: ", ob + pa + bl);
+    tui_bright(); TPRINT("%d", ob);
+    tui_dim();    TPRINT(" observable  ");
+    tui_bright(); TPRINT("%d", pa);
+    tui_dim();    TPRINT(" partly  ");
+    tui_bright(); TPRINT("%d", bl);
+    tui_dim();    TPRINT(" blind    radios %d  channels %d  %s  bands %s\n",
+                         e->radios, e->channels, e->hopping ? "hopping" : "fixed",
+                         bands[0] ? bands : "unknown");
+
+    cov_gap_t gaps[COV_R_COUNT];
+    int ng = cov_live_gaps(gaps, COV_R_COUNT);
+    if (ng == 0) { tui_dim(); TPRINT("  none: every rule is observable\n"); }
+    for (int i = 0; i < ng; i++) {
+        char line[GAP_LINE];
+        int off = 0;
+        line[0] = '\0';
+        gap_addf(line, &off, "  %s %s (%d)", cov_status_name(gaps[i].st),
+                 cov_reason_name(gaps[i].why), gaps[i].n);
+        for (int in = 0; in < COV_IN_COUNT; in++) {
+            int first = 1;
+            for (int k = 0; k < gaps[i].n; k++) {
+                const cov_inputs_t *d = cov_inputs(gaps[i].kind[k]);
+                if (!d || (int)d->input != in) continue;
+                if (first) gap_addf(line, &off, "  %s:",
+                                    cov_input_name((cov_input_t)in));
+                gap_addf(line, &off, " %s", cov_kind_name(gaps[i].kind[k]));
+                first = 0;
+            }
+        }
+        if (gaps[i].st == COV_BLIND) tui_bright(); else tui_normal();
+        gap_put(line, 6);
+    }
+
+    for (int i = 0; i < s->alert_count; i++) {
+        const alert_t *a = &s->alerts[i];
+        if (a->type != ALERT_TYPE_SENSOR_SUPPRESSED || a->resolved) continue;
+        tui_bright(); TPRINT("  SENSOR_SUPPRESSED open: %s\n", a->key);
+    }
+    tui_dim();
+    for (int i = 0; i < COV_LIMIT_COUNT; i++) {
+        char line[GAP_LINE];
+        snprintf(line, sizeof(line), "  %s", cov_limits[i]);
+        gap_put(line, 4);
+    }
+    tui_normal();
+}
+
 /* ── Draw ────────────────────────────────────────────────── */
 
 void view_stats_draw(const sloth_state_t *s) {
@@ -219,6 +348,11 @@ void view_stats_draw(const sloth_state_t *s) {
     if (s->iface_count == 0) {
         tui_dim(); TPRINT("  (no interfaces)\n");
     }
+
+    /* ── Collection gaps ── under the interfaces, above the traffic
+     * tables: it describes the sensor, as the rows above do, and a
+     * section at the foot of this view is below a 33-row screen. */
+    draw_gaps(s);
 
     /* ── Connection protocol split ── */
     int tcp_n = 0, udp_n = 0, other_n = 0;
