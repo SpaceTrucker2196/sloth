@@ -3630,10 +3630,28 @@ int db_probe_version(const char *path, int *version, char *err, size_t errsz) {
     } else if (has == 0) {
         if (err && errsz) snprintf(err, errsz, "no meta table: not a sloth database");
     } else {
-        long long ver = scalar_on(h, "SELECT CAST(value AS INTEGER) FROM meta"
-                                  " WHERE key='schema_version'");
-        if (version) *version = ver > 0 && ver < 1000000 ? (int)ver : -1;
-        rc = 0;
+        /* Read as check_version() reads it (the text, atoi), so a row
+         * that check_version() refuses is told apart from no row: -1 no
+         * row (stamped at start), 0 a row with no positive version in it
+         * (refused at start), else the version. */
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(h, "SELECT value FROM meta WHERE key='schema_version'",
+                               -1, &st, NULL) != SQLITE_OK) {
+            if (err && errsz) snprintf(err, errsz, "%s", sqlite3_errmsg(h));
+        } else {
+            int s = sqlite3_step(st);
+            if (s == SQLITE_ROW) {
+                const unsigned char *v = sqlite3_column_text(st, 0);
+                int have = v ? atoi((const char *)v) : -1;
+                if (version) *version = have > 0 ? have : 0;
+                rc = 0;
+            } else if (s == SQLITE_DONE) {
+                rc = 0;
+            } else if (err && errsz) {
+                snprintf(err, errsz, "%s", sqlite3_errmsg(h));
+            }
+            sqlite3_finalize(st);
+        }
     }
     sqlite3_close(h);
     return rc;

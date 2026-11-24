@@ -407,8 +407,9 @@ int db_compact_alerts(const char *src, const char *dst,
  * source, `immutable=1` and read-only, so SQLite takes no lock and
  * creates no -wal or -shm beside it (a plain READONLY open of a
  * WAL-mode file creates both), and nothing is migrated. 0 with
- * *version the meta row's schema_version (-1 when the table has no
- * row); -1 with the reason in err when it does not open or is not a
+ * *version the meta row's schema_version, read as db_open()'s version
+ * check reads it (-1 when the table has no row, 0 when the row holds
+ * no positive number, which db_open() refuses); -1 with the reason in err when it does not open or is not a
  * sloth database. The caller stats the path first and does not call
  * this for a missing file. Under immutable=1 a -wal that still holds
  * frames is not read: the version is the main file's. */

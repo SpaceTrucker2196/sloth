@@ -3,7 +3,7 @@
 
 #include "sloth.h"
 
-#define FAKE_SYS_FILES 96
+#define FAKE_SYS_FILES 192   /* test_preflight.c lists more than PF_MAX_NETDEV (128) netdevs */
 
 /* The fake network state. Tests and scenarios read/write this directly. */
 typedef struct {

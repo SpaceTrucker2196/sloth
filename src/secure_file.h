@@ -81,6 +81,17 @@ FILE *sfile_fopen_unique(int dirfd, const char *stem, const char *ext,
  * 0); present must pass the file checks. -1 with `err` otherwise. */
 int   sfile_check_existing(const char *path, char *err, size_t errsz);
 
+/* The rule above, over a stat the caller made, changing nothing: the
+ * type (directory or regular file), the owner (the effective uid, when
+ * `check_owner`), no group/other bit, and for a file one link. 0, or -1
+ * with `err` filled. sloth --preflight (src/preflight_gather.c) calls it
+ * with `check_owner` 0 and compares the owner itself, because the run
+ * writes as the account it drops to, not the one running the preflight.
+ * A final symlink is the caller's to refuse (lstat). */
+struct stat;
+int   sfile_validate_stat(const struct stat *st, int want_dir, int check_owner,
+                          const char *path, char *err, size_t errsz);
+
 /* fclose that reports: any buffered-write error, flush failure or
  * close failure returns -1 with `err` naming `what`. The FILE is
  * closed either way. */

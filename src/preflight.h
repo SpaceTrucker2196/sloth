@@ -59,8 +59,12 @@ typedef enum {
 
 const char *pf_level_name(pf_level_t l);   /* "ok", "warn", "fail", "n/a", "not checked" */
 
-#define PF_MAX_NAMED   16     /* interfaces named on the command line */
-#define PF_MAX_NETDEV  48     /* netdevs listed under /sys/class/net */
+#define PF_MAX_IFACE   32     /* --iface names: main.c's MAX_IFACES, held by an #error */
+#define PF_MAX_NAMED   16     /* --monitor-iface, --df-iface names (the CLI takes fewer) */
+#define PF_MAX_NETDEV  128    /* netdevs listed under /sys/class/net; more is reported */
+/* The netdev table: the listing, plus each named interface the listing
+ * left out, looked up by its own path. */
+#define PF_NETDEV_CAP  (PF_MAX_NETDEV + PF_MAX_IFACE + 2 * PF_MAX_NAMED)
 #define PF_MAX_PATHS   8
 #define PF_MAX_REPLAY  8
 #define PF_MAX_HOP     32
@@ -70,7 +74,7 @@ typedef enum { PF_ROLE_IP = 0, PF_ROLE_MONITOR, PF_ROLE_DF } pf_role_t;
 
 typedef struct {
     /* Interfaces, in the roles the command line gave them. */
-    const char *iface[PF_MAX_NAMED];     /* --iface */
+    const char *iface[PF_MAX_IFACE];     /* --iface */
     int         n_iface;
     const char *mon[PF_MAX_NAMED];       /* --monitor-iface, in order */
     int         n_mon;
@@ -108,6 +112,7 @@ typedef struct {
     int  type;          /* ARPHRD_*; -1 not readable */
     char phy[16];       /* "phy3", "" not wireless */
     int  phy_index;     /* -1 not known */
+    int  up;            /* IFF_UP in .../flags: 1, 0, -1 not readable */
 } pf_netdev_t;
 
 /* One output path. `dir` is what is checked: the directory itself for
@@ -123,18 +128,29 @@ typedef struct {
     int         creates;     /* the path itself does not exist yet */
     int         has_fs;
     uint64_t    free_bytes, total_bytes;
+    /* An existing path, held to secure_file.c's rule the run applies
+     * (sfile_validate_stat()): `refused` when its type, mode, link
+     * count or a final symlink makes the run refuse it whatever account
+     * it runs as, with the reason; `foreign` (owner `owner_uid`) when it
+     * is owned by an account other than the one running the preflight
+     * (the run refuses it unless it writes as that account). */
+    int         refused;
+    char        why[200];
+    int         foreign;
+    long        owner_uid;
 } pf_path_t;
 
 typedef struct {
     /* /sys/class/net, through sys_status's readers. */
     int          netdev_listed;   /* the list could be read */
+    int          netdev_truncated;/* more than PF_MAX_NETDEV entries: the rest unlisted */
     int          n_netdev;
-    pf_netdev_t  netdev[PF_MAX_NETDEV];
+    pf_netdev_t  netdev[PF_NETDEV_CAP];
     /* nl80211, read-only. phy_iftypes[i] is the NL80211_IFTYPE_* mask
      * of netdev[i]'s phy; phy_iftypes_known[i] is 1 when it was read,
      * 0 when it was not (no nl80211, no WITH_WIFI, not wireless). */
-    unsigned     phy_iftypes[PF_MAX_NETDEV];
-    int          phy_iftypes_known[PF_MAX_NETDEV];
+    unsigned     phy_iftypes[PF_NETDEV_CAP];
+    int          phy_iftypes_known[PF_NETDEV_CAP];
     int          reg_rc;          /* 1 read, 0 none set, <0 not readable */
     char         alpha2[3];
     /* Clock. */
@@ -151,11 +167,13 @@ typedef struct {
     long long    db_bytes;
     int          db_rc;           /* 0 read, -1 not a database this reads,
                                    * -2 not readable by this account */
-    int          db_version;      /* meta schema_version, -1 none */
+    int          db_version;      /* meta schema_version, -1 no row, 0 a row
+                                   * that holds no version (refused at start) */
     long long    db_wal_bytes;    /* -wal beside it, -1 none */
     char         db_err[160];
     int          db_current;      /* DB_SCHEMA_VERSION */
     int          db_migrates_from;
+    int          pcap_eapol_same; /* --pcap-dir and --eapol-dir one directory */
     /* Sources. */
     int          bt_controllers;  /* entries under /sys/class/bluetooth, -1 unreadable */
     /* Stat results: -3 is "not visible to the account running the
@@ -176,7 +194,7 @@ typedef struct {
     const char *check;        /* "radios", "clock", "storage", ... */
     char        item[40];     /* "wlan1", "regdom", "db" */
     pf_level_t  level;
-    char        reason[240];
+    char        reason[400];
 } pf_line_t;
 
 #define PF_MAX_LINES 64

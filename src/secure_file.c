@@ -25,14 +25,14 @@ static void seterr(char *err, size_t errsz, const char *fmt, ...) {
 /* The shared ownership + mode rule. `want_dir` selects the type check;
  * files additionally need st_nlink == 1 so a hard link planted to some
  * other file of ours cannot be written through. */
-static int validate(const struct stat *st, int want_dir, const char *path,
-                    char *err, size_t errsz) {
+int sfile_validate_stat(const struct stat *st, int want_dir, int check_owner,
+                        const char *path, char *err, size_t errsz) {
     if (want_dir ? !S_ISDIR(st->st_mode) : !S_ISREG(st->st_mode)) {
         seterr(err, errsz, "%s: not a %s — refusing", path,
                want_dir ? "directory" : "regular file");
         return -1;
     }
-    if (st->st_uid != geteuid()) {
+    if (check_owner && st->st_uid != geteuid()) {
         seterr(err, errsz, "%s: owned by another user — refusing", path);
         return -1;
     }
@@ -48,6 +48,11 @@ static int validate(const struct stat *st, int want_dir, const char *path,
         return -1;
     }
     return 0;
+}
+
+static int validate(const struct stat *st, int want_dir, const char *path,
+                    char *err, size_t errsz) {
+    return sfile_validate_stat(st, want_dir, 1, path, err, errsz);
 }
 
 /* Open `path` as a directory without following a final symlink and

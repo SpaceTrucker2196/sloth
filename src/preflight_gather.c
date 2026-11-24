@@ -18,6 +18,7 @@
 #include "fs_capacity.h"
 #include "gps.h"
 #include "intel_pack.h"
+#include "secure_file.h"
 #include "sloth_clock.h"
 #include "sys_status.h"
 #ifdef PLATFORM_LINUX
@@ -30,8 +31,9 @@
  *   /sys/class/net, /sys/class/bluetooth, thermal and hwmon
  *       sys_status's guarded readers: regular files under /sys only,
  *       through g_platform (the fake platform in tests)
- *   each output path    stat(2), access(2), and statvfs on its directory
- *                       opened O_RDONLY | O_DIRECTORY
+ *   each output path    stat(2) and lstat(2) (an existing one held to
+ *                       secure_file's rule), access(2), and statvfs on
+ *                       its directory opened O_RDONLY | O_DIRECTORY
  *   the database        db_probe_version(): immutable=1, read-only
  *   nl80211             GET_REG and GET_WIPHY, one reply each
  *   the clock           adjtimex(2) with modes 0, which reads
@@ -168,26 +170,68 @@ static int read_int(const char *path, long long lo, long long hi, long long *v) 
     return n < 0 ? -1 : sys_parse_int(b, n, lo, hi, v);
 }
 
-static void gather_netdevs(const pf_ops_t *ops, pf_facts_t *f) {
-    static char names[PF_MAX_NETDEV][SYS_NAME_MAX];
-    int n = sys_status_list("/sys/class/net", names, PF_MAX_NETDEV);
+/* One netdev's type, phy and up flag, read by its own path; 0 when
+ * /sys/class/net/NAME/type could be read, -1 when it is not there. */
+static int read_netdev(const char *name, pf_netdev_t *d) {
+    memset(d, 0, sizeof(*d));
+    snprintf(d->name, sizeof(d->name), "%.15s", name);
+    char path[96], b[64];
+    long long v;
+    snprintf(path, sizeof(path), "/sys/class/net/%s/type", d->name);
+    int found = read_int(path, 0, 65535, &v) == 0;
+    d->type = found ? (int)v : -1;
+    snprintf(path, sizeof(path), "/sys/class/net/%s/phy80211/name", d->name);
+    int k = sys_status_read(path, b, (int)sizeof(b));
+    if (k > 0) sys_clean_str(b, k, d->phy, (int)sizeof(d->phy));
+    snprintf(path, sizeof(path), "/sys/class/net/%s/phy80211/index", d->name);
+    d->phy_index = d->phy[0] && read_int(path, 0, 1000000, &v) == 0 ? (int)v : -1;
+    /* .../flags is the interface's flags in hex (IFF_UP is 0x1): up is
+     * administratively up, the state in which it can transmit. */
+    d->up = -1;
+    snprintf(path, sizeof(path), "/sys/class/net/%s/flags", d->name);
+    k = sys_status_read(path, b, (int)sizeof(b) - 1);
+    if (k > 0) {
+        b[k] = '\0';
+        char *end = NULL;
+        unsigned long fl = strtoul(b, &end, 16);
+        if (end != b && (*end == '\0' || *end == '\n')) d->up = (int)(fl & 1ul);
+    }
+    return found ? 0 : -1;
+}
+
+static int listed(const pf_facts_t *f, const char *name) {
+    for (int i = 0; i < f->n_netdev; i++)
+        if (!strcmp(f->netdev[i].name, name)) return 1;
+    return 0;
+}
+
+/* A named interface the listing does not hold (it was cut at
+ * PF_MAX_NETDEV, or listed in a different order) is looked up by its
+ * own path, so "not on this host" never comes from the cut. */
+static void add_named(pf_facts_t *f, const char *name) {
+    if (!name || !name[0] || strlen(name) >= 16 || name[0] == '.' ||
+        strchr(name, '/') || listed(f, name) || f->n_netdev >= PF_NETDEV_CAP)
+        return;
+    pf_netdev_t d;
+    if (read_netdev(name, &d) == 0) f->netdev[f->n_netdev++] = d;
+}
+
+static void gather_netdevs(const pf_config_t *c, const pf_ops_t *ops, pf_facts_t *f) {
+    /* One more than kept, so a listing that was cut is known to be. */
+    static char names[PF_MAX_NETDEV + 1][SYS_NAME_MAX];
+    int n = sys_status_list("/sys/class/net", names, PF_MAX_NETDEV + 1);
     f->netdev_listed = n >= 0;
+    f->netdev_truncated = n > PF_MAX_NETDEV;
+    if (n > PF_MAX_NETDEV) n = PF_MAX_NETDEV;
     f->n_netdev = 0;
-    for (int i = 0; i < n && f->n_netdev < PF_MAX_NETDEV; i++) {
+    for (int i = 0; i < n; i++) {
         if (strlen(names[i]) >= 16) continue;   /* not a kernel name */
-        pf_netdev_t *d = &f->netdev[f->n_netdev];
-        memset(d, 0, sizeof(*d));
-        snprintf(d->name, sizeof(d->name), "%.15s", names[i]);
-        char path[96], b[64];
-        long long v;
-        snprintf(path, sizeof(path), "/sys/class/net/%s/type", d->name);
-        d->type = read_int(path, 0, 65535, &v) == 0 ? (int)v : -1;
-        snprintf(path, sizeof(path), "/sys/class/net/%s/phy80211/name", d->name);
-        int k = sys_status_read(path, b, (int)sizeof(b));
-        if (k > 0) sys_clean_str(b, k, d->phy, (int)sizeof(d->phy));
-        snprintf(path, sizeof(path), "/sys/class/net/%s/phy80211/index", d->name);
-        d->phy_index = d->phy[0] && read_int(path, 0, 1000000, &v) == 0 ? (int)v : -1;
-        f->n_netdev++;
+        read_netdev(names[i], &f->netdev[f->n_netdev++]);
+    }
+    if (f->netdev_listed) {
+        for (int i = 0; i < c->n_iface; i++) add_named(f, c->iface[i]);
+        for (int i = 0; i < c->n_mon; i++)   add_named(f, c->mon[i]);
+        for (int i = 0; i < c->n_df; i++)    add_named(f, c->df[i]);
     }
     /* One GET_WIPHY per phy, shared by the netdevs on it. */
     for (int i = 0; i < f->n_netdev; i++) {
@@ -225,6 +269,22 @@ static void add_path(pf_facts_t *f, const char *what, const char *path, int is_d
     struct stat sb;
     int exists = stat(path, &sb) == 0;
     p->creates = !exists;
+    /* An existing path is held to the rule the run applies to it
+     * (src/secure_file.h): lstat, so a final symlink is seen and not
+     * followed; nothing is opened. */
+    struct stat ls;
+    if (lstat(path, &ls) == 0) {
+        p->creates = 0;
+        if (S_ISLNK(ls.st_mode)) {
+            p->refused = 1;
+            snprintf(p->why, sizeof(p->why), "is a symbolic link, which the run refuses");
+        } else if (sfile_validate_stat(&ls, is_dir, 0, path, p->why, sizeof(p->why)) != 0) {
+            p->refused = 1;
+        } else if (ls.st_uid != geteuid()) {
+            p->foreign = 1;
+            p->owner_uid = (long)ls.st_uid;
+        }
+    }
     if (is_dir && exists && S_ISDIR(sb.st_mode)) snprintf(p->dir, sizeof(p->dir), "%s", path);
     else dir_of(path, p->dir, sizeof(p->dir));
     if (stat(p->dir, &sb) != 0) {
@@ -243,6 +303,19 @@ static void add_path(pf_facts_t *f, const char *what, const char *path, int is_d
         p->total_bytes = c.total_bytes;
     }
     close(fd);
+}
+
+/* main.c refuses --pcap-dir and --eapol-dir naming one directory (the
+ * handshake sweep would expire alert pcaps), comparing the pinned
+ * descriptors' dev/ino; here the two paths' stat, or, when neither
+ * exists yet, the spelling. */
+static int same_dir(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    struct stat sa, sb;
+    int ha = stat(a, &sa) == 0, hb = stat(b, &sb) == 0;
+    if (ha && hb) return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+    if (ha || hb) return 0;
+    return strcmp(a, b) == 0;
 }
 
 /* 0 FIFO, 1 regular, -1 missing, -2 another type, -3 not visible to
@@ -335,7 +408,7 @@ void preflight_gather(const pf_config_t *c, const pf_ops_t *ops, pf_facts_t *f) 
     f->now = sloth_wall();
     if (ops->clock_sync && ops->clock_sync(&f->synced) == 0) f->sync_known = 1;
 
-    gather_netdevs(ops, f);
+    gather_netdevs(c, ops, f);
     f->reg_rc = ops->reg ? ops->reg(f->alpha2) : -EOPNOTSUPP;
 
     f->intel_version = intel_pack_version();
@@ -349,6 +422,7 @@ void preflight_gather(const pf_config_t *c, const pf_ops_t *ops, pf_facts_t *f) 
     add_path(f, "report", c->report_md, 0);
     add_path(f, "report-json", c->report_json, 0);
     add_path(f, "snapshot", c->snapshot_out, 0);
+    f->pcap_eapol_same = same_dir(c->pcap_dir, c->eapol_dir);
     gather_db(c, f);
 
     gather_gps(c, ops, f);

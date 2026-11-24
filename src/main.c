@@ -1409,8 +1409,10 @@ int main(int argc, char **argv) {
      * it adds no output of its own beyond three sensor_health bands,
      * so a run that cannot use it loses nothing by going on, and it is
      * also ignored under --replay, which takes neither source flag. By
-     * here --replay and WITH_PCAP=0 have refused both source flags. */
-    if (ble_rotation_hints) {
+     * here --replay and WITH_PCAP=0 have refused both source flags.
+     * Not under --preflight: it starts nothing, so no key is drawn and
+     * no "on" is announced. */
+    if (ble_rotation_hints && !preflight) {
         if (!bt_monitor && !bt_capture)
             fprintf(stderr, "sloth: --ble-rotation-hints ignored: it needs "
                             "--bt-monitor or --bt-capture PATH\n");
@@ -1459,7 +1461,9 @@ int main(int argc, char **argv) {
     }
     if (prof.active_allowed)   observe_set_active_allowed(1);
     if (prof.resolver_enabled) dns_resolver_set_enabled(1);
-    if (prof.active_allowed) {
+    /* --preflight starts nothing, so it announces no opt-in as enabled;
+     * its passive line names the sending opt-ins instead. */
+    if (prof.active_allowed && !preflight) {
         /* Never silent. A passive tool that quietly becomes active is
          * the failure mode #84 exists to prevent, so the opt-in names
          * exactly what it turned on — one line, on stderr, before any
@@ -1498,7 +1502,7 @@ int main(int argc, char **argv) {
     if (preflight) {
         static pf_config_t pf;
         memset(&pf, 0, sizeof(pf));
-        for (int i = 0; i < allow_iface_count && i < PF_MAX_NAMED; i++)
+        for (int i = 0; i < allow_iface_count && i < PF_MAX_IFACE; i++)
             pf.iface[pf.n_iface++] = allow_ifaces[i];
         for (int i = 0; i < mon_cli.n && i < PF_MAX_NAMED; i++)
             pf.mon[pf.n_mon++] = mon_cli.name[i];

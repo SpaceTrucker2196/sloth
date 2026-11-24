@@ -19,6 +19,7 @@
 #include "rule_coverage.h"
 #include "db.h"
 #include "intel_pack.h"
+#include <sqlite3.h>
 #ifdef PLATFORM_LINUX
 #include <linux/netlink.h>
 #include <linux/genetlink.h>
@@ -61,9 +62,11 @@ static void base(void) {
     g_f.netdev[0].type = 803;
     snprintf(g_f.netdev[0].phy, 16, "phy0");
     g_f.netdev[0].phy_index = 0;
+    g_f.netdev[0].up = 1;
     snprintf(g_f.netdev[1].name, 16, "eth0");
     g_f.netdev[1].type = 1;
     g_f.netdev[1].phy_index = -1;
+    g_f.netdev[1].up = 1;
     g_f.reg_rc = 1;
     snprintf(g_f.alpha2, 3, "US");
     g_f.now = T_NOW;
@@ -455,14 +458,17 @@ static void test_host(void) {
     g_f.netdev[1].phy_index = 0;
     run();
     ASSERT_EQ(level("host", "passive"), PF_WARN);
-    ASSERT(says("host", "passive", "wlan0 (phy0, beside mon0)"));
+    ASSERT(says("host", "passive", "wlan0 (phy0, beside mon0, up)"));
 
-    /* A named radio not in monitor mode: sloth would have to change it. */
+    /* A named radio not in monitor mode is not opened (sloth sets no
+     * mode): check 1 fails it, and the passive line has no radio to
+     * judge. */
     base();
     g_c.mon[g_c.n_mon++] = "eth0";
     run();
-    ASSERT_EQ(level("host", "passive"), PF_FAIL);
-    ASSERT(says("host", "passive", "never does"));
+    ASSERT_EQ(level("radios", "eth0"), PF_FAIL);
+    ASSERT_EQ(level("host", "passive"), PF_OK);
+    ASSERT(says("host", "passive", "no 802.11 interface would be opened"));
 
     /* Opt-ins that send are named, not failed. */
     base();
@@ -904,6 +910,310 @@ static void test_nl80211_parsers(void) {
 }
 #endif
 
+
+/* ── Review fixes (dcb741a1) ─────────────────────────────────────── */
+
+/* A managed wlan0 on phy1, which supports monitor mode. */
+static void add_managed_wlan0(const char *phy, int up) {
+    int i = g_f.n_netdev++;
+    memset(&g_f.netdev[i], 0, sizeof(g_f.netdev[i]));
+    snprintf(g_f.netdev[i].name, 16, "wlan0");
+    g_f.netdev[i].type = 1;
+    snprintf(g_f.netdev[i].phy, 16, "%s", phy);
+    g_f.netdev[i].phy_index = phy[3] - '0';
+    g_f.netdev[i].up = up;
+    g_f.phy_iftypes[i] = (1u << T_STA) | (1u << T_MON);
+    g_f.phy_iftypes_known[i] = 1;
+}
+
+/* --monitor-only with no monitor radio: capture_scope_verdict() refuses
+ * (CAPTURE_SCOPE_REFUSE_NO_MONITOR) and main.c exits 1, so the page
+ * fails. Seen red with the monitor-only line removed (exit 1, "ready
+ * with warnings"). */
+static void test_monitor_only_without_radio_fails(void) {
+    base();
+    g_f.netdev[0].type = 1;                     /* no monitor interface */
+    g_c.monitor_only = 1;
+    run();
+    ASSERT_EQ(level("radios", "monitor-only"), PF_FAIL);
+    ASSERT(says("radios", "monitor-only", "exit 1"));
+    ASSERT_EQ(pf_exit_code(&g_r), 2);
+    /* A named radio not in monitor mode, and a build with no libpcap. */
+    base();
+    add_managed_wlan0("phy1", 1);
+    g_c.mon[g_c.n_mon++] = "wlan0";
+    g_c.monitor_only = 1;
+    run();
+    ASSERT_EQ(level("radios", "monitor-only"), PF_FAIL);
+    base();
+    g_c.have_pcap = 0;
+    g_c.monitor_only = 1;
+    run();
+    ASSERT_EQ(level("radios", "monitor-only"), PF_FAIL);
+    /* With a radio it is not there at all. */
+    base();
+    g_c.monitor_only = 1;
+    run();
+    ASSERT_EQ(level("radios", "monitor-only"), -1);
+    ASSERT_EQ(pf_exit_code(&g_r), 0);
+}
+
+/* A --df-iface or a further --monitor-iface that is not in monitor mode
+ * is left out at run time (main.c), not put in monitor mode: it costs
+ * that radio (warn in check 1), and the passive line does not fail.
+ * Seen red with the old "not in monitor mode: sloth would have to
+ * change its mode" fail restored for every named interface. */
+static void test_passive_ignores_radios_left_out(void) {
+    base();
+    add_managed_wlan0("phy1", 1);
+    g_c.df[g_c.n_df++] = "wlan0";
+    run();
+    ASSERT_EQ(level("radios", "wlan0"), PF_WARN);
+    ASSERT_EQ(level("host", "passive"), PF_OK);
+    ASSERT_EQ(pf_exit_code(&g_r), 1);
+
+    base();
+    add_managed_wlan0("phy1", 1);
+    g_c.mon[g_c.n_mon++] = "mon0";
+    g_c.mon[g_c.n_mon++] = "wlan0";
+    run();
+    ASSERT_EQ(level("host", "passive"), PF_OK);
+    ASSERT_EQ(level("host", "passive") == PF_FAIL, 0);
+
+    /* A named radio that is not on the host is not described as one
+     * in monitor mode: nothing would be opened. */
+    base();
+    g_c.mon[g_c.n_mon++] = "wlan7";
+    run();
+    ASSERT(says("host", "passive", "no 802.11 interface would be opened"));
+    ASSERT(!says("host", "passive", "every 802.11 interface"));
+    /* And a missing --df-iface beside a real radio is not counted. */
+    base();
+    g_c.df[g_c.n_df++] = "wlan7";
+    run();
+    ASSERT_EQ(level("host", "passive"), PF_OK);
+    ASSERT(!says("host", "passive", "wlan7"));
+}
+
+/* An interface on the radio's phy that is down transmits nothing; one
+ * that is up, or whose state cannot be read, may. Seen red with the
+ * up test removed (a down wlan0 warned "transmits"). */
+static void test_passive_shared_phy_up_or_down(void) {
+    base();
+    add_managed_wlan0("phy0", 0);
+    run();
+    ASSERT_EQ(level("host", "passive"), PF_OK);
+    ASSERT(says("host", "passive", "down on a radio's phy, so not transmitting: wlan0"));
+    ASSERT_EQ(pf_exit_code(&g_r), 0);
+
+    base();
+    add_managed_wlan0("phy0", 1);
+    run();
+    ASSERT_EQ(level("host", "passive"), PF_WARN);
+    ASSERT(says("host", "passive", "wlan0 (phy0, beside mon0, up)"));
+
+    base();
+    add_managed_wlan0("phy0", -1);
+    run();
+    ASSERT_EQ(level("host", "passive"), PF_WARN);
+    ASSERT(says("host", "passive", "up or down not readable"));
+
+    /* The ok line says what it did not check. */
+    base();
+    run();
+    ASSERT(says("host", "passive", "active flag"));
+    ASSERT(says("host", "passive", "Not checked"));
+}
+
+/* A listing cut at PF_MAX_NETDEV is reported, and the passive line does
+ * not claim the radio is alone on its phy. Seen red with the truncated
+ * branch removed (passive read ok). */
+static void test_truncated_listing_is_reported(void) {
+    base();
+    g_f.netdev_truncated = 1;
+    run();
+    ASSERT_EQ(level("radios", "netdevs"), PF_NOT_CHECKED);
+    ASSERT_EQ(level("host", "passive"), PF_NOT_CHECKED);
+    ASSERT(!says("host", "passive", "no interface that is up shares"));
+}
+
+/* The gatherer on a host with more netdevs than it lists: the cut is
+ * known, and a named interface past it is found by its own path, not
+ * reported missing. Seen red with add_named() made a no-op (the radio
+ * read "not on this host"). Also the up flag from .../flags. */
+static void test_gather_past_the_netdev_cut(void) {
+    fake_net_reset();
+    char path[96];
+    int ok = 1;
+    for (int i = 0; i < PF_MAX_NETDEV + 2 && ok; i++) {
+        snprintf(path, sizeof(path), "/sys/class/net/v%03d/type", i);
+        ok = fake_sys_put(path, "1\n") == 0;
+    }
+    ASSERT(ok);
+    ok = fake_sys_put("/sys/class/net/zmon/type", "803\n") == 0 &&
+         fake_sys_put("/sys/class/net/zmon/flags", "0x1003\n") == 0 &&
+         fake_sys_put("/sys/class/net/v000/flags", "0x1002\n") == 0;
+    ASSERT(ok);
+    memset(&g_c, 0, sizeof(g_c));
+    g_c.have_pcap = g_c.have_wifi = 1;
+    g_c.mon[g_c.n_mon++] = "zmon";
+    g_c.iface[g_c.n_iface++] = "nope0";
+    preflight_gather(&g_c, &g_fake_ops, &g_f);
+    ASSERT_EQ(g_f.netdev_truncated, 1);
+    int zi = -1, v0 = -1;
+    for (int i = 0; i < g_f.n_netdev; i++) {
+        if (!strcmp(g_f.netdev[i].name, "zmon")) zi = i;
+        if (!strcmp(g_f.netdev[i].name, "v000")) v0 = i;
+    }
+    ASSERT(zi >= PF_MAX_NETDEV);
+    if (zi >= 0) ASSERT_EQ(g_f.netdev[zi].up, 1);
+    if (v0 >= 0) ASSERT_EQ(g_f.netdev[v0].up, 0);
+    if (v0 >= 0 && v0 + 1 < g_f.n_netdev) ASSERT_EQ(g_f.netdev[v0 + 1].up, -1);
+    pf_run_checks(&g_c, &g_f, &g_r);
+    ASSERT_EQ(level("radios", "zmon"), PF_OK);
+    ASSERT_EQ(level("radios", "nope0"), PF_FAIL);
+    fake_net_reset();
+}
+
+/* Every --iface main.c accepts reaches the checks. */
+static void test_iface_names_past_sixteen(void) {
+    static char names[PF_MAX_IFACE][16];
+    base();
+    for (int i = 0; i < PF_MAX_IFACE; i++) {
+        snprintf(names[i], sizeof(names[i]), i == PF_MAX_IFACE - 1 ? "eth9" : "eth0");
+        g_c.iface[g_c.n_iface++] = names[i];
+    }
+    run();
+    ASSERT_EQ(level("radios", "eth9"), PF_FAIL);
+    ASSERT_EQ(pf_exit_code(&g_r), 2);
+}
+
+/* Output paths the run refuses at start (src/secure_file.h): an
+ * existing permissive or symlinked file, a permissive directory, and
+ * --pcap-dir and --eapol-dir naming one directory. Seen red with the
+ * refused branch removed from pf_check_storage() (each read ok). */
+static void test_storage_paths_the_run_refuses(void) {
+    char dir[TEST_TMP_MAX] = "";
+    ASSERT(mkdtemp(test_tmp_tpl(dir, sizeof(dir), "sloth_pfs_XXXXXX")) != NULL);
+    if (!dir[0]) return;
+    char open_f[TEST_TMP_MAX + 32], priv_f[TEST_TMP_MAX + 32], link_f[TEST_TMP_MAX + 32],
+         wide_d[TEST_TMP_MAX + 32], priv_d[TEST_TMP_MAX + 32];
+    snprintf(open_f, sizeof(open_f), "%s/open.jsonl", dir);
+    snprintf(priv_f, sizeof(priv_f), "%s/priv.md", dir);
+    snprintf(link_f, sizeof(link_f), "%s/link.json", dir);
+    snprintf(wide_d, sizeof(wide_d), "%s/wide", dir);
+    snprintf(priv_d, sizeof(priv_d), "%s/priv", dir);
+    FILE *fp = fopen(open_f, "w");
+    if (fp) fclose(fp);
+    fp = fopen(priv_f, "w");
+    if (fp) fclose(fp);
+    int ok = chmod(open_f, 0644) == 0 && chmod(priv_f, 0600) == 0 &&
+             symlink(priv_f, link_f) == 0 && mkdir(wide_d, 0700) == 0 &&
+             chmod(wide_d, 0755) == 0 && mkdir(priv_d, 0700) == 0;
+    ASSERT(ok);
+
+    memset(&g_c, 0, sizeof(g_c));
+    g_c.have_pcap = g_c.have_wifi = g_c.have_sqlite = 1;
+    g_c.jsonl = open_f;
+    g_c.report_md = priv_f;
+    g_c.report_json = link_f;
+    g_c.pcap_dir = wide_d;
+    g_c.eapol_dir = priv_d;
+    fake_net_reset();
+    preflight_gather(&g_c, &g_fake_ops, &g_f);
+    memset(&g_r, 0, sizeof(g_r));
+    pf_run_checks(&g_c, &g_f, &g_r);
+    ASSERT_EQ(level("storage", "jsonl"), PF_FAIL);
+    ASSERT(says("storage", "jsonl", "group/other"));
+    ASSERT_EQ(level("storage", "report-json"), PF_FAIL);
+    ASSERT(says("storage", "report-json", "symbolic link"));
+    ASSERT_EQ(level("storage", "pcap-dir"), PF_FAIL);
+    ASSERT_EQ(level("storage", "report") == PF_FAIL, 0);
+    ASSERT_EQ(level("storage", "eapol-dir") == PF_FAIL, 0);
+    ASSERT_EQ(level("storage", "pcap-eapol"), -1);
+
+    /* One directory for both, by a second spelling. */
+    char again[TEST_TMP_MAX + 40];
+    snprintf(again, sizeof(again), "%s/./priv", dir);
+    g_c.pcap_dir = priv_d;
+    g_c.eapol_dir = again;
+    preflight_gather(&g_c, &g_fake_ops, &g_f);
+    memset(&g_r, 0, sizeof(g_r));
+    pf_run_checks(&g_c, &g_f, &g_r);
+    ASSERT_EQ(level("storage", "pcap-eapol"), PF_FAIL);
+    ASSERT(says("storage", "pcap-eapol", "exits 2"));
+    test_rm_tree(dir);
+    fake_net_reset();
+
+    /* Owned by another account: the run's account decides, so warn. */
+    base();
+    pf_path_t *p = db_path_fixture(5000, 10000);
+    p->foreign = 1;
+    p->owner_uid = 4242;
+    run();
+    ASSERT_EQ(level("storage", "db"), PF_WARN);
+    ASSERT(says("storage", "db", "uid 4242"));
+}
+
+/* A schema_version row that holds no version is refused by db_open()'s
+ * check_version(); the probe tells it from a missing row. Seen red with
+ * the probe's old mapping (0 -> -1, "no version row", ok). */
+static void test_db_version_row_without_a_version(void) {
+    char dir[TEST_TMP_MAX] = "";
+    ASSERT(mkdtemp(test_tmp_tpl(dir, sizeof(dir), "sloth_pfd_XXXXXX")) != NULL);
+    if (!dir[0]) return;
+    char db[TEST_TMP_MAX + 16];
+    snprintf(db, sizeof(db), "%s/s.db", dir);
+    ASSERT_EQ(db_open(db), 1);
+    db_close();
+    sqlite3 *h = NULL;
+    int ok = sqlite3_open(db, &h) == SQLITE_OK &&
+             sqlite3_exec(h, "PRAGMA journal_mode=DELETE;"
+                          "UPDATE meta SET value='x' WHERE key='schema_version'",
+                          NULL, NULL, NULL) == SQLITE_OK;
+    sqlite3_close(h);
+    ASSERT(ok);
+    int ver = 99;
+    char err[160];
+    ASSERT_EQ(db_probe_version(db, &ver, err, sizeof(err)), 0);
+    ASSERT_EQ(ver, 0);
+    h = NULL;
+    ok = sqlite3_open(db, &h) == SQLITE_OK &&
+         sqlite3_exec(h, "DELETE FROM meta WHERE key='schema_version'",
+                      NULL, NULL, NULL) == SQLITE_OK;
+    sqlite3_close(h);
+    ASSERT(ok);
+    ASSERT_EQ(db_probe_version(db, &ver, err, sizeof(err)), 0);
+    ASSERT_EQ(ver, -1);
+    test_rm_tree(dir);
+
+    base();
+    db_path_fixture(5000, 10000);
+    g_f.db_exists = 1;
+    g_f.db_bytes = 4096;
+    g_f.db_version = 0;
+    run();
+    ASSERT_EQ(level("storage", "db-schema"), PF_FAIL);
+    ASSERT(says("storage", "db-schema", "holds no version"));
+}
+
+/* A path that is not UTF-8 still prints valid JSON (RFC 8259 section
+ * 8.1): each stray byte becomes U+FFFD, well-formed UTF-8 passes. Seen
+ * red with the high-byte branch removed (the raw 0xff reached the
+ * output). */
+static void test_json_is_utf8(void) {
+    base();
+    g_c.bt_capture = "/tmp/\xff\xc0\x80-\xc3\xa9-\xed\xa0\x80";
+    g_f.bt_capture_rc = -1;
+    run();
+    const char *j = render(1);
+    int high_ok = 1;
+    for (const unsigned char *q = (const unsigned char *)j; *q; q++)
+        if (*q == 0xff || *q == 0xc0 || *q == 0xed) high_ok = 0;
+    ASSERT(high_ok);
+    ASSERT(strstr(j, "/tmp/\\ufffd\\ufffd\\ufffd-\xc3\xa9-\\ufffd\\ufffd\\ufffd") != NULL);
+}
+
 void run_preflight_tests(void) {
     TEST_SUITE("sloth --preflight (#247)");
     RUN_TEST(test_clean_host_is_ready);
@@ -920,6 +1230,15 @@ void run_preflight_tests(void) {
     RUN_TEST(test_gather_reads_sysfs);
     RUN_TEST(test_preflight_writes_nothing);
     RUN_TEST(test_gpsd_probe_reads_and_sends_nothing);
+    RUN_TEST(test_monitor_only_without_radio_fails);
+    RUN_TEST(test_passive_ignores_radios_left_out);
+    RUN_TEST(test_passive_shared_phy_up_or_down);
+    RUN_TEST(test_truncated_listing_is_reported);
+    RUN_TEST(test_gather_past_the_netdev_cut);
+    RUN_TEST(test_iface_names_past_sixteen);
+    RUN_TEST(test_storage_paths_the_run_refuses);
+    RUN_TEST(test_db_version_row_without_a_version);
+    RUN_TEST(test_json_is_utf8);
 #ifdef PLATFORM_LINUX
     RUN_TEST(test_nl80211_parsers);
 #endif

@@ -26,6 +26,11 @@
 #define PF_IFTYPE_MONITOR 6
 #define PF_ARPHRD_RADIOTAP 803
 
+/* main.c copies up to MAX_IFACES --iface names into pf_config_t. */
+#if PF_MAX_IFACE < MAX_IFACES
+#error "PF_MAX_IFACE must hold every --iface main.c accepts (MAX_IFACES)"
+#endif
+
 /* A path the account running the preflight cannot see into is not
  * "missing": the run may be another account (root, or the one it
  * drops to), and a stat that EACCES says nothing about the file. */
@@ -86,6 +91,19 @@ static const pf_netdev_t *discovered(const pf_facts_t *f) {
     for (int i = 0; i < f->n_netdev; i++)
         if (is_monitor(&f->netdev[i])) return &f->netdev[i];
     return NULL;
+}
+
+/* The radio the run opens as radio 0: the first --monitor-iface when it
+ * is in monitor mode, else (none named) the one discovery takes; NULL
+ * when there is none, and then no further radio is opened either
+ * (main.c: no radio 0, no --monitor-iface 2-4 and no --df-iface). */
+static const pf_netdev_t *radio0(const pf_config_t *c, const pf_facts_t *f) {
+    if (!c->have_pcap || c->n_replay > 0) return NULL;
+    if (c->n_mon > 0) {
+        const pf_netdev_t *d = find_netdev(f, c->mon[0], NULL);
+        return is_monitor(d) ? d : NULL;
+    }
+    return discovered(f);
 }
 
 /* ── 1. Radios ─────────────────────────────────────────────────── */
@@ -176,6 +194,16 @@ void pf_check_radios(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r) 
         }
     }
     for (int i = 0; i < c->n_df; i++) one_iface(f, r, c->df[i], PF_ROLE_DF);
+    /* capture_scope_verdict(): --monitor-only with no monitor radio
+     * open is CAPTURE_SCOPE_REFUSE_NO_MONITOR, and main.c exits 1. */
+    if (c->monitor_only && !radio0(c, f))
+        add(r, "radios", "monitor-only", PF_FAIL, "--monitor-only and no radio in "
+            "monitor mode would be opened: the run refuses to start (exit 1)");
+    if (f->netdev_truncated)
+        add(r, "radios", "netdevs", PF_NOT_CHECKED, "more than %d interfaces under "
+            "/sys/class/net: discovery and the shared-phy check saw the first %d "
+            "(each named interface was looked up by its own path)",
+            PF_MAX_NETDEV, PF_MAX_NETDEV);
 
     /* The regulatory domain. "00" is the world domain the kernel falls
      * back to when none is set. */
@@ -283,6 +311,17 @@ void pf_check_storage(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r)
                 p->path, p->dir);
             continue;
         }
+        if (p->refused) {
+            add(r, "storage", p->what, PF_FAIL, "%s: the run refuses it "
+                "(src/secure_file.h): %s", p->path, p->why);
+            continue;
+        }
+        if (p->foreign) {
+            add(r, "storage", p->what, PF_WARN, "%s: owned by uid %ld, not by the "
+                "account running --preflight; the run refuses it unless it writes "
+                "as uid %ld", p->path, p->owner_uid, p->owner_uid);
+            continue;
+        }
         if (!p->writable) {
             add(r, "storage", p->what, PF_WARN, "%s: %s is not writable by the "
                 "account running --preflight (the run writes as the account it "
@@ -302,6 +341,10 @@ void pf_check_storage(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r)
             p->path, p->creates ? " (created at start)" : "", fm, tm, p->dir,
             band >= 4 ? ", under 1%" : band >= 2 ? ", under 10%" : "");
     }
+    if (f->pcap_eapol_same)
+        add(r, "storage", "pcap-eapol", PF_FAIL, "--pcap-dir %s and --eapol-dir %s "
+            "are the same directory: the handshake sweep would expire alert pcaps, "
+            "so sloth exits 2", c->pcap_dir, c->eapol_dir);
     if (!c->db) return;
     if (!c->have_sqlite) {
         add(r, "storage", "db-schema", PF_FAIL, "built without SQLite: --db cannot open");
@@ -323,6 +366,9 @@ void pf_check_storage(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r)
     else if (f->db_version < 0)
         add(r, "storage", "db-schema", PF_OK, "no version row: stamped v%d at start%s",
             f->db_current, wal);
+    else if (f->db_version == 0)
+        add(r, "storage", "db-schema", PF_FAIL, "the schema_version row holds no "
+            "version: refused at start (use a separate file)%s", wal);
     else if (f->db_version == f->db_current)
         add(r, "storage", "db-schema", PF_OK, "schema v%d, current (opened read-only, "
             "immutable)%s", f->db_version, wal);
@@ -459,38 +505,48 @@ void pf_check_host(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r) {
         add(r, "host", "temperature", PF_OK, "hottest %.1f C (%s)", f->hottest_c,
             f->hottest_label);
 
-    /* The passive contract, as far as configuration can show it: every
-     * interface sloth would open for 802.11 is already in monitor mode,
-     * so sloth changes no mode, and no other interface on the same phy
-     * transmits through that radio. sloth injects no frame (MISSION
+    /* The passive contract, as far as configuration can show it. Only
+     * an interface already in monitor mode is opened for 802.11 (sloth
+     * sets no mode; one that is not is left out, and check 1 says what
+     * that costs), so what is checked is the phy of each radio the run
+     * would open: no other interface on it that is up and not in
+     * monitor mode, because that one can transmit through the radio (as
+     * a client or an access point). sloth injects no frame (MISSION
      * section 2); what a command line can add is listed. */
-    const char *opened[PF_MAX_NAMED + 1];
+    const pf_netdev_t *opened[1 + 2 * PF_MAX_NAMED];
     int n = 0;
-    if (c->n_replay == 0 && c->have_pcap) {
-        if (c->n_mon > 0) {
-            for (int i = 0; i < c->n_mon; i++) opened[n++] = c->mon[i];
-        } else {
-            const pf_netdev_t *d = discovered(f);
-            if (d) opened[n++] = d->name;
+    const pf_netdev_t *r0 = radio0(c, f);
+    if (r0) {
+        opened[n++] = r0;
+        for (int i = 1; i < c->n_mon; i++) {
+            const pf_netdev_t *d = find_netdev(f, c->mon[i], NULL);
+            if (is_monitor(d) && d != r0) opened[n++] = d;
         }
-        for (int i = 0; i < c->n_df && n < PF_MAX_NAMED; i++) opened[n++] = c->df[i];
+        for (int i = 0; i < c->n_df; i++) {
+            const pf_netdev_t *d = find_netdev(f, c->df[i], NULL);
+            int dup = 0;
+            for (int k = 0; k < n; k++) dup |= opened[k] == d;
+            if (is_monitor(d) && !dup) opened[n++] = d;
+        }
     }
-    char shared[120] = "", notmon[80] = "";
+    char shared[160] = "", down[96] = "";
     for (int i = 0; i < n; i++) {
-        const pf_netdev_t *d = find_netdev(f, opened[i], NULL);
-        if (!d) continue;
-        if (!is_monitor(d)) {
-            size_t o = strlen(notmon);
-            snprintf(notmon + o, sizeof(notmon) - o, "%s%s", o ? ", " : "", d->name);
-            continue;
-        }
+        const pf_netdev_t *d = opened[i];
         if (!d->phy[0]) continue;
         for (int k = 0; k < f->n_netdev; k++) {
             const pf_netdev_t *o2 = &f->netdev[k];
             if (o2 == d || strcmp(o2->phy, d->phy) != 0 || is_monitor(o2)) continue;
+            if (o2->up == 0) {
+                if (!strstr(down, o2->name)) {
+                    size_t o = strlen(down);
+                    snprintf(down + o, sizeof(down) - o, "%s%s", o ? ", " : "", o2->name);
+                }
+                continue;
+            }
             size_t o = strlen(shared);
-            snprintf(shared + o, sizeof(shared) - o, "%s%s (%s, beside %s)",
-                     o ? "; " : "", o2->name, o2->phy, d->name);
+            snprintf(shared + o, sizeof(shared) - o, "%s%s (%s, beside %s%s)",
+                     o ? "; " : "", o2->name, o2->phy, d->name,
+                     o2->up < 0 ? ", up or down not readable" : ", up");
         }
     }
     char optin[120] = "";
@@ -501,19 +557,27 @@ void pf_check_host(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r) {
         snprintf(optin + o, sizeof(optin) - o, "%sa routable --data-socket (serves "
                  "whoever connects)", o ? ", " : "");
     }
+    char downs[160] = "";
+    if (down[0])
+        snprintf(downs, sizeof(downs), "; down on a radio's phy, so not transmitting: %s",
+                 down);
     if (n == 0)
         add(r, "host", "passive", PF_OK, "no 802.11 interface would be opened%s%s",
             optin[0] ? "; sending opt-ins given: " : "", optin);
-    else if (notmon[0])
-        add(r, "host", "passive", PF_FAIL, "%s not in monitor mode: sloth would have "
-            "to change its mode, and never does", notmon);
     else if (shared[0])
-        add(r, "host", "passive", PF_WARN, "a non-monitor interface shares the radio "
-            "and transmits through it: %s", shared);
+        add(r, "host", "passive", PF_WARN, "a non-monitor interface shares the "
+            "radio's phy and can transmit through it: %s", shared);
+    else if (f->netdev_truncated)
+        add(r, "host", "passive", PF_NOT_CHECKED, "the radios sloth would open are "
+            "in monitor mode; interfaces past the first %d under /sys/class/net "
+            "were not checked for sharing their phy", PF_MAX_NETDEV);
     else
         add(r, "host", "passive", PF_OK, "every 802.11 interface sloth would open is "
-            "in monitor mode and alone on its phy; sloth sets no mode and injects "
-            "nothing%s%s", optin[0] ? "; sending opt-ins given: " : "", optin);
+            "in monitor mode and no interface that is up shares its phy%s; sloth sets "
+            "no mode and injects nothing. Not checked: a monitor interface made with "
+            "the active flag ACKs frames sent to its own address, and no read-only "
+            "path reports that flag%s%s", downs, optin[0] ? "; sending opt-ins given: " : "",
+            optin);
 }
 
 /* ── 7. Output and notification ────────────────────────────────── */
@@ -552,15 +616,11 @@ void pf_rule_env(const pf_config_t *c, const pf_facts_t *f, cov_env_t *e) {
     e->input[COV_IN_HOST] = COV_AV_UP;
     if (c->have_pcap) {
         int radios = 0, named = c->n_mon > 0;
-        if (named) {
-            /* No radio 0, no further radios (main.c). */
-            if (is_monitor(find_netdev(f, c->mon[0], NULL))) {
-                radios = 1;
-                for (int i = 1; i < c->n_mon; i++)
-                    if (is_monitor(find_netdev(f, c->mon[i], NULL))) radios++;
-            }
-        } else if (discovered(f)) {
+        /* No radio 0, no further radios (main.c). */
+        if (radio0(c, f)) {
             radios = 1;
+            for (int i = 1; i < c->n_mon; i++)
+                if (is_monitor(find_netdev(f, c->mon[i], NULL))) radios++;
         }
         if (radios) offer(e, COV_IN_DOT11, COV_AV_UP);
         else if (named) offer(e, COV_IN_DOT11, COV_AV_DOWN);
@@ -697,12 +757,40 @@ void pf_print_text(const pf_result_t *r, FILE *out) {
     fprintf(out, "%s (exit %d)\n", verdict(code), code);
 }
 
+/* The length of the well-formed UTF-8 sequence at p (RFC 3629 section
+ * 4: no overlong form, no surrogate, nothing past U+10FFFF), 0 when the
+ * bytes there are not one. */
+static int utf8_len(const unsigned char *p) {
+    unsigned c = p[0];
+    int n;
+    unsigned min;
+    if (c >= 0xc2 && c <= 0xdf)      { n = 2; min = 0x80; c &= 0x1f; }
+    else if (c >= 0xe0 && c <= 0xef) { n = 3; min = 0x800; c &= 0x0f; }
+    else if (c >= 0xf0 && c <= 0xf4) { n = 4; min = 0x10000; c &= 0x07; }
+    else return 0;
+    for (int i = 1; i < n; i++) {
+        if ((p[i] & 0xc0) != 0x80) return 0;
+        c = (c << 6) | (p[i] & 0x3fu);
+    }
+    if (c < min || c > 0x10ffff || (c >= 0xd800 && c <= 0xdfff)) return 0;
+    return n;
+}
+
+/* A JSON string (RFC 8259 section 7). A path from the command line is
+ * bytes, not text: a byte that does not start a well-formed UTF-8
+ * sequence is written as U+FFFD, so the object stays valid JSON. */
 static void jstr(FILE *out, const char *s) {
     fputc('"', out);
     for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p; p++) {
         if (*p == '"' || *p == '\\') fprintf(out, "\\%c", *p);
         else if (*p < 0x20 || *p == 0x7f) fprintf(out, "\\u%04x", *p);
-        else fputc(*p, out);
+        else if (*p < 0x80) fputc(*p, out);
+        else {
+            int n = utf8_len(p);
+            if (n == 0) { fputs("\\ufffd", out); continue; }
+            fwrite(p, 1, (size_t)n, out);
+            p += n - 1;
+        }
     }
     fputc('"', out);
 }
