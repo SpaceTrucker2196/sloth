@@ -1,7 +1,7 @@
 ---
 type: SENSOR_UNDERVOLT
 technique: ""
-rule_file: src/alerts/rules_sensor.c:87 rule_sensor_undervolt()
+rule_file: src/alerts/rules_sensor.c:94 rule_sensor_undervolt()
 count_semantics: per rule evaluation - one fire() per alerts_update() tick while the host-status snapshot's under-voltage alarm reads 1 (sampled every SYS_SAMPLE_SECS, 10 s, so the value held between samples is re-asserted every tick). One key per host (`undervolt:host`); the detail names the first alarming node and holds still while the alarm does, so `observations` moves only when the set of alarming nodes changes.
 severity_assessment: agree - WARN; the alarm is the host's own supply dipping below what the board needs, a fault that threatens the sensor's storage and USB receivers but is not an attack and not, by itself, evidence that anything was damaged. CRIT is not given: no source read for this rule states a held duration past which damage is to be expected.
 false_positive_risk: low - the input is the kernel's own alarm attribute; a node that reports 1 is the hardware or firmware saying so. The one gap is the other way: a dip shorter than the 10 s sample interval is not seen.

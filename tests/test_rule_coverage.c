@@ -90,7 +90,7 @@ static void test_input_census(void) {
     ASSERT_EQ(count_input(COV_IN_BLE_HCI), 1);
     ASSERT_EQ(count_input(COV_IN_GNSS), 4);
     ASSERT_EQ(count_input(COV_IN_ADSB), 1);
-    ASSERT_EQ(count_input(COV_IN_SYS), 2);
+    ASSERT_EQ(count_input(COV_IN_SYS), 3);
 }
 
 static void test_named_declarations(void) {
@@ -158,7 +158,7 @@ static void test_rf_daemon_kinds(void) {
 }
 
 static void test_daemon_split(void) {
-    /* The counts docs-counts prints from the two rule tables: 95 kinds
+    /* The counts docs-counts prints from the two rule tables: 96 kinds
      * in sloth-wifi's, 6 in sloth-rf's, SENSOR_SOURCE_DOWN in both. */
     int wifi = 0, rf = 0, both = 0;
     for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
@@ -168,7 +168,7 @@ static void test_daemon_split(void) {
         wifi += w; rf += r;
         if (w && r) { both++; ASSERT_EQ(t, (int)ALERT_TYPE_SENSOR_SOURCE_DOWN); }
     }
-    ASSERT_EQ(wifi, 95);
+    ASSERT_EQ(wifi, 96);
     ASSERT_EQ(rf, 6);
     ASSERT_EQ(both, 1);
     /* The host has one supply; the daemon with the capture reports it. */
@@ -332,6 +332,66 @@ static void test_reason_precedence(void) {
     ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_BLE_ADV_FLOOD, &e, &why), (int)COV_OBSERVABLE);
 }
 
+static void test_suppressed(void) {
+    /* #242 item 4: what SENSOR_SUPPRESSED holds open reads `partly`,
+     * `suppressed`, on the inputs and frame classes it names and
+     * nowhere else. */
+    cov_env_t e = env_full();
+    cov_reason_t why = COV_R_NONE;
+
+    /* An input's bit: every kind on it, none on another. */
+    e.suppressed = 1u << COV_IN_DOT11;
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_EVIL_TWIN, &e, &why), (int)COV_PARTLY);
+    ASSERT_EQ((int)why, (int)COV_R_SUPPRESSED);
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_HANDSHAKE_HARVEST, &e, &why), (int)COV_PARTLY);
+    ASSERT_EQ((int)why, (int)COV_R_SUPPRESSED);
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_THREAT_DOMAIN, &e, &why), (int)COV_OBSERVABLE);
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_BLE_ADV_FLOOD, &e, &why), (int)COV_OBSERVABLE);
+    /* The own-state kinds read the sampler, which nothing suppresses. */
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_SENSOR_SUPPRESSED, &e, &why), (int)COV_OBSERVABLE);
+
+    e.suppressed = 1u << COV_IN_IP;
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_THREAT_DOMAIN, &e, &why), (int)COV_PARTLY);
+    ASSERT_EQ((int)why, (int)COV_R_SUPPRESSED);
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_EVIL_TWIN, &e, &why), (int)COV_OBSERVABLE);
+
+    /* A frame class: the 802.11 kinds whose evidence includes it.
+     * PROBE_FLOOD reads probe requests, EVIL_TWIN beacons only,
+     * HANDSHAKE_HARVEST deauths and EAPOL. A frame mask reaches no
+     * kind of another input. */
+    e = env_full();
+    e.suppressed_frames = COV_F_PROBE;
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_PROBE_FLOOD, &e, &why), (int)COV_PARTLY);
+    ASSERT_EQ((int)why, (int)COV_R_SUPPRESSED);
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_EVIL_TWIN, &e, &why), (int)COV_OBSERVABLE);
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_HANDSHAKE_HARVEST, &e, &why), (int)COV_OBSERVABLE);
+    e.suppressed_frames = COV_F_ALL;
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_THREAT_DOMAIN, &e, &why), (int)COV_OBSERVABLE);
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_BLE_ADV_FLOOD, &e, &why), (int)COV_OBSERVABLE);
+
+    /* Precedence: blind first, then stale, then suppressed, then what
+     * the radio plan costs. */
+    e = env_full();
+    e.suppressed = 1u << COV_IN_DOT11;
+    e.bands = COV_B_24;
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_DFS_MASKING, &e, &why), (int)COV_BLIND);
+    ASSERT_EQ((int)why, (int)COV_R_BAND);
+    e.input[COV_IN_DOT11] = COV_AV_STALE;
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_EVIL_TWIN, &e, &why), (int)COV_PARTLY);
+    ASSERT_EQ((int)why, (int)COV_R_SOURCE_STALE);
+    e.input[COV_IN_DOT11] = COV_AV_UP;
+    e.hopping = 0;
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_EVIL_TWIN, &e, &why), (int)COV_PARTLY);
+    ASSERT_EQ((int)why, (int)COV_R_SUPPRESSED);
+    e.hopping = 1; e.radios = 1; e.channels = 11;
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_HANDSHAKE_HARVEST, &e, &why), (int)COV_PARTLY);
+    ASSERT_EQ((int)why, (int)COV_R_SUPPRESSED);
+    e.suppressed = 0;
+    ASSERT_EQ((int)cov_rule_status(ALERT_TYPE_HANDSHAKE_HARVEST, &e, &why), (int)COV_PARTLY);
+    ASSERT_EQ((int)why, (int)COV_R_HOP);
+    ASSERT_STR(cov_reason_name(COV_R_SUPPRESSED), "suppressed");
+}
+
 static void test_refuses_bad_arguments(void) {
     cov_env_t e = env_full();
     cov_reason_t why = COV_R_NONE;
@@ -423,6 +483,7 @@ void run_rule_coverage_tests(void) {
     RUN_TEST(test_band);
     RUN_TEST(test_needs);
     RUN_TEST(test_reason_precedence);
+    RUN_TEST(test_suppressed);
     RUN_TEST(test_refuses_bad_arguments);
     RUN_TEST(test_names);
     RUN_TEST(test_mask_strings);

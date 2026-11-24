@@ -4,6 +4,7 @@
 #include "wifi_chanhop.h"
 #include "ownership.h"
 #include "db.h"
+#include "alerts/rules.h"
 
 /* The capture side of the coverage environment (#242 slice 2): the
  * 802.11 radios, the host tables and the operator's configuration.
@@ -36,6 +37,12 @@ int cov_capture_fill(const sloth_state_t *s, cov_env_t *e) {
     if (ownership_any())             e->config |= COV_N_OWN_NET;
     if (ownership_known_count() > 0) e->config |= COV_N_ROSTER;
     if (db_is_open())                e->config |= COV_N_DB;
+
+    /* What SENSOR_SUPPRESSED holds open (#242 item 4). Read before this
+     * tick's rules run (the health stage is ahead of them), so a signal
+     * that opens or closes this tick reaches the statuses on the next:
+     * one second behind an incident that is minutes long. */
+    rules_sensor_suppressed(&e->suppressed, &e->suppressed_frames);
 
     if (e->input[COV_IN_DOT11] == COV_AV_NONE) return 1;
 

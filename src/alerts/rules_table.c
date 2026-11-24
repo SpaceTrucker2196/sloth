@@ -123,6 +123,9 @@ static const alert_rule_t wifi_rules[] = {
      * no other rule. */
     R(rule_sensor_undervolt),
     R(rule_sensor_source_down),
+    /* #242 item 4: reads the capture handles' counters, the eviction
+     * tally and the coverage record, so this daemon's only. */
+    R(rule_sensor_suppressed),
 };
 
 #undef R

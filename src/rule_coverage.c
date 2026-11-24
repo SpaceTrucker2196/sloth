@@ -50,6 +50,9 @@ cov_status_t cov_rule_status(alert_type_t t, const cov_env_t *env,
         st = COV_BLIND; r = COV_R_BAND;
     } else if (av == COV_AV_STALE) {
         st = COV_PARTLY; r = COV_R_SOURCE_STALE;
+    } else if ((env->suppressed & (1u << d->input)) ||
+               (d->input == COV_IN_DOT11 && (d->frames & env->suppressed_frames))) {
+        st = COV_PARTLY; r = COV_R_SUPPRESSED;
     } else if (d->input == COV_IN_DOT11) {
         if (!env->hopping) {
             /* A radio that is never retuned hears its one channel
@@ -103,6 +106,7 @@ const char *cov_reason_name(cov_reason_t r) {
         [COV_R_NO_ROSTER] = "no_roster", [COV_R_NO_DB] = "no_db",
         [COV_R_BAND] = "band", [COV_R_SOURCE_STALE] = "source_stale",
         [COV_R_FIXED_CHANNEL] = "fixed_channel", [COV_R_HOP] = "hop",
+        [COV_R_SUPPRESSED] = "suppressed",
     };
     return (int)r >= 0 && r < COV_R_COUNT ? n[r] : "";
 }

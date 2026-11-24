@@ -1,7 +1,7 @@
 ---
 type: SENSOR_SOURCE_DOWN
 technique: ""
-rule_file: src/alerts/rules_sensor.c:160 rule_sensor_source_down()
+rule_file: src/alerts/rules_sensor.c:167 rule_sensor_source_down()
 count_semantics: per rule evaluation - one fire() per alerts_update() tick per configured source that is open or past its hold (down 10 s, or not ok 300 s). One key per source (`srcdown:<name>`); the detail carries the state, the reader's own word and the freshness band, never an age in seconds, so `observations` moves only when one of those changes.
 severity_assessment: agree - CRIT for the monitor radio and the IP capture, whose loss leaves the sensor silent on its whole 802.11 or wired domain while the views look like a quiet network; WARN for the Bluetooth, GNSS, ADS-B and APRS sources, which each feed one domain beside them.
 false_positive_risk: low - the input is sloth's own reader state (source_status); the holds keep a reconnect that succeeds within seconds and a short lull out. A wired capture on a segment that is genuinely silent for five minutes would fire, which is the rule saying exactly what it measures.

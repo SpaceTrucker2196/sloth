@@ -353,6 +353,15 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * random_devices_daily. 0 purges only the one-tick rows; the cap is
      * a day, past which "did not repeat" stops meaning anything. */
     { "retention.random_repeat_s",  DB_RANDOM_REPEAT_DEFAULT_S, 0, 86400, "seconds a random address may be heard for and still be purged from --db after 7 days" },
+    /* #242 item 4, SENSOR_SUPPRESSED (src/alerts.h gives the measured
+     * baseline each default sits above). The drop share's floor is 1 %:
+     * an integer percent, and 0 would read every drop as suppression.
+     * The silent run's floor is 2: one quiet minute on a hopped channel
+     * is a lull. */
+    { "suppress.evict_per_min",     SUPPRESS_EVICT_PER_MIN_DEFAULT, 1, 10000000, "evictions in one minute from one synthesis table (flow rings and evidence_frame not judged) for SENSOR_SUPPRESSED" },
+    { "suppress.drop_pct",          SUPPRESS_DROP_PCT_DEFAULT, 1, 100, "percent of a capture handle's received frames dropped (ps_drop + ps_ifdrop) in one minute for SENSOR_SUPPRESSED" },
+    { "suppress.drop_min",          SUPPRESS_DROP_MIN_DEFAULT, 1, 10000000, "drops a handle must also have in that minute" },
+    { "suppress.silent_intervals",  SUPPRESS_SILENT_INTERVALS_DEFAULT, 2, 60, "consecutive coverage intervals a visited channel that was heard before hears nothing while its band is heard" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

@@ -10,7 +10,7 @@ by `web/tools/alertkb.c`, never copied by hand).
 step's basis; each section names its own), `docs/wiki/alerts.md` and
 `docs/views/alerts.md` (what each rule fires on).
 
-**Last updated**: 2026-11-11 (SENSOR_UNDERVOLT, SENSOR_SOURCE_DOWN). 2026-11-11 (#172: PMKID_HARVEST, HANDSHAKE_HARVEST). 2026-11-11 (#187 S2: KARMA_PROBE_FORGE). 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
+**Last updated**: 2026-11-23 (#242 item 4: SENSOR_SUPPRESSED). 2026-11-11 (SENSOR_UNDERVOLT, SENSOR_SOURCE_DOWN). 2026-11-11 (#172: PMKID_HARVEST, HANDSHAKE_HARVEST). 2026-11-11 (#187 S2: KARMA_PROBE_FORGE). 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
 remove" steps made conditional on the premises, as the rest are;
 review: WEAK_TLS aimed at the client
 that offered the old version; every on-device step conditional on the
@@ -2097,6 +2097,36 @@ and hardware.
 
 Sources: `docs/wiki/alerts.md`, `docs/wiki/jsonl-schema.md`
 
+
+## `SENSOR_SUPPRESSED`
+
+**Investigate**
+
+1. This is sloth's own sensor: a source is up and sloth is losing part
+   of what it delivers. The key says which: `suppressed:evict` (a table
+   is full and dropping rows), `suppressed:drop` (the capture handle is
+   dropping frames before any parser sees them), `suppressed:silent`
+   (one channel went quiet while the rest of its band did not).
+2. Look at the flood alerts for the same minutes (`BEACON_FLOOD`,
+   `PROBE_FLOOD`, `DEAUTH_FLOOD`, `RTS_FLOOD`): a spray of fresh
+   addresses fills tables, a flood overruns the ring, a jammer silences
+   a channel. A busy segment or a slow host does the same with nobody
+   attacking.
+3. `rule_status` lists the rules reading `partly`, `suppressed` while it
+   is open: their silence in that time is not a clean bill.
+
+**Fix**
+
+1. For drops: check the host's load and storage; a smaller `--hop` list
+   or a second radio lowers the per-radio rate.
+2. For a silent channel: check the antenna and cable, then whether the
+   APs there were switched off.
+3. The thresholds are `--tune suppress.*` ([[cli-reference]]); raise
+   them only for a segment known to be busier than the defaults assume.
+
+**Vendor fix:** not applicable; this is the sensor's own state.
+
+Sources: `docs/wiki/alerts.md`, `docs/wiki/coverage-assessment.md`
 ## Related pages
 
 - [[alerts]] — the engine and the rules

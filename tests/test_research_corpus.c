@@ -350,6 +350,7 @@ static void test_own_state_kinds_are_named(void) {
         "ALERT_TYPE_BT_OWN_TRANSMIT",   /* #144 slice 2 */
         "ALERT_TYPE_SENSOR_UNDERVOLT",  /* 2026-11-11, rules_sensor.c */
         "ALERT_TYPE_SENSOR_SOURCE_DOWN",/* 2026-11-11, rules_sensor.c */
+        "ALERT_TYPE_SENSOR_SUPPRESSED", /* #242 item 4, rules_sensor.c */
     };
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
         int found = 0;

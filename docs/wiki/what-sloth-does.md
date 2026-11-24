@@ -8,10 +8,10 @@ type: reference
 
 **Summary**: sloth is a terminal-based **passive** network monitor for
 Linux, C99. It reads what is already on the wire and in
-the air and surfaces it through <!-- count:views -->37<!-- /count --> views and <!-- count:rules -->100<!-- /count --> alert rules. Since the cutover
+the air and surfaces it through <!-- count:views -->37<!-- /count --> views and <!-- count:rules -->101<!-- /count --> alert rules. Since the cutover
 (#216, [ADR 0010](adr/0010-wifi-rf-daemons.md)) the sensor is two
 daemons: **`sloth-wifi`** (IP, 802.11, BLE and every view; `sloth` is a
-symlink to it), which raises <!-- count:rules-wifi -->95<!-- /count --> of the alert kinds, and the
+symlink to it), which raises <!-- count:rules-wifi -->96<!-- /count --> of the alert kinds, and the
 headless **`sloth-rf`** (ADS-B, APRS, rtl_433, Victron, the GNSS
 records), which raises <!-- count:rules-rf -->6<!-- /count -->; one kind is both's. It never
 injects a frame onto a network it monitors; everything else that uses
@@ -70,9 +70,9 @@ one binary had until #216 is gone.
 
 The **Dashboard** `[o]` tiles seven bands into one screen; see [[dashboard]].
 
-## What it decides (<!-- count:rules -->100<!-- /count --> alert rules)
+## What it decides (<!-- count:rules -->101<!-- /count --> alert rules)
 
-Which daemon decides what: `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds
+Which daemon decides what: `sloth-wifi` raises <!-- count:rules-wifi -->96<!-- /count --> of the kinds
 (everything from the capture, the monitor radio and BLE, the host's
 under-voltage, and a source of its own going down); `sloth-rf` raises
 <!-- count:rules-rf -->6<!-- /count --> (the four `GNSS_*`, `ADSB_EMERGENCY`, and a source of its own

@@ -8,11 +8,11 @@ type: reference
 
 **Summary**: a quiet site and a blind sensor give the same empty alert list. Each alert kind now declares what it reads (`include/sloth_alert_inputs.def`), and `cov_rule_status()` (`src/rule_coverage.c`) derives from that and from what the sensor has one of three statuses: `observable`, `partly`, `blind`, with one reason word. This page is the reference for the declaration and the derivation. It is receive-only: nothing here transmits or retunes a radio.
 
-**Status**: slices 1 and 2 of #242 and item 2, 2026-11-23. Built: the declaration for all <!-- count:rules -->100<!-- /count --> kinds, the derivation, and the output in the stream: both daemons derive the status each tick and write `rule_status` and `coverage` records and three counts on `sensor_health` (JSONL 2.8.0, § 4); and the per-interval coverage record, sloth-wifi's `coverage_interval` once a minute and a `coverage_intervals` row in sloth.db (JSONL 2.9.0, schema v18, § 6). **Not built yet**: a `--report` section, a view, and `SENSOR_SUPPRESSED`. sloth-mesh does not read the new records yet, and schema v18 needs a sloth-mesh change first: its slothweb accepts sloth.db up to v17 and refuses a v18 file whole, so `WEB_SDB_SCHEMA_MAX` 18 and a contract re-pin there must be installed before this sloth is ([[sqlite-schema]], v18).
+**Status**: slices 1 and 2 of #242 and item 2, 2026-11-23. Built: the declaration for all <!-- count:rules -->101<!-- /count --> kinds, the derivation, and the output in the stream: both daemons derive the status each tick and write `rule_status` and `coverage` records and three counts on `sensor_health` (JSONL 2.8.0, § 4); and the per-interval coverage record, sloth-wifi's `coverage_interval` once a minute and a `coverage_intervals` row in sloth.db (JSONL 2.9.0, schema v18, § 6). Item 4, `SENSOR_SUPPRESSED`, sloth-wifi's own-state alert for a sensor losing evidence while its sources read up, and the reason `suppressed` it puts on the rules it costs (§ 7). **Not built yet**: a `--report` section and a view. sloth-mesh does not read the new records yet, and schema v18 needs a sloth-mesh change first: its slothweb accepts sloth.db up to v17 and refuses a v18 file whole, so `WEB_SDB_SCHEMA_MAX` 18 and a contract re-pin there must be installed before this sloth is ([[sqlite-schema]], v18).
 
 **Sources**: `include/sloth_alert_inputs.def`; `src/rule_coverage.h`, `src/rule_coverage.c`; `src/rule_coverage_live.c`, `src/rule_coverage_capture.c`; `src/cov_interval.h`, `src/cov_interval.c`, `src/cov_interval_capture.c`, `src/wifi_chanhop.c` (`chanhop_slot_time_ms`), `src/capture/probe.c` (`mon_frame_class_totals`); `tests/test_rule_coverage.c`, `tests/test_rule_coverage_live.c`, `tests/test_cov_interval.c`; [[jsonl-schema]]; issue #242 (parent #241); US Army FM 2-0 (2004) 4-48, 4-51, 8-34; [[collection-cycle]].
 
-**Last updated**: 2026-11-23 (item 2 review: the v18 deploy order; overflowed channel time stays in the band totals; the sampler's clock), 2026-11-23 (item 2: § 6, the per-interval coverage record), 2026-11-23
+**Last updated**: 2026-11-23 (item 4: § 7, `SENSOR_SUPPRESSED` and the reason `suppressed`), 2026-11-23 (item 2 review: the v18 deploy order; overflowed channel time stays in the band totals; the sampler's clock), 2026-11-23 (item 2: § 6, the per-interval coverage record), 2026-11-23
 
 ---
 
@@ -67,11 +67,12 @@ A corroborating input that a rule can use and does not need (the wired check of 
 | `blind` | `no_db` | the rule reads history and there is no database |
 | `blind` | `band` | an 802.11 rule about a band that no radio is in |
 | `partly` | `source_stale` | the input is up and has delivered nothing lately |
+| `partly` | `suppressed` | a `SENSOR_SUPPRESSED` incident is open on the rule's input, or on a frame class of its evidence (§ 7) |
 | `partly` | `fixed_channel` | an 802.11 rule, and the radios are not retuned |
 | `partly` | `hop` | an 802.11 rule whose shape is not `state`, with more channels than radios |
 | `observable` | (none) | none of the above |
 
-When several apply, the first row in this table is the one reported, so the reason names the first thing to fix.
+When several apply, the first row in this table is the one reported, so the reason names the first thing to fix. The reason words are appended only (they are on the stream), so `suppressed` is last in `cov_reason_t` and ranked in this table where it is: a loss the sensor measured now says more than what follows from its channel plan.
 
 Two cases from the tests:
 
@@ -106,7 +107,7 @@ One hopping radio on the default list with no IP capture, no BLE and nothing des
 - **The status is about the sensor, not the site.** `observable` with no finding is "looked and found nothing". It is not "nothing is there".
 - **The declaration is written by hand** from the rule functions. A test holds its form, its order and the number of kinds on each input; it cannot prove that a row matches its rule. A change to a rule's inputs changes its row in the same commit.
 - **`source_stale` follows the source row**: 60 s with nothing received. On a quiet BLE or GNSS source that can be the site and not a fault; the word says only that nothing arrived.
-- **Frame classes are declared and not used by the derivation.** The derivation reads the input, the band, the shape and the needs. The coverage record (§ 6) counts the frames of each class a minute; a status that reads "no frame of this class was received" is not built.
+- **Frame classes are used only for `suppressed`.** Otherwise the derivation reads the input, the band, the shape and the needs. The coverage record (§ 6) counts the frames of each class a minute; a status that reads "no frame of this class was received" is not built.
 - `fixed_channel` is reported for every 802.11 rule when the radios do not hop, also on a site whose own access points are all on that channel.
 
 ## 6. The per-interval coverage record
@@ -124,6 +125,32 @@ The status says which rules can fire. The record says what the sensor did in the
 **A `--replay` run writes no record.** The file's frames arrive as fast as it reads, so a minute of host time holds an arbitrary slice of the file, and there is no radio to dwell. `tests/replay/golden.jsonl` is therefore unchanged by this record.
 
 **Kept** on the observation tier of [[retention]]: a row qualifies a minute of observations and expires with them (30 days by default), and the size ceiling may take it.
+
+## 7. SENSOR_SUPPRESSED
+
+#242 item 4. `SENSOR_SOURCE_DOWN` says a source stopped. This says a source is delivering and the sensor is still losing what it delivers (`rule_sensor_suppressed()`, `src/alerts/rules_sensor.c`; sloth-wifi's rule table only). An own-state kind, the first exemption form of "Detectors cite their sources": no technique, no adversary claimed. Three signals, each judged over one minute (`COV_IV_MS`), each its own incident at WARN:
+
+| Signal | Key | Over the minute | Default |
+|---|---|---|---|
+| table evictions | `suppressed:evict` | one synthesis table's `sh_evict_count()` rose by at least `suppress.evict_per_min`. The six flow rings and `evidence_frame` are not judged (they roll over on a working sensor by design), nor `alert`, `pcap_cooldown` or `rtl433` | 600 |
+| capture drops | `suppressed:drop` | a handle (the monitor radio's or `--iface`'s) dropped `ps_drop + ps_ifdrop` of at least `suppress.drop_pct` percent of its `ps_recv`, and at least `suppress.drop_min` frames | 1 %, 100 |
+| a silent channel | `suppressed:silent` | from the `coverage_interval` records (§ 6): a channel visited with no frame for `suppress.silent_intervals` intervals in a row, while another visited channel of its band heard frames in each, after it heard frames earlier in the run. Always empty, the whole band quiet, or not visited: not this signal | 3 |
+
+**Thresholds.** No source gives any of them. Each is set well above what the reference sensor (Beta-Site) does, measured on its live stream for 115 s on 2026-11-23 (`sensor_health`, differenced): the busiest synthesis table, `frag_sta`, evicted 0.70 a second (42 a minute; `ble_device` 0.14, `ble_flood` 0.03, every other table 0); `evidence_frame` 143 a second, which is why it is not judged; neither handle had dropped a frame in its lifetime (capture 3.08 M received, monitor 439 k); the hopper reported no silent channel of its 11, at about 170 frames a visit. The baseline is written beside the defaults in `src/alerts.h`; each is a `--tune` knob ([[cli-reference]]).
+
+**Lifecycle.** A signal opens at the end of the first minute over its threshold, is re-asserted every tick until a minute ends under it, and closes with the reason `recovered` once it has been under for 120 s without a break (`SENSOR_RECOVER_S`, the hold `SENSOR_SOURCE_DOWN` uses). The detail names the worst table, the handle or the channel, and the threshold passed, never the minute's own count. Nothing is judged on a `--replay`.
+
+**What it does to the statuses.** While an incident is open, the capture side's filler copies what it suppresses into `cov_env_t` (`suppressed`, a bit per input; `suppressed_frames`, `COV_F_*`), and every kind it reaches reads `partly`, `suppressed`; `cov_rule_status()` stays a pure function of the environment. What each signal reaches:
+
+- **evictions**: the evicting table's evidence, mapped per table in `evict_scope()`: the probe tables (`probe_client`, `pnl_*`) probe requests, `probe_latency` probe requests and beacons, `beacon_ap` beacons, the association tables association frames, the EAP, EAPOL, WPS and RADIUS-posture tables EAPOL, the deauth tables deauthentications, the FragAttacks, PM and queue tables data frames; `seqnum_client` and `rf_channel` every 802.11 kind; `device` the 802.11 and IP kinds; the wired tables every IP kind; the BLE tables every BLE advertising kind;
+- **drops**: every kind on the handle's input (802.11 for the monitor radio, and for `--iface` when it is itself in monitor mode; IP otherwise);
+- **a silent channel**: every 802.11 kind.
+
+The status follows the incident one tick late: the health stage that derives it runs before the rules.
+
+Tests: `tests/test_sensor_suppressed.c` (a thousand hand-built probe requests through the monitor callback fill the probe-client, probe-latency and sequence-number tables and raise it; recovery; drops; a silent channel; the absences, each seen red under a mutation), `tests/test_rule_coverage.c :: test_suppressed`, `tests/test_rule_coverage_live.c :: test_suppressed_reaches_the_statuses`.
+
+**Not covered.** The further `--monitor-iface` radios' drops (they take no `pcap_stats()` sample, § 6). An eviction tally that does not exist: a table with no `evict_*` field loses rows unmeasured (`src/sensor_health.h` lists them).
 
 ## Related pages
 

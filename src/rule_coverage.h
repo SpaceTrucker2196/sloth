@@ -119,6 +119,15 @@ typedef struct {
     int      channels;  /* distinct channels over all their plans */
     int      hopping;   /* a radio is retuned on a schedule */
     unsigned config;    /* COV_N_* the operator has configured */
+    /* What SENSOR_SUPPRESSED holds open (#242 item 4): collection the
+     * sensor knows it is losing while the input still reads up. A kind
+     * reads `partly`, `suppressed` when its input's bit
+     * (1u << cov_input_t) is in `suppressed`, or when it is an 802.11
+     * kind any of whose frame classes is in `suppressed_frames` (a
+     * table that holds that evidence is evicting). Filled by the
+     * capture side from the open incidents; 0 = none. */
+    unsigned suppressed;
+    unsigned suppressed_frames;   /* COV_F_* */
 } cov_env_t;
 
 typedef enum {
@@ -140,13 +149,17 @@ typedef enum {
     COV_R_SOURCE_STALE,   /* partly: nothing received lately */
     COV_R_FIXED_CHANNEL,  /* partly: the radios are not retuned */
     COV_R_HOP,            /* partly: off the channel for part of the evidence */
+    COV_R_SUPPRESSED,     /* partly: SENSOR_SUPPRESSED is open on its evidence */
     COV_R_COUNT
 } cov_reason_t;
 
 /* The status of `t` under `env`. `why` (may be NULL) receives the
  * reason, COV_R_NONE when observable. A blind reason is reported in
  * preference to a partly one, and in the order of the enum, so the
- * first thing to fix is the one named. Out of range or NULL env:
+ * first thing to fix is the one named - except `suppressed`, appended
+ * last because the words are appended only, and ranked after
+ * `source_stale` and before `fixed_channel` and `hop`: a loss the
+ * sensor measured now says more than one that follows from its plan. Out of range or NULL env:
  * COV_BLIND with COV_R_NO_SOURCE. */
 cov_status_t cov_rule_status(alert_type_t t, const cov_env_t *env,
                              cov_reason_t *why);

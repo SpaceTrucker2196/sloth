@@ -14,6 +14,8 @@
 #include "db.h"
 #include "ownership.h"
 #include "rule_coverage_live.h"
+#include "alerts.h"
+#include "sensor_health.h"
 
 /*
  * Coverage assessment, the running half (#242 slice 2): the environment
@@ -224,10 +226,10 @@ static void test_no_radio_no_capture(void) {
 
     int ob, pa, bl;
     cov_live_counts(&ob, &pa, &bl);
-    ASSERT_EQ(ob + pa + bl, 95);
+    ASSERT_EQ(ob + pa + bl, 96);
     ASSERT_EQ(pa, 0);
-    /* 5 host kinds and the 2 sampler kinds; 58 + 26 + 4 BLE are blind. */
-    ASSERT_EQ(ob, 7);
+    /* 5 host kinds and the 3 sampler kinds; 58 + 26 + 4 BLE are blind. */
+    ASSERT_EQ(ob, 8);
     ASSERT_EQ(bl, 88);
     end();
 }
@@ -327,7 +329,7 @@ static void test_records_baseline_then_change_only(void) {
     cov_live_emit();
     const char *out = sink_read();
     /* The baseline: every kind this daemon raises, and the summary. */
-    ASSERT_EQ(count_of(out, "{\"type\":\"rule_status\""), 95);
+    ASSERT_EQ(count_of(out, "{\"type\":\"rule_status\""), 96);
     ASSERT_EQ(count_of(out, "{\"type\":\"coverage\""), 1);
     ASSERT(strstr(out, "\"ty\":18,\"kind\":\"EVIL_TWIN\",\"status\":\"observable\","
                        "\"why\":\"\",\"input\":\"dot11\"") != NULL);
@@ -336,7 +338,7 @@ static void test_records_baseline_then_change_only(void) {
     ASSERT(strstr(out, "\"kind\":\"DFS_MASKING\",\"status\":\"blind\","
                        "\"why\":\"band\"") != NULL);
     ASSERT(strstr(out, "\"kind\":\"GNSS_JAMMING\"") == NULL);
-    ASSERT(strstr(out, "\"daemon\":\"wifi\",\"rules\":95,") != NULL);
+    ASSERT(strstr(out, "\"daemon\":\"wifi\",\"rules\":96,") != NULL);
     ASSERT(strstr(out, "\"radios\":1,\"channels\":11,\"hopping\":1,"
                        "\"bands\":\"2.4,5\"") != NULL);
 
@@ -347,7 +349,7 @@ static void test_records_baseline_then_change_only(void) {
     tick();
     cov_live_emit();
     out = sink_read();
-    ASSERT_EQ(count_of(out, "\"type\":\"rule_status\""), 95);
+    ASSERT_EQ(count_of(out, "\"type\":\"rule_status\""), 96);
     ASSERT_EQ(count_of(out, "\"type\":\"coverage\""), 1);
 
     /* The radio goes: the 58 802.11 kinds are rewritten, no other. */
@@ -357,7 +359,7 @@ static void test_records_baseline_then_change_only(void) {
     tick();
     cov_live_emit();
     out = sink_read();
-    ASSERT_EQ(count_of(out, "\"type\":\"rule_status\""), 95 + 58);
+    ASSERT_EQ(count_of(out, "\"type\":\"rule_status\""), 96 + 58);
     ASSERT_EQ(count_of(out, "\"status\":\"blind\",\"why\":\"source_down\""), 58);
     ASSERT_EQ(count_of(out, "\"type\":\"coverage\""), 2);
     end();
@@ -385,12 +387,43 @@ static void test_sensor_health_counts(void) {
     out = sink_read();
     ASSERT(strstr(out, want) != NULL);
     /* One hopping radio on the default list, no capture, no BLE, no
-     * designation: the 7 host and sampler kinds and the 16 beacon-state
+     * designation: the 8 host and sampler kinds and the 16 beacon-state
      * kinds that need nothing more; the 37 other 802.11 kinds; and the
      * 26 IP, 4 BLE, 4 unconfigured and 1 DFS kinds. */
-    ASSERT_EQ(ob, 23);
+    ASSERT_EQ(ob, 24);
     ASSERT_EQ(pa, 37);
     ASSERT_EQ(bl, 35);
+    end();
+}
+
+/* ── SENSOR_SUPPRESSED (#242 item 4) ─────────────────────────────── */
+
+/* The capture filler reads the open incidents: a beacon table evicting
+ * past the threshold makes the beacon rules `partly`, `suppressed` on
+ * the next tick, and their rule_status rows say so; the rules that read
+ * other frames keep their own reason. Seen red with the
+ * rules_sensor_suppressed() call left out of cov_capture_fill(). */
+static void test_suppressed_reaches_the_statuses(void) {
+    begin();
+    alerts_clear();
+    sh_evict_reset();
+    monitor_up();
+    hop_default();
+    tick();
+    alerts_update(&g_s);
+    ASSERT(status_is(ALERT_TYPE_EVIL_TWIN, COV_OBSERVABLE, COV_R_NONE));
+    for (int i = 0; i < 700; i++) sh_evict_note(SH_EVICT_BEACON_AP);
+    for (int i = 0; i < 61; i++) { tick(); alerts_update(&g_s); }
+    ASSERT(status_is(ALERT_TYPE_EVIL_TWIN, COV_PARTLY, COV_R_SUPPRESSED));
+    ASSERT(status_is(ALERT_TYPE_HANDSHAKE_HARVEST, COV_PARTLY, COV_R_HOP));
+    ASSERT(status_is(ALERT_TYPE_SENSOR_SUPPRESSED, COV_OBSERVABLE, COV_R_NONE));
+    sink_open();
+    cov_live_emit();
+    const char *out = sink_read();
+    ASSERT(strstr(out, "\"kind\":\"EVIL_TWIN\",\"status\":\"partly\","
+                       "\"why\":\"suppressed\",\"input\":\"dot11\"") != NULL);
+    alerts_clear();
+    sh_evict_reset();
     end();
 }
 
@@ -432,5 +465,6 @@ void run_rule_coverage_live_tests(void) {
     RUN_TEST(test_replay_is_not_assessed);
     RUN_TEST(test_records_baseline_then_change_only);
     RUN_TEST(test_sensor_health_counts);
+    RUN_TEST(test_suppressed_reaches_the_statuses);
     RUN_TEST(test_rf_daemon_has_its_own_six);
 }

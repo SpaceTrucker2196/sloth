@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-20 (#232: `EVIL_TWIN`'s weak/strong branch demotes a dual-band sibling, a malformed-IE weak half and a weak label read off fewer than `twin.crit_min_beacons` beacons; beacon-table `enc` is upgrade-only). 2026-11-18 (`SENSOR_SOURCE_DOWN` skips a `not_installed` row, sloth-rf's decoder input trimmed at startup with no SDR on USB). 2026-11-17 (#227: `EVIL_TWIN` deducts 35 for two locally administered guest VAPs of one vendor's mesh, `+mesh VAP`, and counts a late arrival only against an original heard at least once a minute). 2026-11-15 (#216, the cutover: two rule tables, not a table and a subsequence of it; `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; the `GNSS_*` rules and `ADSB_EMERGENCY` are `sloth-rf`'s alone). 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
+**Last updated**: 2026-11-23 (#242 item 4: `SENSOR_SUPPRESSED`, the sensor losing evidence while its sources read up: table evictions, capture drops or a silent channel, `sloth-wifi` only, WARN, `--tune suppress.*`; see "The sensor's own state" below and [[coverage-assessment]] § 7). 2026-11-20 (#232: `EVIL_TWIN`'s weak/strong branch demotes a dual-band sibling, a malformed-IE weak half and a weak label read off fewer than `twin.crit_min_beacons` beacons; beacon-table `enc` is upgrade-only). 2026-11-18 (`SENSOR_SOURCE_DOWN` skips a `not_installed` row, sloth-rf's decoder input trimmed at startup with no SDR on USB). 2026-11-17 (#227: `EVIL_TWIN` deducts 35 for two locally administered guest VAPs of one vendor's mesh, `+mesh VAP`, and counts a late arrival only against an original heard at least once a minute). 2026-11-15 (#216, the cutover: two rule tables, not a table and a subsequence of it; `sloth-wifi` raises <!-- count:rules-wifi -->96<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; the `GNSS_*` rules and `ADSB_EMERGENCY` are `sloth-rf`'s alone). 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
 ---
@@ -30,7 +30,7 @@ type: reference
   | `rules_enterprise.c` | rogue RADIUS, PEAP without a server certificate, the three WPS verdicts |
   | `rules_gnss.c` | the `--gps` receiver's own inputs: GNSS jamming, spoofing suspect, time and position jumps. `sloth-rf`'s since the cutover |
   | `rules_adsb.c` | `ADSB_EMERGENCY`, read off the ADS-B table. `sloth-rf`'s |
-  | `rules_sensor.c` | the sensor's own state: `SENSOR_UNDERVOLT` (`sloth-wifi` only) and `SENSOR_SOURCE_DOWN` (each daemon, for the sources it reports) |
+  | `rules_sensor.c` | the sensor's own state: `SENSOR_UNDERVOLT` and `SENSOR_SUPPRESSED` (`sloth-wifi` only) and `SENSOR_SOURCE_DOWN` (each daemon, for the sources it reports) |
   | `rules_mle.c` | the 802.11be Multi-Link Element rules: five keyed by MLD MAC, two by BSSID (#104) |
 
   `src/alerts.h` is the public API and did not change.
@@ -40,9 +40,9 @@ type: reference
   the selected table, in order. There are two tables since the cutover
   (#216), one per daemon. `sloth-wifi` selects `g_alert_table_wifi`
   (`src/alerts/rules_table.c`, through `capture_side_install()`): every
-  rule of the capture, the monitor radio and BLE, `SENSOR_UNDERVOLT`
-  and `SENSOR_SOURCE_DOWN`, 88 rows that raise
-  <!-- count:rules-wifi -->95<!-- /count --> of the kinds. `sloth-rf` selects `g_alert_table_rf`
+  rule of the capture, the monitor radio and BLE, `SENSOR_UNDERVOLT`,
+  `SENSOR_SOURCE_DOWN` and `SENSOR_SUPPRESSED`, 89 rows that raise
+  <!-- count:rules-wifi -->96<!-- /count --> of the kinds. `sloth-rf` selects `g_alert_table_rf`
   (`src/alerts/rules_table_rf.c`, through `rf_side_install()`): the
   four GNSS rules, `ADSB_EMERGENCY` and `SENSOR_SOURCE_DOWN`,
   <!-- count:rules-rf -->6<!-- /count --> kinds, and not `SENSOR_UNDERVOLT` (owner ruling 2026-11-15).
@@ -732,6 +732,7 @@ the exemption in `agents/AGENTS.md`, *Detectors cite their sources*):
 | `BT_OWN_TRANSMIT` | WARN | the Bluetooth host controller sloth listens through (`--bt-monitor`, or a DLT 254 replay) was told by the host stack to transmit and is still on, or was told within 120 s: an LE scan configured or enabled **active** (it sends SCAN_REQ), Inquiry or Periodic Inquiry, legacy / extended / periodic advertising enabled, LE or BR/EDR Create Connection, Remote Name Request, or Write Scan Enable with inquiry or page scan on (#144 slice 2) |
 | `SENSOR_UNDERVOLT` | WARN | the host's under-voltage alarm (an hwmon `inN_lcrit_alarm`; the Raspberry Pi firmware's flag) reads 1 |
 | `SENSOR_SOURCE_DOWN` | WARN, CRIT for `monitor` and `capture` | a configured source reads `down` for 10 s, or not `ok` for 300 s |
+| `SENSOR_SUPPRESSED` | WARN | over one minute: a synthesis table evicted `suppress.evict_per_min` (600) rows or more, a capture handle dropped `suppress.drop_pct` (1 %) of what it received and at least `suppress.drop_min` (100) frames, or a channel once heard has been silent `suppress.silent_intervals` (3) coverage intervals while its band is heard (#242 item 4, `sloth-wifi` only) |
 
 `BT_OWN_TRANSMIT` is **bucketed, not latched**, on two clocks. The
 persistent kinds — advertising (legacy, extended, periodic), inquiry or
@@ -802,6 +803,27 @@ it reports: `sloth-wifi` for `capture`, `monitor`, `btmon`, `btcap` and
 A decoder that is down is therefore `sloth-rf`'s incident alone, and a
 receiver that is down is one in each stream, with one key
 (`srcdown:gnss`), which slothweb shows once.
+
+**`SENSOR_SUPPRESSED`** (#242 item 4, `rule_sensor_suppressed()` in
+`src/alerts/rules_sensor.c`, `sloth-wifi` only): a source still reads
+up and the sensor is losing what it delivers. Three signals, each judged
+over one minute (the coverage record's interval) and each its own
+incident, WARN, held and closed `recovered` like the two above:
+`suppressed:evict`, a synthesis table's eviction tally (not the flow
+rings or `evidence_frame`, which roll over on a working sensor by
+design) rose by `suppress.evict_per_min` or more; `suppressed:drop`, the
+monitor or `--iface` handle dropped `suppress.drop_pct` percent of its
+`ps_recv` and at least `suppress.drop_min` frames; `suppressed:silent`,
+a visited channel that had been heard went `suppress.silent_intervals`
+coverage intervals without a frame while another channel of its band was
+heard in each. No source gives the thresholds; each sits well above
+what the reference sensor measured (2026-11-23: its busiest table 42
+evictions a minute, no drops, no silent channel), and the figures are in
+`src/alerts.h` and [[coverage-assessment]] § 7. While it is open, the
+rules whose evidence it costs read `partly`, `suppressed` in
+`rule_status`. Never on `--replay`. Own operational state, the first
+exemption form: a flood, a jammer, a busy segment and a slow host all
+look the same here, and the rule does not guess which.
 
 Both details are on slothweb's audited list since 2026-11-12
 (`web/src/web_alertfmt.c`), so its Alerts view shows them rather than

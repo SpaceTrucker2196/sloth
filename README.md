@@ -25,7 +25,7 @@ default run originates no network traffic at all. Both of those are opt-in behin
 `--allow-active`, which announces itself on stderr; optional telemetry (`-o file.jsonl`,
 `--data-socket`) carries observations to a consumer you configured, over a path you
 configured, never to the segment being watched. It observes what your host already
-sees and turns it into **<!-- count:views -->37<!-- /count --> live views** and **<!-- count:rules -->100<!-- /count --> passive
+sees and turns it into **<!-- count:views -->37<!-- /count --> live views** and **<!-- count:rules -->101<!-- /count --> passive
 alert rules**, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
 capture, hidden-SSID reveal, scored seqnum correlation across MAC rotations),
@@ -37,7 +37,7 @@ the terminal; `sloth` is a symlink to it, the same program under its old name �
 **`sloth-rf`**, a headless daemon that reads the SDR decoders an operator already runs
 (ADS-B, APRS, rtl_433, Victron) and writes the GNSS records. Both are passive; neither
 needs the other. The views are `sloth-wifi`'s. Of the alert kinds, `sloth-wifi` raises
-<!-- count:rules-wifi -->95<!-- /count --> and `sloth-rf`
+<!-- count:rules-wifi -->96<!-- /count --> and `sloth-rf`
 <!-- count:rules-rf -->6<!-- /count --> (one, `SENSOR_SOURCE_DOWN`, is both's). slothweb
 reads both.
 
@@ -373,7 +373,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 
 ## Alerts
 
-**<!-- count:rules -->100<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). Every rule has a cited assessment in [`docs/wiki/alert-assessments/`](docs/wiki/alert-assessments/README.md). The list is one for both daemons, and each runs its own part: `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and feeds `VIEW_ALERTS`; `sloth-rf` raises <!-- count:rules-rf -->6<!-- /count --> — the four that watch the `--gps` receiver (`GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, [`docs/wiki/gnss.md`](docs/wiki/gnss.md)), the one that flags an `--adsb` aircraft declaring an emergency, flag only (`ADSB_EMERGENCY`, [`docs/wiki/adsb.md`](docs/wiki/adsb.md)), and `SENSOR_SOURCE_DOWN` for its own sources, which `sloth-wifi` raises for its own too. `sloth-rf` has no terminal: its alerts are read in slothweb. With `--db`, every incident of a finding is its own `alert_incidents` row (schema v11). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
+**<!-- count:rules -->101<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). Every rule has a cited assessment in [`docs/wiki/alert-assessments/`](docs/wiki/alert-assessments/README.md). The list is one for both daemons, and each runs its own part: `sloth-wifi` raises <!-- count:rules-wifi -->96<!-- /count --> of the kinds and feeds `VIEW_ALERTS`; `sloth-rf` raises <!-- count:rules-rf -->6<!-- /count --> — the four that watch the `--gps` receiver (`GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, [`docs/wiki/gnss.md`](docs/wiki/gnss.md)), the one that flags an `--adsb` aircraft declaring an emergency, flag only (`ADSB_EMERGENCY`, [`docs/wiki/adsb.md`](docs/wiki/adsb.md)), and `SENSOR_SOURCE_DOWN` for its own sources, which `sloth-wifi` raises for its own too. `sloth-rf` has no terminal: its alerts are read in slothweb. With `--db`, every incident of a finding is its own `alert_incidents` row (schema v11). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
 
 Six of them, as a sample of the shape:
 

@@ -204,4 +204,13 @@ void rule_adsb_emergency(const sloth_state_t *s, time_t now);
 #define SENSOR_SRC_STALE_S      300   /* not `ok` this long opens */
 void rule_sensor_undervolt(const sloth_state_t *s, time_t now);
 void rule_sensor_source_down(const sloth_state_t *s, time_t now);
+/* SENSOR_SUPPRESSED (#242 item 4): sloth-wifi's table only - it reads
+ * the capture handles' counters, the synthesis tables' eviction tally
+ * and the per-interval coverage record, none of which sloth-rf has. */
+void rule_sensor_suppressed(const sloth_state_t *s, time_t now);
+/* What its open incidents say the sensor is losing, for the coverage
+ * environment (src/rule_coverage_capture.c): `inputs` gets
+ * 1u << cov_input_t of each input a signal suppresses, `frames` the
+ * COV_F_* classes of an evicting 802.11 table. 0 and 0 with none open. */
+void rules_sensor_suppressed(unsigned *inputs, unsigned *frames);
 #endif

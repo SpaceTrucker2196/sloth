@@ -137,8 +137,9 @@ static void test_gnss_and_adsb_rules_are_the_rf_tables_alone(void) {
         ASSERT(g_alert_table_wifi.rules[at].fn == g_alert_table_rf.rules[i].fn);
     }
     ASSERT_EQ(shared, 1);
-    /* 93 rows before the cutover, less these five. */
-    ASSERT_EQ(g_alert_table_wifi.count, 88);
+    /* 93 rows before the cutover, less these five, and
+     * rule_sensor_suppressed (#242 item 4). */
+    ASSERT_EQ(g_alert_table_wifi.count, 89);
     /* Neither table drops the other's history. */
     for (int i = 0; i < g_alert_table_wifi.forget_count; i++)
         ASSERT(g_alert_table_wifi.forget[i] != rules_gnss_forget &&

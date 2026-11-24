@@ -381,3 +381,14 @@ X(HANDSHAKE_HARVEST, "T1040") /* Network Sniffing (deauth-driven 4-way handshake
 X(SENSOR_UNDERVOLT, "") /* own operational state (first exemption form) */
 /* a source the command line configured (source_status) is down, or stale past SENSOR_SRC_STALE_S */
 X(SENSOR_SOURCE_DOWN, "") /* own operational state (first exemption form) */
+/* The sensor's own collection being degraded while its sources still
+ * read up (#242 item 4, src/alerts/rules_sensor.c): a synthesis table
+ * evicting faster than this sensor's measured baseline, a capture
+ * handle dropping a share of what it received, or a visited channel
+ * gone silent while the rest of its band is heard. The FIRST exemption
+ * form again (agents/AGENTS.md): own operational state, no adversary
+ * claimed (a flood or a jammer can cause any of the three, a busy
+ * segment or a fault can too), nothing to cite; pinned by
+ * tests/test_research_corpus.c :: test_own_state_kinds_are_named. */
+/* a table evicting above suppress.evict_per_min, drops above suppress.drop_pct of received, or a channel silent suppress.silent_intervals intervals while its band is heard */
+X(SENSOR_SUPPRESSED, "") /* own operational state (first exemption form) */

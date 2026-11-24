@@ -626,4 +626,19 @@ int alerts_wps_pin_brute_cycles(void);
 int alerts_wps_lockout_cycles(void);
 int alerts_wps_pbc_concurrent(void);
 
+/* SENSOR_SUPPRESSED's thresholds (#242 item 4, src/alerts/rules_sensor.c,
+ * --tune suppress.*). No source gives any of them: each is set well
+ * above what the reference sensor (Beta-Site) measured on 2026-11-23,
+ * and the measurement is written beside each. Over a 115 s look at its
+ * live stream: the busiest synthesis table, frag_sta, evicted 0.70/s
+ * (42 a minute; ble_device 0.14/s, ble_flood 0.03/s, every other table
+ * 0); both capture handles dropped nothing (capture 3.08M received,
+ * monitor 439k, ps_drop and ps_ifdrop 0 lifetime); the hopper reported
+ * no silent channel of its 11 (hop_silent_channels 0, about 170 frames
+ * a visit). */
+#define SUPPRESS_EVICT_PER_MIN_DEFAULT   600  /* one table; ~14x frag_sta's 42 */
+#define SUPPRESS_DROP_PCT_DEFAULT          1  /* of received, over a minute; measured 0 */
+#define SUPPRESS_DROP_MIN_DEFAULT        100  /* drops in that minute, at least */
+#define SUPPRESS_SILENT_INTERVALS_DEFAULT  3  /* consecutive coverage intervals */
+
 #endif /* ALERTS_H */

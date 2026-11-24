@@ -57,7 +57,7 @@ the Wi-Fi it watches:
 
 ## Engines
 
-- [[alerts]] — alert engine internals and the <!-- count:rules -->100<!-- /count --> rules, and which daemon raises which (`sloth-wifi` <!-- count:rules-wifi -->95<!-- /count --> of the kinds, `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->).
+- [[alerts]] — alert engine internals and the <!-- count:rules -->101<!-- /count --> rules, and which daemon raises which (`sloth-wifi` <!-- count:rules-wifi -->96<!-- /count --> of the kinds, `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->).
 - [[alert-remediation]] — how to investigate and fix every alert type, each step grounded in the research corpus; shown on slothweb's alert detail page.
 - [Alert assessments](alert-assessments/README.md) — one cited research assessment per alert type (the types not yet assessed are listed on that page): what the rule checks (file:line), how its count accumulates, the evidence that proves or refutes a firing, benign causes, severity and false-positive judgements, a noise verdict against reference-host firing data, and a bibliography; the material for the alert detail page.
 - [[beacon-detection]] — periodicity detector for C2 / implants.

@@ -217,6 +217,12 @@ typedef enum {
     /* #239: the --db purge of random addresses that did not repeat.
        Retention, not a detector threshold — see the row in tune.c. */
     TUNE_RETENTION_RANDOM_REPEAT_S,
+    /* #242 item 4: SENSOR_SUPPRESSED's three signals. Defaults measured
+       on the reference sensor, not cited: see src/alerts.h. */
+    TUNE_SUPPRESS_EVICT_PER_MIN,
+    TUNE_SUPPRESS_DROP_PCT,
+    TUNE_SUPPRESS_DROP_MIN,
+    TUNE_SUPPRESS_SILENT_INTERVALS,
     TUNE_COUNT
 } tune_id_t;
 

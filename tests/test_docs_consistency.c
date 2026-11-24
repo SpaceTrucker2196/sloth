@@ -512,10 +512,10 @@ static int dc_table_rows(const char *path, const char *only_missing_from) {
 
 static void test_counts_say_which_binary(void) {
     ASSERT_EQ((int)VIEW_COUNT, 37);
-    ASSERT_EQ((int)ALERT_TYPE_COUNT, 100);
-    ASSERT_EQ(dc_wifi_kinds(), 95);
+    ASSERT_EQ((int)ALERT_TYPE_COUNT, 101);
+    ASSERT_EQ(dc_wifi_kinds(), 96);
     ASSERT_EQ(dc_rf_kinds(), 6);
-    /* The one kind both raise is why 95 + 6 is not 100. */
+    /* The one kind both raise is why 96 + 6 is not 101. */
     ASSERT_EQ(dc_wifi_kinds() + dc_rf_kinds(), (int)ALERT_TYPE_COUNT + 1);
 
     /* Every sloth-rf row is one kind, by name. */

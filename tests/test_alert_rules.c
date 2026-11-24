@@ -218,7 +218,10 @@ static void test_rule_order_dependencies(void) {
     ASSERT(rtsp >= 0);
     ASSERT_EQ(uv, rtsp + 1);
     ASSERT_EQ(down, uv + 1);
-    ASSERT_EQ(down, g_alert_rule_count - 1);
+    /* SENSOR_SUPPRESSED (#242 item 4) after the pair, last: it reads
+     * no other rule's output. */
+    ASSERT_EQ(ar_index("rule_sensor_suppressed"), down + 1);
+    ASSERT_EQ(down, g_alert_rule_count - 2);
 
     /* The posture rule_wpa_downgrade reads is derived before any rule
      * runs. Not a table row, so this reads alerts_update() itself. */
