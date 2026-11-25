@@ -184,6 +184,19 @@ typedef struct harvest_chain_s {
     uint8_t  qevict_sta[6];                    /* the newest of them */
 } harvest_chain_t;
 
+/* One (BSSID, victim) burst of at least HARVEST_DEAUTH_MIN distinct
+ * deauthentication / disassociation frames claimed from the AP, its
+ * last frame inside HARVEST_RECONNECT_S: the first half of the
+ * handshake-harvest shape, before any reconnect has been seen. What
+ * HANDSHAKE_HARVEST reports as first evidence (#245). */
+typedef struct harvest_burst_s {
+    uint8_t  bssid[6];
+    uint8_t  victim[6];                        /* or broadcast */
+    int      frames;                           /* distinct, this burst */
+    uint64_t ev[HARVEST_EV_IDS];
+    int      ev_n;
+} harvest_burst_t;
+
 /* A (re)association request from `sta` to `bssid`. Opens the station's
  * row: nothing else does. */
 void harvest_note_assoc_req(const uint8_t sta[6], const uint8_t bssid[6]);
@@ -226,9 +239,9 @@ int harvest_posture_psk(const uint8_t bssid[6], uint32_t akm_bits);
 void harvest_note_deauth(const uint8_t bssid[6], const uint8_t src[6],
                          const uint8_t victim[6], uint64_t ev);
 
-/* Age out and publish: points s->harvest_sta / s->harvest_chain at this
- * module's per-poll copies (pointers, for the stack reason
- * s->karma_forge is one). */
+/* Age out and publish: points s->harvest_sta / s->harvest_chain /
+ * s->harvest_burst at this module's per-poll copies (pointers, for the
+ * stack reason s->karma_forge is one). */
 void harvest_snapshot(sloth_state_t *s);
 /* The published row of cluster `id` (this poll's copies), NULL when no
  * live row has it: the EAPOL view's [g] summary. Poll thread. */

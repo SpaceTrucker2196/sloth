@@ -73,6 +73,7 @@ static queue_evict_t   g_qe[MAX_QUEUE_EVICT_ENTRIES];
  * harvest_snapshot() on the poll thread, which is also the reader. */
 static harvest_sta_t   g_sta_copy[HARVEST_MAX_STA];
 static harvest_chain_t g_chain_copy[HARVEST_MAX_CHAIN];
+static harvest_burst_t g_burst_copy[HARVEST_MAX_DEAUTH];
 
 static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
     return memcmp(a, b, 6) == 0;
@@ -482,6 +483,22 @@ void harvest_snapshot(sloth_state_t *s) {
         else
             i++;
     }
+    /* The notes that could still explain a reconnect: the bursts
+     * (#245). The same test deauth_explaining() applies, but for any
+     * station. */
+    int n_burst = 0;
+    for (i = 0; i < g_dn_n; i++) {
+        const deauth_note_t *d = &g_dn[i];
+        if (d->frames < HARVEST_DEAUTH_MIN) continue;
+        harvest_burst_t *o = &g_burst_copy[n_burst++];
+        memcpy(o->bssid, d->bssid, 6);
+        memcpy(o->victim, d->victim, 6);
+        o->frames = d->frames;
+        o->ev_n = d->ev_n;
+        memcpy(o->ev, d->ev, sizeof o->ev);
+    }
+    s->harvest_burst       = g_burst_copy;
+    s->harvest_burst_count = n_burst;
 
     /* Chain victims age out of the window, then empty rows. */
     i = 0;

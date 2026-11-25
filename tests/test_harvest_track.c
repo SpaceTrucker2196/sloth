@@ -1109,6 +1109,87 @@ static void test_pmkid_first_evidence_withdrawn(void) {
     hv_end();
 }
 
+/* Two deauths claimed from the AP and no reconnect yet: preliminary,
+ * LOW, under the chain's key; the victim's fresh M1/M2 then confirms
+ * the same incident at WARN. */
+static void test_deauth_burst_is_preliminary_then_confirmed(void) {
+    hv_begin();
+    static sloth_state_t s;
+    uint8_t b[6]; ap(b, 1);
+    hv_deauth_flags(PHONE, b, b, 0, 100, 7001);
+    hv_advance_ms(100);
+    hv_deauth_flags(PHONE, b, b, 0, 101, 7002);
+    hv_poll_keep(&s);
+    int i = hv_find_prelim(&s, ALERT_TYPE_HANDSHAKE_HARVEST);
+    ASSERT(i >= 0);
+    char iid[ALERT_INCIDENT_ID_LEN] = "";
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT_STR(s.alerts[i].key, "hsharvest:02:00:5e:00:01:01");
+        ASSERT(strstr(s.alerts[i].detail, "not evaluated: first evidence only - "
+                      "Handshake harvest BSSID 02:00:5e:00:01:01: 2 deauths "
+                      "claimed from the AP to 02:dd:00:00:00:01") != NULL);
+        ASSERT_EQ((int)s.alerts[i].evidence_id_count, 2);
+        snprintf(iid, sizeof iid, "%s", s.alerts[i].incident_id);
+    }
+    hv_advance_ms(3000);
+    hv_assoc_req(PHONE, b, 0);
+    hv_m1m2(PHONE, b, 5, 0);
+    hv_poll_keep(&s);
+    ASSERT(hv_find_prelim(&s, ALERT_TYPE_HANDSHAKE_HARVEST) < 0);
+    i = hv_find(&s, ALERT_TYPE_HANDSHAKE_HARVEST);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].state, (int)ALERT_STATE_CONFIRMED);
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT_STR(s.alerts[i].incident_id, iid);
+    }
+    hv_end();
+}
+
+/* One distinct frame (and its retransmission) is not first evidence.
+ * Seen red with handshake_prelim()'s frame test and the tracker's burst
+ * filter both dropped, then restored. */
+static void test_one_deauth_is_not_first_evidence(void) {
+    hv_begin();
+    static sloth_state_t s;
+    uint8_t b[6]; ap(b, 1);
+    hv_deauth_flags(PHONE, b, b, 0, 200, 0);
+    hv_deauth_flags(PHONE, b, b, FB_RETRY, 200, 0);
+    hv_poll_keep(&s);
+    ASSERT_EQ(s.harvest_burst_count, 0);
+    ASSERT(hv_find_prelim(&s, ALERT_TYPE_HANDSHAKE_HARVEST) < 0);
+    hv_end();
+}
+
+/* No reconnect: withdrawn, unconfirmed, at the 30 s window, both sides
+ * of the edge. */
+static void test_deauth_burst_withdrawn(void) {
+    hv_begin();
+    static sloth_state_t s;
+    uint8_t b[6]; ap(b, 1);
+    hv_deauth_flags(PHONE, b, b, 0, 100, 0);
+    hv_deauth_flags(PHONE, b, b, 0, 101, 0);
+    hv_poll_keep(&s);
+    ASSERT(hv_find_prelim(&s, ALERT_TYPE_HANDSHAKE_HARVEST) >= 0);
+    hv_advance_ms(29999);
+    hv_poll_keep(&s);
+    int i = hv_find_prelim(&s, ALERT_TYPE_HANDSHAKE_HARVEST);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].resolved, 0);
+    hv_advance_ms(1);
+    hv_poll_keep(&s);
+    i = -1;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_HANDSHAKE_HARVEST) i = k;
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].state, (int)ALERT_STATE_WITHDRAWN);
+        ASSERT_EQ((int)s.alerts[i].withdraw_why, (int)ALERT_WITHDRAW_UNCONFIRMED);
+    }
+    hv_end();
+}
+
 void run_harvest_track_tests(void) {
     TEST_SUITE("PMKID / handshake harvesting (#172)");
     RUN_TEST(test_clientless_solicitation_warns);
@@ -1124,6 +1205,9 @@ void run_harvest_track_tests(void) {
     RUN_TEST(test_pmkid_first_evidence_is_preliminary_then_confirmed);
     RUN_TEST(test_pmkid_not_first_evidence);
     RUN_TEST(test_pmkid_first_evidence_withdrawn);
+    RUN_TEST(test_deauth_burst_is_preliminary_then_confirmed);
+    RUN_TEST(test_one_deauth_is_not_first_evidence);
+    RUN_TEST(test_deauth_burst_withdrawn);
     RUN_TEST(test_tables_are_bounded_and_keep_the_harvester);
     RUN_TEST(test_deauth_then_handshake_warns);
     RUN_TEST(test_two_victims_is_crit);

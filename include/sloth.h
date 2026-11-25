@@ -2068,6 +2068,7 @@ typedef struct {
 
 struct harvest_sta_s;     /* src/harvest_track.h (#172) */
 struct harvest_chain_s;
+struct harvest_burst_s;   /* #245: the deauth bursts not yet a chain */
 
 /* ── Rogue-RADIUS / EAP method tracking (#31) ────────────────
  * One row per BSSID seen running an 802.1X EAP conversation. Records
@@ -4280,6 +4281,8 @@ typedef struct {
     int                           harvest_sta_count;
     const struct harvest_chain_s *harvest_chain;
     int                           harvest_chain_count;
+    const struct harvest_burst_s *harvest_burst;   /* #245 */
+    int                           harvest_burst_count;
 
     /* Research-corpus coverage (#73 slice 3). */
     research_cov_t research_cov[MAX_RESEARCH_COV];

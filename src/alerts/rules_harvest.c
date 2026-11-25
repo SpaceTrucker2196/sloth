@@ -157,8 +157,44 @@ void rule_pmkid_harvest(const sloth_state_t *s, time_t now) {
  * The detail names the chain's cluster and, when a victim's queue was
  * released on this BSSID inside the window (QUEUE_EVICT), that victim:
  * the deauthentication that knocked it off is the session change that
- * route of Framing Frames waits for. Severity does not move. */
+ * route of Framing Frames waits for. Severity does not move.
+ *
+ * First evidence (#245): HARVEST_DEAUTH_MIN distinct deauthentication or
+ * disassociation frames claimed from the BSSID to one station (or to
+ * broadcast), before any reconnect, are reported preliminary, LOW, under
+ * the chain's key, at once: the first half of hcxdumptool's "Disconnecting
+ * a CLIENT ... to get a complete handshake". The window is
+ * HARVEST_RECONNECT_S' default, 30 s: the reconnect that would complete
+ * the shape comes inside it or the tracker forgets the burst.
+ * research/tools/hcxdumptool.md, "First evidence (#245)". A burst on a
+ * BSSID whose chain is already the finding changes nothing: the engine
+ * leaves a confirmed key alone (fire_prelim()). */
+static void handshake_prelim(const sloth_state_t *s, time_t now) {
+    for (int i = 0; s->harvest_burst && i < s->harvest_burst_count; i++) {
+        const harvest_burst_t *b = &s->harvest_burst[i];
+        if (b->frames < HARVEST_DEAUTH_MIN) continue;
+        char bssid[20], victim[20];
+        mac_str(b->bssid, bssid);
+        mac_str(b->victim, victim);
+        int frames = b->frames;
+        int recon  = (int)HARVEST_RECONNECT_S;
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof detail,
+                 "Handshake harvest BSSID %s: %d deauths claimed from the "
+                 "AP to %s, no fresh M1/M2 yet (watching %d s)",
+                 bssid, frames, victim, recon);
+        char key[ALERT_KEY_LEN];
+        akey_t k;
+        akey_begin(&k, key, sizeof key, "hsharvest");
+        akey_mac(&k, b->bssid);
+        if (!akey_end(&k)[0]) continue;
+        fire_prelim(ALERT_TYPE_HANDSHAKE_HARVEST, ALERT_SEV_LOW, b->ev, b->ev_n,
+                    "HANDSHAKE_HARVEST", detail, key, now);
+    }
+}
+
 void rule_handshake_harvest(const sloth_state_t *s, time_t now) {
+    handshake_prelim(s, now);
     for (int i = 0; s->harvest_chain && i < s->harvest_chain_count; i++) {
         const harvest_chain_t *c = &s->harvest_chain[i];
         if (c->victims < 1) continue;

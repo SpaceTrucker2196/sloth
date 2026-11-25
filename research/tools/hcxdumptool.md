@@ -58,6 +58,30 @@ only be used in a 100% controlled environment!"
   is not stated. A tool that rotated its address per AP would not be
   one station to the tracker; the rule would miss it, not misreport it.
 
+## First evidence (#245)
+
+`HANDSHAKE_HARVEST` is on the preliminary list
+(`include/sloth_alert_value.def`).
+
+- **Threshold: the tracker's own deauth burst,** `harvest.deauth_min`
+  (2) distinct deauthentication or disassociation frames claimed from
+  the BSSID to one station or to broadcast, before any reconnect. The
+  basis is the shape this page quotes: "Disconnecting a CLIENT from an
+  associated ACCESS POINT to get a complete handshake" is done by those
+  frames, and the reconnect that completes the capture follows them. The
+  burst is the first half of the vector, reported at once, LOW, as
+  "not evaluated: first evidence only"; the reconnect is the second
+  half, which confirms it under the same key.
+- **Window: 30 s,** `harvest.reconnect_s`' default: the tracker's own
+  bound on how soon the fresh M1/M2 pair must follow (`src/harvest_track.h`,
+  a judgement labelled there, not a figure from this source). A burst
+  with no reconnect inside it is withdrawn, `unconfirmed`. A `--tune
+  harvest.reconnect_s` does not move the window.
+- **What it does not say.** A band-steering AP or an idle timeout sends
+  the same frames; the README gives no count. That uncertainty is why
+  this is a preliminary and not a finding, and the withdrawal rate the
+  `alert_lifecycle` record carries is how the operator sees it.
+
 ## Related
 
 - `research/papers/steube-2018-pmkid.md` — the attack the first vector
