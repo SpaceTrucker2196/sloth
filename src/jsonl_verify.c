@@ -368,12 +368,17 @@ static int read_manifest(int dfd, const char *name, ev_line_t **lines,
 void jc_verify_evidence_dir(const char *dir, jc_evdir_t *v) {
     memset(v, 0, sizeof(*v));
     int dfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    DIR *d = dfd >= 0 ? fdopendir(dup(dfd)) : NULL;
+    /* The DIR* gets its own descriptor; when fdopendir() fails it has not
+     * taken that one, so it is closed here as well as dfd. */
+    int dd = dfd >= 0 ? fcntl(dfd, F_DUPFD_CLOEXEC, 0) : -1;
+    DIR *d = dd >= 0 ? fdopendir(dd) : NULL;
     if (!d) {
+        int e = errno;
+        if (dd >= 0) close(dd);
         if (dfd >= 0) close(dfd);
         v->status = 2;
         snprintf(v->brk_what, sizeof(v->brk_what), "%s: cannot open: %s",
-                 dir, strerror(errno));
+                 dir, strerror(e));
         return;
     }
     char **names = NULL;
