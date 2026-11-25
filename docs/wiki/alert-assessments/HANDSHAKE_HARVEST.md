@@ -1,7 +1,7 @@
 ---
 type: HANDSHAKE_HARVEST
 technique: T1040
-rule_file: src/alerts/rules_harvest.c:126 rule_handshake_harvest() (tracking in src/harvest_track.c, fed by deauth_record() and eapol_observe_frame(); tune rows harvest.deauth_min, harvest.reconnect_s, harvest.window_s in src/tune.c)
+rule_file: src/alerts/rules_harvest.c:161 rule_handshake_harvest() (tracking in src/harvest_track.c, fed by deauth_record() and eapol_observe_frame(); tune rows harvest.deauth_min, harvest.reconnect_s, harvest.window_s in src/tune.c)
 count_semantics: per poll while the BSSID's chain row holds a victim; one fire per BSSID; a victim ages out harvest.window_s (900 s) after its captured reconnect. Not per frame
 severity_assessment: agree - WARN for one victim, because an AP band-steering a client with repeated deauths has the same shape; CRIT at two distinct victims of one BSSID inside the window
 false_positive_risk: medium for WARN, low for CRIT - the single-victim shape has a known benign twin (steering), two independently knocked-off stations each reconnecting immediately does not
@@ -14,7 +14,7 @@ researched: 2026-11-11
 
 `harvest_note_deauth()` (`src/harvest_track.c`, called from `deauth_record()` after its duplicate bail, so retransmissions do not count) keeps per (BSSID, victim) the distinct deauthentication / disassociation frames whose transmitter address is the BSSID, the victim being the station or broadcast; a gap over `harvest.reconnect_s` starts a new burst. `harvest_note_eapol()` receives `fresh_pair` once per attempt when the collector pairs an M2 with its M1 on the replay counter; if a note for (BSSID, station) or (BSSID, broadcast) holds >= `harvest.deauth_min` (2) frames, the last within `harvest.reconnect_s` (30 s), the station is recorded as a victim on the BSSID's chain row.
 
-`rule_handshake_harvest()` (`src/alerts/rules_harvest.c:126`) fires per row with a victim; CRIT at `HARVEST_CHAIN_CRIT_VICTIMS` (2). Key `hsharvest:<bssid>`; evidence the deauth frames.
+`rule_handshake_harvest()` (`src/alerts/rules_harvest.c:161`) fires per row with a victim; CRIT at `HARVEST_CHAIN_CRIT_VICTIMS` (2). Key `hsharvest:<bssid>`; evidence the deauth frames.
 
 ## The mechanism
 

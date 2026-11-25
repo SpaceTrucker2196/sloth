@@ -24,6 +24,7 @@
 #include "sensor_health.h"
 #include "intel_pack.h"
 #include "alert_quality.h"
+#include "alert_lifecycle.h"
 #include "jsonl_chain.h"
 
 /* The JSONL writer's core (#213): the sink, the change-only cache, the
@@ -493,6 +494,46 @@ static void emit_quality(char *buf, int *off, const alert_t *a) {
         kv_str(buf, LINEBUF, off, "src_state", aq_src_name(q->src_state));
 }
 
+/* The finding lifecycle (#245, src/alert_lifecycle.h), on `alert` and
+ * every `alert.*` record. Absent entirely while the lifecycle is off
+ * (--no-preliminary), so that stream is the pre-#245 one byte for byte.
+ * prelim_at and confirmed_at only on an incident that began preliminary;
+ * withdraw_why only beside withdrawn. */
+static void emit_lifecycle(char *buf, int *off, const alert_t *a) {
+    if (!a->state) return;
+    kv_str(buf, LINEBUF, off, "state", alert_state_name(a->state));
+    kv_int(buf, LINEBUF, off, "value_period_s", (long long)a->value_period_s);
+    if (a->prelim_at)
+        kv_int(buf, LINEBUF, off, "prelim_at", (long long)a->prelim_at);
+    if (a->confirmed_at)
+        kv_int(buf, LINEBUF, off, "confirmed_at", (long long)a->confirmed_at);
+    if (a->withdraw_why)
+        kv_str(buf, LINEBUF, off, "withdraw_why",
+               alert_withdraw_name(a->withdraw_why));
+}
+
+void jsonl_emit_alert_lifecycle(alert_type_t type, time_t ts) {
+    if (!any_sink()) return;
+    alert_lc_counts_t c;
+    alert_lc_counts(type, &c);
+    const char *kind = alert_type_name(type);
+    static const char pfx[] = "ALERT_TYPE_";
+    if (strncmp(kind, pfx, sizeof(pfx) - 1) == 0) kind += sizeof(pfx) - 1;
+    char buf[LINEBUF]; int off = 0;
+    start_obj(buf, LINEBUF, &off, "alert_lifecycle", ts);
+    kv_str(buf, LINEBUF, &off, "kind", kind);
+    kv_int(buf, LINEBUF, &off, "ty", (int)type);
+    kv_int(buf, LINEBUF, &off, "preliminary", (long long)c.preliminary);
+    kv_int(buf, LINEBUF, &off, "confirmed", (long long)c.confirmed);
+    kv_int(buf, LINEBUF, &off, "withdrawn", (long long)c.withdrawn);
+    if (c.confirmed)
+        kv_int(buf, LINEBUF, &off, "median_confirm_ms", (long long)c.median_ms);
+    kv_int(buf, LINEBUF, &off, "prelim_window_s",
+           (long long)alert_prelim_window_s(type));
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
 void jsonl_emit_alert(const alert_t *a) {
     if (!any_sink() || !a) return;
     char  buf[LINEBUF]; int off = 0;
@@ -532,6 +573,7 @@ void jsonl_emit_alert(const alert_t *a) {
     emit_hw_verdict(buf, &off, a);
     emit_evidence(buf, &off, a);
     emit_quality(buf, &off, a);
+    emit_lifecycle(buf, &off, a);
     /* Join key into the lifecycle stream (#98), additive. A consumer
      * that only knows `alert` sees exactly the record it always saw
      * plus one field it can ignore. */
@@ -593,6 +635,7 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
     emit_hw_verdict(buf, &off, a);
     emit_evidence(buf, &off, a);
     emit_quality(buf, &off, a);
+    emit_lifecycle(buf, &off, a);
     if (a->match_ip[0]) {
         kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
         kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);

@@ -17,6 +17,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "alerts.h"
+#include "alert_lifecycle.h"
 #include "camera_vendor.h"
 #include "mdns_snoop.h"
 #include "ssdp_snoop.h"
@@ -662,7 +663,10 @@ static void assert_one_stable_incident(sloth_state_t *s, int ticks) {
     if (i < 0) return;
     ASSERT_EQ(s->alerts[i].count, ticks);
     ASSERT_EQ((int)s->alerts[i].observations, 1);
-    ASSERT_EQ((int)s->alerts[i].event_seq, 1);
+    /* Plus the lapse (#245) once the run passes the 300 s value period
+     * with the one observation: one event, and only then. */
+    ASSERT_EQ((int)s->alerts[i].event_seq,
+              s->alerts[i].state == ALERT_STATE_LAPSED ? 2 : 1);
 }
 
 static void test_cam_ssdp_one_device_one_alert(void) {

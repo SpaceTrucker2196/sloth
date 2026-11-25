@@ -50,6 +50,14 @@ void fire_ev(alert_type_t type, alert_sev_t sev,
              const char *key,
              const char *match_ip, uint16_t match_port,
              time_t now);
+/* #245: first evidence for a kind on the preliminary list
+ * (include/sloth_alert_value.def), under the key the rule's normal fire
+ * uses. engine.c's definition says what it does and when it does
+ * nothing. */
+void fire_prelim(alert_type_t type, alert_sev_t sev,
+                 const uint64_t *ev_ids, int ev_n,
+                 const char *title, const char *detail,
+                 const char *key, time_t now);
 void fire(alert_type_t type, alert_sev_t sev,
           const char *title, const char *detail,
           const char *key,

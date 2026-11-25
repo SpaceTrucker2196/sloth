@@ -285,7 +285,11 @@ static void test_country_absent_detail_is_still_across_ticks(void) {
         ASSERT_EQ((int)g_s.alerts[i].observations, 1);
         ASSERT(strstr(g_s.alerts[i].detail, ">=60s and >=3 beacons") != NULL);
     }
-    ASSERT_EQ(jsonl_count("\"type\":\"alert.update\""), 0);
+    /* The one alert.update the run may carry is the lapse (#245): five
+     * ticks 61 s apart pass the 300 s value period with nothing new
+     * observed, which is the point of the test from the other side. */
+    ASSERT_EQ(jsonl_count("\"type\":\"alert.update\""),
+              jsonl_count("\"reason\":\"lapsed\""));
     jsonl_close();
     unlink(g_jpath);
     g_jpath[strlen(g_jpath) - 6] = '\0';

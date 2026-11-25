@@ -6196,9 +6196,41 @@ static void test_v4_migration_failure_leaves_file_unchanged(void) {
     unlink(db_path);
 }
 
+/* #245: a preliminary finding is not a row, through either writer (the
+ * hook's queue or the snapshot), and a withdrawn one never becomes one;
+ * the confirmation is. Seen red with write_events()' two state skips
+ * removed, and with alert_resolve()'s hook guard removed (the cleared
+ * preliminary's close then queued a row), each then restored. */
+static void test_preliminary_finding_is_not_a_row(void) {
+    fresh_db();
+    alerts_clear();
+    static sloth_state_t s;
+    memset(&s, 0, sizeof s);
+    const char *key = "pmkidharvest:02:cc:00:00:00:09";
+    alerts_fire_prelim_for_test(ALERT_TYPE_PMKID_HARVEST, ALERT_SEV_LOW, key, "one");
+    alerts_update(&s);
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 0);
+    alerts_clear();                      /* resolves it, "cleared" */
+    memset(&s, 0, sizeof s);
+    db_tick(&s, 1700000001);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 0);
+
+    alerts_fire_prelim_for_test(ALERT_TYPE_PMKID_HARVEST, ALERT_SEV_LOW, key, "one");
+    alerts_fire_for_test(ALERT_TYPE_PMKID_HARVEST, ALERT_SEV_WARN, key, "three", NULL, 0);
+    alerts_update(&s);
+    db_tick(&s, 1700000002);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 1);
+    alerts_clear();
+    db_close();
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_no_column_can_hold_secret_material);
+    RUN_TEST(test_preliminary_finding_is_not_a_row);
     RUN_TEST(test_schema_has_no_secret_named_columns);
     RUN_TEST(test_eapol_key_material_never_reaches_disk);
     RUN_TEST(test_schema_tables_have_seen_columns);

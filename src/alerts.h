@@ -44,6 +44,9 @@ void alerts_fire_for_test(alert_type_t type, alert_sev_t sev,
 /* Test-only: the same, citing evidence-ring IDs (fire_ev). No detector
  * fires with both a match_ip and evidence IDs yet; this is how the
  * engine's handling of that combination is pinned before one does. */
+/* Test-only: first evidence (fire_prelim, #245) for `type`. */
+void alerts_fire_prelim_for_test(alert_type_t type, alert_sev_t sev,
+                                 const char *key, const char *detail);
 void alerts_fire_ev_for_test(alert_type_t type, alert_sev_t sev,
                              const char *key, const char *detail,
                              const char *match_ip, uint16_t match_port,

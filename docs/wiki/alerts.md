@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-24 (#248: `SENSOR_SUPPRESSED`'s fourth signal, `suppressed:cue`, `--cue` refusals at a limit, [[passive-cueing]]). 2026-11-23 (#242 item 4 review: `SENSOR_SUPPRESSED`'s silent-channel default stated as unmeasured; it is `sloth-wifi`'s only; slothweb withholds its detail until sloth-mesh audits it). 2026-11-23 (#242 item 4: `SENSOR_SUPPRESSED`, the sensor losing evidence while its sources read up: table evictions, capture drops or a silent channel, `sloth-wifi` only, WARN, `--tune suppress.*`; see "The sensor's own state" below and [[coverage-assessment]] § 7). 2026-11-20 (#232: `EVIL_TWIN`'s weak/strong branch demotes a dual-band sibling, a malformed-IE weak half and a weak label read off fewer than `twin.crit_min_beacons` beacons; beacon-table `enc` is upgrade-only). 2026-11-18 (`SENSOR_SOURCE_DOWN` skips a `not_installed` row, sloth-rf's decoder input trimmed at startup with no SDR on USB). 2026-11-17 (#227: `EVIL_TWIN` deducts 35 for two locally administered guest VAPs of one vendor's mesh, `+mesh VAP`, and counts a late arrival only against an original heard at least once a minute). 2026-11-15 (#216, the cutover: two rule tables, not a table and a subsequence of it; `sloth-wifi` raises <!-- count:rules-wifi -->96<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; the `GNSS_*` rules and `ADSB_EMERGENCY` are `sloth-rf`'s alone). 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
+**Last updated**: 2026-11-25 (#245: the finding lifecycle, preliminary, confirmed, withdrawn, lapsed; `PMKID_HARVEST` the first kind on the preliminary list; see "Finding lifecycle" below). 2026-11-24 (#248: `SENSOR_SUPPRESSED`'s fourth signal, `suppressed:cue`, `--cue` refusals at a limit, [[passive-cueing]]). 2026-11-23 (#242 item 4 review: `SENSOR_SUPPRESSED`'s silent-channel default stated as unmeasured; it is `sloth-wifi`'s only; slothweb withholds its detail until sloth-mesh audits it). 2026-11-23 (#242 item 4: `SENSOR_SUPPRESSED`, the sensor losing evidence while its sources read up: table evictions, capture drops or a silent channel, `sloth-wifi` only, WARN, `--tune suppress.*`; see "The sensor's own state" below and [[coverage-assessment]] § 7). 2026-11-20 (#232: `EVIL_TWIN`'s weak/strong branch demotes a dual-band sibling, a malformed-IE weak half and a weak label read off fewer than `twin.crit_min_beacons` beacons; beacon-table `enc` is upgrade-only). 2026-11-18 (`SENSOR_SOURCE_DOWN` skips a `not_installed` row, sloth-rf's decoder input trimmed at startup with no SDR on USB). 2026-11-17 (#227: `EVIL_TWIN` deducts 35 for two locally administered guest VAPs of one vendor's mesh, `+mesh VAP`, and counts a late arrival only against an original heard at least once a minute). 2026-11-15 (#216, the cutover: two rule tables, not a table and a subsequence of it; `sloth-wifi` raises <!-- count:rules-wifi -->96<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; the `GNSS_*` rules and `ADSB_EMERGENCY` are `sloth-rf`'s alone). 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
 ---
@@ -240,6 +240,44 @@ WARN→CRIT escalation updated the ring in place and emitted nothing.
   rule fires. Detail: `docs/views/alerts.md`.
 
 Wire format and the full field table: [[jsonl-schema]].
+
+## Finding lifecycle (#245)
+
+An incident also has a **state** (`src/alert_lifecycle.h`,
+`include/sloth_alert_value.def`), on `alert` and every `alert.*` record
+as `state` with `value_period_s`. On by default (owner ruling
+2026-11-25); `--no-preliminary` turns all of it off and the stream is the
+one before #245. Basis: FM 2-0 (2004) 4-25 and 4-26 (report time-sensitive
+unevaluated information at once, without waiting to refine it), 4-32,
+8-32 (a fast report, then a follow-up), 1-34 and 4-12 (each requirement
+has a latest time at which the information is of value); see
+[[collection-cycle]] § 2.2 and § 2.3.
+
+| State | Entered when | Records |
+|-------|--------------|---------|
+| `preliminary` | a kind on the preliminary list sees its first qualifying evidence, below today's threshold (`fire_prelim()`) | one `alert.preliminary`; `detail` begins `not evaluated: first evidence only - `; no legacy `alert`, no `alert.create`, no `sloth.db` row; nothing more while it stays preliminary |
+| `confirmed` | today's threshold is met under the same key (or the incident opened at it, as every incident of a kind off the list does) | `alert` and `alert.create`, under the preliminary's `incident_id`, with `prelim_at` and `confirmed_at` |
+| `withdrawn` | a preliminary not confirmed within its kind's window (`withdraw_why` `unconfirmed`), or whose rule stopped reporting it first (`evidence_aged`) | one `alert.resolve`, reason `withdrawn`; the key opens no new preliminary for one more window |
+| `lapsed` | a confirmed finding with no new observation (its evidence did not move) for the kind's value period, 300 s by default (`--value-period KIND=SECS`) | one `alert.update`, reason `lapsed`; the incident stays open and the 300 s resolve still closes it as `expired`. The first new observation makes it `confirmed` again with one `alert.update` |
+
+The preliminary list, each with its threshold and window argued in the
+`research/` document its row names:
+
+| Kind | First evidence | Window | Basis |
+|------|----------------|--------|-------|
+| `PMKID_HARVEST` | one M1 carrying a PMKID KDE left unanswered by a station that answered no BSSID; LOW | 900 s (the `harvest.window_s` default) | `research/papers/steube-2018-pmkid.md` § First evidence (#245) |
+
+The owner's ruling lists five more kinds for this build (`EVIL_TWIN`,
+`KARMA_AP`, `ROGUE_RADIUS`, `HANDSHAKE_HARVEST`, `GNSS_JAMMING`); each
+joins the table when its rule calls `fire_prelim()` and its row in
+`sloth_alert_value.def` cites its basis, which
+`tests/test_alert_lifecycle.c` enforces. Until then they open confirmed,
+as before.
+
+**Measured.** The `alert_lifecycle` record carries, per listed kind,
+how many preliminaries opened, were confirmed and were withdrawn, and
+the median time from preliminary to confirmed. The withdrawal rate is
+what tells the owner to take a kind off the list.
 
 ## Severity vs confidence (#89)
 

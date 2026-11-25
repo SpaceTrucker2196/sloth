@@ -7,6 +7,7 @@
 #include <time.h>
 #include "sloth.h"
 #include "sloth_clock.h"
+#include "alert_lifecycle.h"
 #include "tui.h"
 #include "wifi_chanhop.h"
 #include "chancue.h"       /* --cue (#248): the limits it announces */
@@ -370,6 +371,7 @@ static void print_usage(const char *argv0) {
             "       [--gps-baud N]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
+            "       [--no-preliminary] [--value-period KIND=SECS ...]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
             "       [--wps-pin-brute-cycles N] [--wps-lockout-cycles N]\n"
             "       [--wps-pbc-concurrent N]\n"
@@ -543,6 +545,15 @@ static void print_usage(const char *argv0) {
             "                     --db-interval-secs, --db-retain-days,\n"
             "                     --db-max-mb and --wps-* are aliases for\n"
             "                     knobs and are validated the same way.\n"
+            "  --no-preliminary   turn the finding lifecycle off (#245): no\n"
+            "                     preliminary findings, no lapse, and no\n"
+            "                     state or value_period_s on alert records.\n"
+            "                     The stream is then the one before #245.\n"
+            "  --value-period KIND=SECS\n"
+            "                     seconds after a finding's last observation\n"
+            "                     at which it lapses (1..2592000; default 300\n"
+            "                     for every kind). Repeatable. An unknown KIND\n"
+            "                     exits 2.\n"
             "  --tune-list        print every knob with default, current\n"
             "                     value and unit, then exit.\n"
             "  --allow-active     opt in to the two active behaviours sloth has:\n"
@@ -1155,6 +1166,12 @@ int main(int argc, char **argv) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--cue")) {
             g_cue_asked = 1;
+        } else if (!strcmp(argv[i], "--no-preliminary")) {
+            alert_lifecycle_set_enabled(0);
+        } else if (!strcmp(argv[i], "--value-period")) {
+            if (daemon_flag_value_period(i + 1 < argc ? argv[i + 1] : NULL) != 0)
+                return 2;
+            i++;
         } else if (!strcmp(argv[i], "--tune-list")) {
             tune_print_list(stdout);
             return 0;

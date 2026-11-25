@@ -52,6 +52,10 @@ void jsonl_emit_cleartext_cred(const cleartext_cred_t *r);
  * is still emitted unchanged on every create. */
 void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
                             int prev_sev, const char *reason);
+/* The finding lifecycle's counts for one kind (#245): the `alert_lifecycle`
+ * record, emitted by the engine as a preliminary opens, is confirmed or
+ * is withdrawn, so it is change-only by construction. */
+void jsonl_emit_alert_lifecycle(alert_type_t type, time_t ts);
 
 /* Snapshot emitter — one line per active flow in s->conns. Driven by the
  * poll loop (≈1 Hz), not by an event ring. Consumers rebuild their table

@@ -9,6 +9,7 @@
 #include "libver.h"
 #include "observe.h"
 #include "tune.h"
+#include "alert_lifecycle.h"
 #include "jsonl_chain.h"
 
 /* src/rf/rf_args.h. */
@@ -23,6 +24,7 @@ void rf_usage(FILE *fp, const char *argv0) {
             "       [-o FILE [--jsonl-chain N]] [--db FILE] [--site-label TEXT]\n"
             "       [--data-socket [SPEC]] [--data-socket-allow-remote]\n"
             "       [--strict] [--tune NAME=VALUE ...] [--tune-list]\n"
+            "       [--no-preliminary] [--value-period KIND=SECS ...]\n"
             "       [--user NAME] [--no-privdrop] [--ticks N]\n"
             "       [--help] [--version] [--print-schema]\n"
             "\n"
@@ -120,6 +122,15 @@ void rf_usage(FILE *fp, const char *argv0) {
             "                     allow-remote flags say).\n"
             "  --tune NAME=VALUE  move one threshold. Repeatable. An unknown\n"
             "                     name or an out-of-range value exits 2.\n"
+            "  --no-preliminary   turn the finding lifecycle off (#245): no\n"
+            "                     preliminary findings, no lapse, and no\n"
+            "                     state or value_period_s on alert records.\n"
+            "                     The stream is then the one before #245.\n"
+            "  --value-period KIND=SECS\n"
+            "                     seconds after a finding's last observation\n"
+            "                     at which it lapses (1..2592000; default 300\n"
+            "                     for every kind). Repeatable. An unknown KIND\n"
+            "                     exits 2.\n"
             "  --tune-list        print every knob, then exit.\n"
             "  --user NAME        account a root run drops to once a serial\n"
             "                     --gps is open (default: sloth, when that\n"
@@ -203,6 +214,12 @@ int rf_args_parse(int argc, char **argv, rf_args_t *a) {
         } else if (!strcmp(argv[i], "--aprs-silent-hours") && has) {
             if (rf_flag_aprs_silent_hours(argv[++i], &a->rf.aprs_silent_h) != 0)
                 return 2;
+        } else if (!strcmp(argv[i], "--no-preliminary")) {
+            alert_lifecycle_set_enabled(0);
+        } else if (!strcmp(argv[i], "--value-period")) {
+            if (daemon_flag_value_period(has ? argv[i + 1] : NULL) != 0)
+                return 2;
+            i++;
         } else if (!strcmp(argv[i], "--tune-list")) {
             tune_print_list(stdout);
             return 0;

@@ -37,6 +37,7 @@
 #include "tune.h"
 #include "cov_interval.h"
 #include "alert_quality.h"
+#include "alert_lifecycle.h"
 
 /* Maintenance is hourly: pruning is a scan over every table, and the
  * thing it defends against (a disk filling over days) does not move
@@ -2528,6 +2529,10 @@ static void write_aprs(const sloth_state_t *s) {
 static void write_events(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->alert_count; i++) {
         const alert_t *a = &s->alerts[i];
+        /* #245: first evidence is not a finding until it is confirmed,
+         * and a withdrawn one never became one. */
+        if (a->state == ALERT_STATE_PRELIMINARY ||
+            a->state == ALERT_STATE_WITHDRAWN) continue;
         sqlite3_stmt *st = g_st[ST_ALERT];
         /* first_seen <= last_seen is what slothweb's History count
          * leans on (it finds an episode begun after a time by its
@@ -2577,6 +2582,8 @@ static void write_events(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->alert_count && !g_disabled; i++) {
         const alert_t *a = &s->alerts[i];
         if (!a->incident_id[0]) continue;
+        if (a->state == ALERT_STATE_PRELIMINARY ||
+            a->state == ALERT_STATE_WITHDRAWN) continue;
         bind_incident(g_st[ST_INCIDENT], a->key, a->incident_id, (int)a->type,
                       a->first_detected ? a->first_detected
                           : a->first_seen ? a->first_seen : now,

@@ -10,6 +10,7 @@
 #include "db.h"
 #include "jsonl.h"
 #include "tune.h"
+#include "alert_lifecycle.h"
 
 /* src/daemon_start.h. Each body is the block src/main.c carried inline
  * before #213, moved with its comments and its text unchanged. */
@@ -25,6 +26,19 @@ int daemon_flag_tune(const char *arg) {
         /* A mistyped knob exits rather than running with the
          * default the operator thought they had changed (#82). */
         fprintf(stderr, "sloth: --tune %s\n", terr);
+        return 2;
+    }
+    return 0;
+}
+
+int daemon_flag_value_period(const char *arg) {
+    if (!arg) {
+        fprintf(stderr, "sloth: --value-period needs KIND=SECS\n");
+        return 2;
+    }
+    char err[160];
+    if (alert_value_period_set(arg, err, sizeof(err)) != 0) {
+        fprintf(stderr, "sloth: --value-period %s\n", err);
         return 2;
     }
     return 0;

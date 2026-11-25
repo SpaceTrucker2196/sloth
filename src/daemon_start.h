@@ -24,6 +24,10 @@
  * range. */
 int daemon_flag_tune(const char *arg);
 
+/* --value-period KIND=SECS (#245). `arg` as --tune's. 2 on a missing
+ * value, an unknown kind, or SECS not in 1..30 days. */
+int daemon_flag_value_period(const char *arg);
+
 /* --ticks N: 1..1000000, strict. */
 int daemon_flag_ticks(const char *arg, long *out);
 

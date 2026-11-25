@@ -53,7 +53,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "2.14.0"
+#define SLOTH_JSONL_VERSION "2.15.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -1225,6 +1225,21 @@ typedef struct {
      * once partial stays partial with its first reason, the radios
      * accumulate, and the latency is taken once, as the incident opens. */
     alert_quality_t quality;
+    /* The finding lifecycle (#245, src/alert_lifecycle.h). `state` is
+     * an alert_state_t: NONE while the lifecycle is off
+     * (--no-preliminary), and the exports then carry none of these.
+     * prelim_at / prelim_ms are when a preliminary incident opened (0
+     * for one that opened confirmed), confirmed_at when such an
+     * incident was confirmed; last_obs_ms is the monotonic time of the
+     * last counted observation, which the value period runs from;
+     * value_period_s is the kind's period as the incident opened. */
+    uint8_t      state;
+    uint8_t      withdraw_why;     /* alert_withdraw_t */
+    time_t       prelim_at;
+    time_t       confirmed_at;
+    uint64_t     prelim_ms;
+    uint64_t     last_obs_ms;
+    uint32_t     value_period_s;
 } alert_t;
 
 /* ── ICMP log ───────────────────────────────────────────── */

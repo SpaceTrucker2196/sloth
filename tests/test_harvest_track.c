@@ -14,6 +14,7 @@
 #include "frame_build.h"
 #include "queue_evict.h"
 #include "rsn_ie.h"
+#include "alert_lifecycle.h"
 
 /* PMKID_HARVEST and HANDSHAKE_HARVEST (#172).
  *
@@ -174,9 +175,19 @@ static void hv_poll(sloth_state_t *s) {
     alerts_update(s);
 }
 
+/* A finding at the rule's threshold: a preliminary one (#245) is first
+ * evidence, which hv_find_prelim() looks for. */
 static int hv_find(const sloth_state_t *s, alert_type_t t) {
     for (int i = 0; i < s->alert_count; i++)
-        if (s->alerts[i].type == t) return i;
+        if (s->alerts[i].type == t &&
+            s->alerts[i].state != ALERT_STATE_PRELIMINARY) return i;
+    return -1;
+}
+
+static int hv_find_prelim(const sloth_state_t *s, alert_type_t t) {
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == t &&
+            s->alerts[i].state == ALERT_STATE_PRELIMINARY) return i;
     return -1;
 }
 
@@ -984,6 +995,120 @@ static void test_ap_posture_is_bounded(void) {
     hc_end();
 }
 
+/* ── First evidence (#245) ────────────────────────────────── */
+
+/* hv_poll() without the clear, so an incident lives across polls. */
+static void hv_poll_keep(sloth_state_t *s) {
+    memset(s, 0, sizeof *s);
+    harvest_snapshot(s);
+    deauth_snapshot(s);
+    alerts_update(s);
+}
+
+/* One unanswered M1 carrying a PMKID, to a station that answered
+ * nothing: preliminary at once, LOW, under the finding's own key. Two
+ * more make it the finding, the same incident, confirmed CRIT. */
+static void test_pmkid_first_evidence_is_preliminary_then_confirmed(void) {
+    hv_begin();
+    static sloth_state_t s;
+    hv_solicit(HCX, 1, 1, 1);
+    PAST_GRACE();
+    hv_poll_keep(&s);
+    int i = hv_find_prelim(&s, ALERT_TYPE_PMKID_HARVEST);
+    ASSERT(i >= 0);
+    ASSERT(hv_find(&s, ALERT_TYPE_PMKID_HARVEST) < 0);
+    char iid[ALERT_INCIDENT_ID_LEN] = "";
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT_STR(s.alerts[i].key, "pmkidharvest:02:cc:00:00:00:01");
+        ASSERT(strncmp(s.alerts[i].detail,
+                       "not evaluated: first evidence only - PMKID harvest STA "
+                       "02:cc:00:00:00:01: 1 BSSID(s) handed it a PMKID", 95) == 0);
+        ASSERT_EQ((int)s.alerts[i].evidence_id_count, 1);
+        snprintf(iid, sizeof iid, "%s", s.alerts[i].incident_id);
+    }
+    hv_solicit(HCX, 2, 2, 1);
+    PAST_GRACE();
+    hv_poll_keep(&s);
+    ASSERT(hv_find_prelim(&s, ALERT_TYPE_PMKID_HARVEST) < 0);
+    i = hv_find(&s, ALERT_TYPE_PMKID_HARVEST);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].state, (int)ALERT_STATE_CONFIRMED);
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT_STR(s.alerts[i].incident_id, iid);
+        ASSERT(s.alerts[i].prelim_at != 0);
+    }
+    hv_end();
+}
+
+/* Not first evidence: an M1 with no PMKID, and a PMKID M1 left
+ * unanswered by a station that answered another BSSID. Seen red with
+ * pmkid_prelim()'s `pmkid_unanswered < 1` and `answered != 0` tests
+ * each dropped, then restored. */
+static void test_pmkid_not_first_evidence(void) {
+    hv_begin();
+    static sloth_state_t s;
+    hv_solicit(HCX, 1, 1, 0);
+    PAST_GRACE();
+    hv_poll(&s);
+    ASSERT(hv_find_prelim(&s, ALERT_TYPE_PMKID_HARVEST) < 0);
+
+    harvest_clear();
+    eapol_clear();
+    assoc_request_clear();
+    uint8_t b[6]; ap(b, 20);
+    hv_assoc_req(PHONE, b, 0);
+    hv_m1m2(PHONE, b, 1, 1);
+    hv_advance_ms(200);
+    ap(b, 21);
+    hv_assoc_req(PHONE, b, 0);
+    hv_advance_ms(5);
+    hv_eapol(PHONE, b, 1, 1, 21, 1, 9100, 0);
+    PAST_GRACE();
+    hv_poll(&s);
+    ASSERT_EQ(s.harvest_sta_count, 1);
+    if (s.harvest_sta_count == 1) {
+        ASSERT_EQ(s.harvest_sta[0].pmkid_unanswered, 1);
+        ASSERT_EQ(s.harvest_sta[0].answered, 1);
+    }
+    ASSERT(hv_find_prelim(&s, ALERT_TYPE_PMKID_HARVEST) < 0);
+    hv_end();
+}
+
+/* A station that stops at one PMKID: withdrawn, unconfirmed, when the
+ * 900 s window passes; polled every 100 s, so the 300 s resolve is not
+ * what closes it. */
+static void test_pmkid_first_evidence_withdrawn(void) {
+    hv_begin();
+    static sloth_state_t s;
+    hv_solicit(HCX, 1, 1, 1);
+    PAST_GRACE();
+    hv_poll_keep(&s);
+    ASSERT(hv_find_prelim(&s, ALERT_TYPE_PMKID_HARVEST) >= 0);
+    for (int t = 0; t < 8; t++) {
+        hv_advance_ms(100000);
+        hv_poll_keep(&s);
+    }
+    hv_advance_ms(99999);                  /* 899.999 s */
+    hv_poll_keep(&s);
+    int i = hv_find_prelim(&s, ALERT_TYPE_PMKID_HARVEST);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].resolved, 0);
+    hv_advance_ms(1);                      /* 900 s */
+    hv_poll_keep(&s);
+    i = -1;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_PMKID_HARVEST) i = k;
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].state, (int)ALERT_STATE_WITHDRAWN);
+        ASSERT_EQ((int)s.alerts[i].withdraw_why, (int)ALERT_WITHDRAW_UNCONFIRMED);
+        ASSERT_EQ(s.alerts[i].resolved, 1);
+    }
+    hv_end();
+}
+
 void run_harvest_track_tests(void) {
     TEST_SUITE("PMKID / handshake harvesting (#172)");
     RUN_TEST(test_clientless_solicitation_warns);
@@ -996,6 +1121,9 @@ void run_harvest_track_tests(void) {
     RUN_TEST(test_m1_without_a_heard_request_is_not_counted);
     RUN_TEST(test_truncated_frames_count_nothing);
     RUN_TEST(test_window_holds_a_slow_harvest_and_ages_out);
+    RUN_TEST(test_pmkid_first_evidence_is_preliminary_then_confirmed);
+    RUN_TEST(test_pmkid_not_first_evidence);
+    RUN_TEST(test_pmkid_first_evidence_withdrawn);
     RUN_TEST(test_tables_are_bounded_and_keep_the_harvester);
     RUN_TEST(test_deauth_then_handshake_warns);
     RUN_TEST(test_two_victims_is_crit);

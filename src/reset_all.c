@@ -10,6 +10,7 @@
 #include "rf_trim.h"
 #include "alert_pcap.h"
 #include "alerts.h"
+#include "alert_lifecycle.h"
 #include "rule_coverage_live.h"
 #include "cue_live.h"
 #include "cov_interval.h"

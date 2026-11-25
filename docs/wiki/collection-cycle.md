@@ -48,8 +48,8 @@ Rule: the per-frame path never waits on disk or network.
 |---|---|
 | Run the alert rules over the state | today |
 | Incident engine: open, update, close | today |
-| Emit a **preliminary** finding at first qualifying evidence for the listed types | #245 |
-| Confirm or withdraw a preliminary finding | #245 |
+| Emit a **preliminary** finding at first qualifying evidence for the listed types | today for `PMKID_HARVEST` (#245, [[alerts]] § Finding lifecycle); the other five listed kinds #245 |
+| Confirm or withdraw a preliminary finding | today (#245: confirmed by the kind's normal threshold under the same key; withdrawn at the kind's window or when its evidence ages out) |
 | Attach quality fields: completeness, latency, corroboration, source state | #246 |
 | Issue a cue when a finding needs more collection, inside the cue limits | #248 |
 | Write change-only JSONL records | today |
@@ -67,7 +67,7 @@ Rule: a report is not held to make it better. FM 2-0 4-25: "must not delay repor
 | `SENSOR_SUPPRESSED` check | #242 |
 | `sensor_health` record (change-only) | today |
 | Dashboard minute pass; refresh of the serving table | today (minute pass); serving table in sloth-mesh #13 |
-| Expire findings past their value period | #245 |
+| Mark findings past their value period `lapsed` (open, notifications stop) | today (#245; checked every tick, 300 s by default, `--value-period`) |
 
 Rule: a quiet site and a blind sensor must never look the same. Each "no finding" is shown beside the status of the rules behind it.
 
@@ -129,7 +129,7 @@ flowchart LR
   R -->|first evidence| P[Preliminary finding]
   P -->|threshold met| C[Confirmed finding]
   P -->|window ends| W[Withdrawn]
-  C -->|value period ends| X[Expired: history]
+  C -->|value period ends| X[Lapsed: still open, silent]
   R --> Q[Question status each minute]
   S --> V[Coverage record each minute]
   V --> Q

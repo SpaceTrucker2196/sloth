@@ -55,6 +55,35 @@ several BSSIDs, to a station that answered none of them.
   there for a station that then answers with an M2; that answered case
   is the one the rule excludes.
 
+## First evidence (#245)
+
+`PMKID_HARVEST` is on the preliminary list
+(`include/sloth_alert_value.def`): sloth reports the first qualifying
+evidence at once, marked "not evaluated: first evidence only", and the
+finding is confirmed when the rule's normal threshold is met, or
+withdrawn if it is not met within the window.
+
+- **Threshold: one unanswered M1 carrying a PMKID KDE, to a station
+  that has answered no BSSID.** The basis is the post's own claim, "We
+  receive all the data we need in the first EAPOL frame from the AP":
+  one such M1 in a harvester's hands is already material for the
+  offline attack, so a report at the first one is a report of the
+  attack's whole yield from that AP, not of a fragment of it. The
+  "answered no BSSID" half comes from the same exchange: a station that
+  holds a PMK answers with an M2, as the PMK-caching case above does,
+  and that case is excluded.
+- **Window: 900 s,** the tracker's `harvest.window_s` default, which is
+  how long a station's targets are counted at all. That number is
+  sloth's judgement (`src/harvest_track.h`), not this source's; it is
+  used because a station that does not reach the rule's threshold while
+  its targets are still counted cannot reach it on this evidence. A
+  `--tune harvest.window_s` does not move the window.
+- **What it does not say.** One unanswered PMKID M1 is also what a
+  station that walked out of range after its association request looks
+  like; the preliminary state exists for exactly that uncertainty, and
+  the withdrawal rate `alert_lifecycle` reports is how the operator
+  sees how often it happens.
+
 ## Related
 
 - `research/tools/hcxdumptool.md` — the tool the post uses, and its

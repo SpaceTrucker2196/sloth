@@ -23,6 +23,7 @@
 #include "engine_internal.h"
 #include "evidence_export.h"   /* EVX_REFUSED only: the exporter is the table's */
 #include "gps.h"
+#include "alert_lifecycle.h"
 
 /* The table this process runs (#213). The application selects it once,
  * before the first tick: sloth-wifi its table (g_alert_table_wifi,
@@ -134,7 +135,11 @@ static void alert_resolve(alert_t *a, time_t now, const char *reason) {
     a->resolved = 1;
     a->event_seq++;
     jsonl_emit_alert_event(a, "alert.resolve", now, -1, reason);
-    incident_hook(a, now, reason ? reason : "");
+    /* A finding that never got past preliminary was never handed to
+     * the hook (#245): its close is the stream's alone. */
+    if (a->state != ALERT_STATE_PRELIMINARY &&
+        a->state != ALERT_STATE_WITHDRAWN)
+        incident_hook(a, now, reason ? reason : "");
 }
 
 /* ── Tainted-BSSID tracker (evil-twin Phase 4) ────────────── */
@@ -296,6 +301,11 @@ typedef struct {
     char     last_incident_id[ALERT_INCIDENT_ID_LEN];
     time_t   last_first_seen;
     uint32_t reopen_count;
+    /* #245: no preliminary on this key before this monotonic time. Set
+     * when a preliminary incident on the key is withdrawn, to one more
+     * window, so a rule that keeps seeing the same first evidence opens
+     * one preliminary per window and not one per tick. */
+    uint64_t prelim_block_ms;
     uint64_t touch;                 /* LRU stamp */
 } alert_side_t;
 
@@ -541,6 +551,33 @@ static void stamp_quality(alert_t *a, int opening) {
                         g_table ? g_table->evidence : NULL);
 }
 
+/* Set by fire_prelim() around its one fire_inv() call (#245): this fire
+ * is first evidence, not a finding at today's threshold. */
+static int g_prelim_fire;
+
+/* Clear the one-fire stages a fire_inv() that returns early leaves. */
+static void stages_drop(void) {
+    g_hw_tier = g_hw_device = g_hw_signals = 0;
+    g_intel_staged = 0;
+}
+
+/* A preliminary incident met today's threshold (#245): it becomes
+ * confirmed and opens, for every consumer that only knows confirmed
+ * findings, the way any incident opens: `alert` and `alert.create`,
+ * under the incident_id the preliminary already carried. */
+static void lifecycle_confirm(alert_t *a, time_t now, uint64_t mono) {
+    a->state        = ALERT_STATE_CONFIRMED;
+    a->confirmed_at = now;
+    a->last_event_ms = mono;
+    a->event_seq++;
+    alert_lc_note_confirm(a->type, mono > a->prelim_ms ? mono - a->prelim_ms : 0);
+    jsonl_emit_alert(a);
+    jsonl_emit_alert_event(a, "alert.create", now, -1, NULL);
+    jsonl_emit_alert_lifecycle(a->type, now);
+    incident_hook(a, now, NULL);
+    event_wake_signal();
+}
+
 void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
               const char *inv_hash, int ap_class, int wired,
               const sloth_tool_sig_t *tool_row,
@@ -569,9 +606,29 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     key = kbuf;
     uint64_t kh   = key_hash(key);
     int idx = find_by_key(key, kh);
+    const int lc_on = alert_lifecycle_enabled();
+    if (g_prelim_fire) {
+        /* First evidence on a key that is already a finding adds
+         * nothing to it: a confirmed or lapsed incident is left exactly
+         * as the normal fires keep it. */
+        if (idx >= 0 && !engine[idx].resolved &&
+            engine[idx].state != ALERT_STATE_PRELIMINARY) {
+            stages_drop();
+            return;
+        }
+        if (idx < 0 || engine[idx].resolved) {
+            const alert_side_t *blk = side_find(key, kh);
+            if (blk && blk->prelim_block_ms > mono) {
+                stages_drop();
+                return;
+            }
+        }
+    }
     if (idx >= 0 && !engine[idx].resolved) {
         alert_t    *a    = &engine[idx];
         alert_sev_t prev = a->sev;
+        const int confirming = lc_on && !g_prelim_fire &&
+                               a->state == ALERT_STATE_PRELIMINARY;
 
         a->evaluations++;
         a->count          = (int)a->evaluations;   /* compat alias */
@@ -582,9 +639,20 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
         /* An evaluation is an observation only when the evidence moved.
          * This is what makes a retained condition cost nothing: 100
          * polls of an unchanged row render one detail and count once. */
+        int renewed = 0;
         if (sig != a->detail_sig || sev != prev) {
             a->observations++;
             a->last_observed = now;
+            a->last_obs_ms   = mono;
+            /* A new observation is a basis for action again (#245). */
+            if (a->state == ALERT_STATE_LAPSED) {
+                a->state = ALERT_STATE_CONFIRMED;
+                renewed  = 1;
+            }
+        }
+        if (confirming) {
+            snprintf(a->title, sizeof(a->title), "%s", title);
+            a->type = type;
         }
         a->sev        = sev;
         a->confidence = (uint8_t)confidence;
@@ -614,6 +682,17 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
         stamp_evidence(a, ev_ids, ev_n);
         stamp_quality(a, 0);
 
+        if (confirming) {
+            a->detail_sig = sig;
+            lifecycle_confirm(a, now, mono);
+            return;
+        }
+        /* A preliminary re-evaluated as first evidence: the record that
+         * opened it stands until it is confirmed or withdrawn. */
+        if (a->state == ALERT_STATE_PRELIMINARY) {
+            a->detail_sig = sig;
+            return;
+        }
         if (sev != prev) {
             /* Severity is what a consumer pages on — never throttled,
              * in either direction. */
@@ -626,8 +705,9 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
                                    now, (int)prev, NULL);
             incident_hook(a, now, NULL);
             if (sev > prev) event_wake_signal();
-        } else if (sig != a->detail_sig &&
-                   alert_age_ms(mono, a->last_event_ms) >= ALERT_UPDATE_MIN_MS) {
+        } else if (renewed ||
+                   (sig != a->detail_sig &&
+                    alert_age_ms(mono, a->last_event_ms) >= ALERT_UPDATE_MIN_MS)) {
             /* Evidence moved and the floor has passed. The event carries
              * the *current* detail, so the renderings the floor
              * suppressed are summarised, not lost. `detail_sig` is left
@@ -667,7 +747,18 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     a->last_observed  = now;
     a->last_eval_ms   = mono;
     a->last_event_ms  = mono;
+    a->last_obs_ms    = mono;
     a->detail_sig     = sig;
+    if (lc_on) {
+        a->value_period_s = alert_value_period_s(type);
+        if (g_prelim_fire) {
+            a->state     = ALERT_STATE_PRELIMINARY;
+            a->prelim_at = now;
+            a->prelim_ms = mono;
+        } else {
+            a->state = ALERT_STATE_CONFIRMED;
+        }
+    }
     snprintf(a->title,  sizeof(a->title),  "%s", title);
     snprintf(a->detail, sizeof(a->detail), "%s", detail);
     snprintf(a->key,    sizeof(a->key),    "%s", key);
@@ -705,6 +796,17 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
         snprintf(sd->last_incident_id, sizeof(sd->last_incident_id), "%s",
                  a->incident_id);
         sd->last_first_seen = a->first_seen;
+        sd->prelim_block_ms = 0;
+    }
+    if (a->state == ALERT_STATE_PRELIMINARY) {
+        /* First evidence (#245): one record, to the stream only. The
+         * legacy `alert`, `alert.create` and the hook wait for the
+         * confirmation that may never come. */
+        alert_lc_note_prelim(type);
+        jsonl_emit_alert_event(a, "alert.preliminary", now, -1, NULL);
+        jsonl_emit_alert_lifecycle(type, now);
+        event_wake_signal();
+        return;
     }
     /* New alert keys are interesting enough to log AND to break the
      * TUI's blocking wait so the dashboard updates immediately
@@ -786,6 +888,34 @@ void fire(alert_type_t type, alert_sev_t sev,
           const char *match_ip, uint16_t match_port,
           time_t now) {
     fire_conf(type, sev, 0, title, detail, key, match_ip, match_port, now);
+}
+
+/* First qualifying evidence for a kind on the preliminary list (#245,
+ * src/alert_lifecycle.h). The rule calls it below today's threshold,
+ * under the key its normal fire uses, so the normal fire confirms the
+ * same incident. Nothing happens with the lifecycle off, for a kind
+ * with no window, on a key that is already a finding, or on a key whose
+ * last preliminary was withdrawn less than a window ago. */
+void fire_prelim(alert_type_t type, alert_sev_t sev,
+                 const uint64_t *ev_ids, int ev_n,
+                 const char *title, const char *detail,
+                 const char *key, time_t now) {
+    if (!alert_lifecycle_enabled() || alert_prelim_window_s(type) == 0) {
+        stages_drop();
+        return;
+    }
+    char d[ALERT_DETAIL_LEN];
+    snprintf(d, sizeof d, "%s - %s", ALERT_PRELIM_TEXT, detail ? detail : "");
+    g_prelim_fire = 1;
+    fire_inv(type, sev, 0, NULL, TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN,
+             NULL, ev_ids, ev_n, title, d, key, NULL, 0, now);
+    g_prelim_fire = 0;
+}
+
+void alerts_fire_prelim_for_test(alert_type_t type, alert_sev_t sev,
+                                 const char *key, const char *detail) {
+    fire_prelim(type, sev, NULL, 0, "TEST", detail ? detail : "",
+                key ? key : "", sloth_wall());
 }
 
 void alerts_fire_for_test(alert_type_t type, alert_sev_t sev,
@@ -1076,13 +1206,52 @@ static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
  * resolve a standing condition that is still true (NO_MONITOR_MODE
  * renders the same detail forever) and then immediately re-create it,
  * which is a resolve/create pair every five minutes for nothing. */
+/* A preliminary that will not be confirmed (#245): closed, with why,
+ * and its key held off further preliminaries for one more window. */
+static void lifecycle_withdraw(alert_t *a, int slot, time_t now,
+                               uint64_t mono, int why) {
+    a->state        = ALERT_STATE_WITHDRAWN;
+    a->withdraw_why = (uint8_t)why;
+    alert_side_t *sd = side_get(a->key, engine_hash[slot]);
+    if (sd)
+        sd->prelim_block_ms = mono +
+            (uint64_t)alert_prelim_window_s(a->type) * 1000u;
+    alert_lc_note_withdraw(a->type);
+    alert_resolve(a, now, "withdrawn");
+    jsonl_emit_alert_lifecycle(a->type, now);
+}
+
+/* The value period ran out (#245): one record, and the incident stays
+ * open. The next new observation confirms it again (fire_inv()). */
+static void lifecycle_lapse(alert_t *a, time_t now) {
+    a->state = ALERT_STATE_LAPSED;
+    a->event_seq++;
+    jsonl_emit_alert_event(a, "alert.update", now, -1, "lapsed");
+}
+
 static void expire_incidents(time_t now, uint64_t mono) {
     for (int i = 0; i < engine_count; i++) {
         alert_t *a = &engine[i];
         if (a->resolved) continue;
-        if (alert_age_ms(mono, a->last_eval_ms) < ALERT_RESOLVE_AFTER_MS)
+        const int quiet = alert_age_ms(mono, a->last_eval_ms) >=
+                          ALERT_RESOLVE_AFTER_MS;
+        if (a->state == ALERT_STATE_PRELIMINARY) {
+            if (quiet)
+                lifecycle_withdraw(a, i, now, mono, ALERT_WITHDRAW_AGED);
+            else if (alert_age_ms(mono, a->prelim_ms) >=
+                     (uint64_t)alert_prelim_window_s(a->type) * 1000u)
+                lifecycle_withdraw(a, i, now, mono,
+                                   ALERT_WITHDRAW_UNCONFIRMED);
             continue;
-        alert_resolve(a, now, "expired");
+        }
+        if (quiet) {
+            alert_resolve(a, now, "expired");
+            continue;
+        }
+        if (a->state == ALERT_STATE_CONFIRMED && a->value_period_s &&
+            alert_age_ms(mono, a->last_obs_ms) >=
+                (uint64_t)a->value_period_s * 1000u)
+            lifecycle_lapse(a, now);
     }
 }
 

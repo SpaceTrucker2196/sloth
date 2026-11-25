@@ -1,0 +1,135 @@
+/* Each alert kind's finding lifecycle (#245). Not a header: no include
+ * guard, on purpose. Every includer defines X(ID, VALUE_S, PRELIM_S,
+ * BASIS) first and gets one expansion per row.
+ *
+ * A sibling of sloth_alerts.def and sloth_alert_inputs.def, and not new
+ * columns there: sloth_alerts.def is in the contract and sloth-mesh
+ * includes it with a two-argument X. tests/test_alert_lifecycle.c holds
+ * this list to that one, row for row, in the same order.
+ *
+ *   ID        the kind, as in sloth_alerts.def.
+ *   VALUE_S   the value period: seconds after the last observation (the
+ *             evidence moved, alert_t.last_observed) at which a confirmed
+ *             finding stops being a basis for action and is `lapsed`
+ *             (FM 2-0 1-34 and 4-12: each requirement has a latest time
+ *             at which the information is of value). The incident stays
+ *             open and the 300 s resolve is unchanged; only its
+ *             notifications stop. 300 for every kind (owner ruling
+ *             2026-11-25); a longer one only where BASIS names a
+ *             research/ document that supports it.
+ *             `--value-period KIND=SECS` moves it at run time.
+ *   PRELIM_S  0: the kind is not on the preliminary list. Otherwise the
+ *             kind's rule reports its first qualifying evidence as a
+ *             `preliminary` finding (alert.preliminary), and this is the
+ *             window in which today's threshold must be met: met, the
+ *             finding is `confirmed` (alert.create); not met, it is
+ *             `withdrawn` (alert.resolve, reason "withdrawn"). Nonzero
+ *             only where the rule calls fire_prelim() and BASIS names the
+ *             research/ document that argues both its first-evidence
+ *             threshold and this window.
+ *   BASIS     "" for a row at the defaults; otherwise the research/
+ *             document behind it (the test checks the file exists and
+ *             names the kind).
+ *
+ * Row order is sloth_alerts.def's: append a row there, append one here. */
+X(PORT_SCAN,                 300, 0, "")
+X(DEAUTH_FLOOD,              300, 0, "")
+X(NXDOMAIN_BURST,            300, 0, "")
+X(THREAT_DOMAIN,             300, 0, "")
+X(THREAT_IP,                 300, 0, "")
+X(BEACONING,                 300, 0, "")
+X(DGA_DOMAIN,                300, 0, "")
+X(ARP_SPOOF,                 300, 0, "")
+X(ROGUE_DHCP,                300, 0, "")
+X(ROGUE_RA,                  300, 0, "")
+X(SMB1_USE,                  300, 0, "")
+X(KERB_PREAUTH_BURST,        300, 0, "")
+X(LDAP_SEARCH_FLOOD,         300, 0, "")
+X(BGP_NOTIFICATION_BURST,    300, 0, "")
+X(SSH_BRUTE_FORCE,           300, 0, "")
+X(RDP_BRUTE_FORCE,           300, 0, "")
+X(SNMP_COMMUNITY_BRUTE,      300, 0, "")
+X(MQTT_BROKER_BRUTE,         300, 0, "")
+X(EVIL_TWIN,                 300, 0, "")
+X(EVIL_TWIN_PROXIMITY,       300, 0, "")
+X(KARMA_AP,                  300, 0, "")
+X(DNS_TUNNEL,                300, 0, "")
+X(PROBE_FLOOD,               300, 0, "")
+X(ATTACK_TOOL_UA,            300, 0, "")
+X(ATTACK_PATH,               300, 0, "")
+X(WEAK_TLS,                  300, 0, "")
+X(NO_MONITOR_MODE,           300, 0, "")
+X(CLEARTEXT_CRED,            300, 0, "")
+X(BEACON_FLOOD,              300, 0, "")
+X(AUTH_FLOOD,                300, 0, "")
+X(SSID_CONFUSION,            300, 0, "")
+X(MGMT_FUZZ,                 300, 0, "")
+X(ROGUE_RADIUS,              300, 0, "")
+X(ICMP_TUNNEL,               300, 0, "")
+X(MY_NETWORK_RECON,          300, 0, "")
+X(RECURRING_TRANSIT,         300, 0, "")
+X(UNKNOWN_DEVICE,            300, 0, "")
+X(RF_DEGRADED,               300, 0, "")
+X(ASSOC_FLOOD,               300, 0, "")
+X(BTM_ABUSE,                 300, 0, "")
+X(WPA_DOWNGRADE,             300, 0, "")
+X(PEAP_NO_SERVER_CERT,       300, 0, "")
+X(CSA_ABUSE,                 300, 0, "")
+X(RRM_SURVEY_ABUSE,          300, 0, "")
+X(RTS_FLOOD,                 300, 0, "")
+X(CAPTIVE_PORTAL,            300, 0, "")
+X(BLOCKACK_ATTACK,           300, 0, "")
+X(FRAG_PLAINTEXT,            300, 0, "")
+X(FRAG_BCAST,                300, 0, "")
+X(FRAG_CACHE,                300, 0, "")
+X(FRAG_MIXED,                300, 0, "")
+X(SAE_PSK_SPLIT,             300, 0, "")
+X(SAE_PSK_REGRESSION,        300, 0, "")
+X(FRAG_AMSDU,                300, 0, "")
+X(FRAG_AMSDU_EAPOL,          300, 0, "")
+X(FRAG_MIXKEY,               300, 0, "")
+X(FRAG_PN_GAP,               300, 0, "")
+X(FRAG_EAPOL_RELAY,          300, 0, "")
+X(SA_QUERY_FLOOD,            300, 0, "")
+X(MFP_UNPROTECTED,           300, 0, "")
+X(OPEN_SETUP_AP,             300, 0, "")
+X(WPS_PIN_BRUTE,             300, 0, "")
+X(WPS_LOCKOUT_CYCLING,       300, 0, "")
+X(WPS_PBC_RACE,              300, 0, "")
+X(MLE_INVALID_LINK_ID,       300, 0, "")
+X(MLE_COMMON_INFO_LEN_BAD,   300, 0, "")
+X(MLE_SUBELEM_OVERRUN,       300, 0, "")
+X(MLD_MAC_COLLISION,         300, 0, "")
+X(MLE_CROSS_LINK_CIPHER_DOWNGRADE, 300, 0, "")
+X(CAM_WS_DISCOVERY,          300, 0, "")
+X(PM_FORGE,                  300, 0, "")
+X(SURV_CLOUD_SNI,            300, 0, "")
+X(TPC_ABSENT_HIGH_BAND,      300, 0, "")
+X(CAM_SETUP_SSID,            300, 0, "")
+X(QUEUE_EVICT,               300, 0, "")
+X(MLE_RECONFIG_NO_MLO,       300, 0, "")
+X(MLE_PR_BEACON_DIFF,        300, 0, "")
+X(SURV_DNS,                  300, 0, "")
+X(WPS_PIXIE_PROBE,           300, 0, "")
+X(WPS_PIXIE_LIKELY_SUCCESS,  300, 0, "")
+X(COUNTRY_ABSENT,            300, 0, "")
+X(DFS_MASKING,               300, 0, "")
+X(CAM_MDNS_SERVICE,          300, 0, "")
+X(CAM_SSDP_DEVICE,           300, 0, "")
+X(CAM_SETUP_OUI,             300, 0, "")
+X(CAM_RTSP_UNAUTH,           300, 0, "")
+X(BT_OWN_TRANSMIT,           300, 0, "")
+X(BLE_ADV_FLOOD,             300, 0, "")
+X(BLE_HID_UNEXPECTED,        300, 0, "")
+X(BLE_WATCHLIST,             300, 0, "")
+X(GNSS_JAMMING,              300, 0, "")
+X(GNSS_SPOOF_SUSPECT,        300, 0, "")
+X(GNSS_TIME_JUMP,            300, 0, "")
+X(GNSS_POSITION_JUMP,        300, 0, "")
+X(ADSB_EMERGENCY,            300, 0, "")
+X(KARMA_PROBE_FORGE,         300, 0, "")
+X(PMKID_HARVEST,             300, 900, "research/papers/steube-2018-pmkid.md")
+X(HANDSHAKE_HARVEST,         300, 0, "")
+X(SENSOR_UNDERVOLT,          300, 0, "")
+X(SENSOR_SOURCE_DOWN,        300, 0, "")
+X(SENSOR_SUPPRESSED,         300, 0, "")

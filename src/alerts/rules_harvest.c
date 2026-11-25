@@ -48,14 +48,49 @@ static void mac_str(const uint8_t m[6], char out[20]) {
  * its EAPOL records and harvest_station record carry, and, when a
  * QUEUE_EVICT release landed on one of its (BSSID, station) pairs
  * inside the window, that pair: Framing Frames and the harvest in one
- * incident (harvest_track.h, "Clusters"). Severity does not move. */
+ * incident (harvest_track.h, "Clusters"). Severity does not move.
+ *
+ * First evidence (#245): below that threshold, a station that left one
+ * M1 carrying a PMKID KDE unanswered and has answered no BSSID is
+ * reported preliminary, LOW, under the same key, at once. Steube: "We
+ * receive all the data we need in the first EAPOL frame from the AP",
+ * so one such M1 is already crackable material in a harvester's hands;
+ * a station that answered anywhere holds a key and is left out. The
+ * window is the tracker's harvest.window_s default (900 s): a station
+ * that does not reach the threshold while its targets are counted
+ * never will on this evidence. research/papers/steube-2018-pmkid.md,
+ * "First evidence (#245)". */
+static void pmkid_prelim(const harvest_sta_t *h, time_t now) {
+    if (h->pmkid_unanswered < 1 || h->answered != 0) return;
+    char sta[20];
+    mac_str(h->sta, sta);
+    int pmkids    = h->pmkid_unanswered;
+    int solicited = h->solicited;
+    unsigned cluster = (unsigned)h->cluster_id;
+    char detail[ALERT_DETAIL_LEN];
+    snprintf(detail, sizeof detail,
+             "PMKID harvest STA %s: %d BSSID(s) handed it a PMKID in an M1 "
+             "it never answered (%d asked, none answered) - cluster #%u",
+             sta, pmkids, solicited, cluster);
+    char key[ALERT_KEY_LEN];
+    akey_t k;
+    akey_begin(&k, key, sizeof key, "pmkidharvest");
+    akey_mac(&k, h->sta);
+    if (!akey_end(&k)[0]) return;
+    fire_prelim(ALERT_TYPE_PMKID_HARVEST, ALERT_SEV_LOW, h->ev, h->ev_n,
+                "PMKID_HARVEST", detail, key, now);
+}
+
 void rule_pmkid_harvest(const sloth_state_t *s, time_t now) {
     int min_bssids = HARVEST_MIN_BSSIDS;
     int pct        = HARVEST_UNANSWERED_PCT;
     for (int i = 0; s->harvest_sta && i < s->harvest_sta_count; i++) {
         const harvest_sta_t *h = &s->harvest_sta[i];
-        if (h->unanswered < min_bssids) continue;
-        if (h->unanswered * 100 < pct * h->m1_bssids) continue;
+        if (h->unanswered < min_bssids ||
+            h->unanswered * 100 < pct * h->m1_bssids) {
+            pmkid_prelim(h, now);
+            continue;
+        }
 
         int corroborated = h->pmkid_unanswered >= min_bssids &&
                            h->answered == 0;

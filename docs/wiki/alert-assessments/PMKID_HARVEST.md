@@ -1,7 +1,7 @@
 ---
 type: PMKID_HARVEST
 technique: T1040
-rule_file: src/alerts/rules_harvest.c:52 rule_pmkid_harvest() (tracking in src/harvest_track.c, fed by assoc_request_observe(), eapol_observe_frame(); tune rows harvest.window_s, harvest.min_bssids, harvest.unanswered_pct in src/tune.c)
+rule_file: src/alerts/rules_harvest.c:84 rule_pmkid_harvest() (tracking in src/harvest_track.c, fed by assoc_request_observe(), eapol_observe_frame(); tune rows harvest.window_s, harvest.min_bssids, harvest.unanswered_pct in src/tune.c)
 count_semantics: per poll while the station row holds >= harvest.min_bssids unanswered M1s at >= harvest.unanswered_pct; one fire per soliciting station; a target ages out after harvest.window_s (900 s) without activity, so the incident ends at most a window after the station's last request or M1. Not per frame
 severity_assessment: agree - WARN for the solicitation pattern alone; CRIT only when >= 3 of the unanswered M1s carried a PMKID KDE and the station answered no M1 at all, i.e. offline-attackable material was actually handed over to a station that never showed it held a key
 false_positive_risk: low-medium - a roaming phone, PMK caching and FT roaming are excluded by construction (answered M1s, or no M1); the residual is a station heard asking but whose M2s are lost to range on more than half of three or more BSSIDs, which the 50 % ratio and the WARN tier are for
@@ -14,7 +14,7 @@ researched: 2026-11-11
 
 `harvest_note_assoc_req()` (`src/harvest_track.c`, called from `assoc_request_observe()`) opens a row per station that sends a (re)association request and a target per BSSID it asks. `harvest_note_eapol()` (called from `eapol_observe_frame()` after classification) marks an M1 to that station from an asked BSSID, with whether it carried a PMKID KDE, and an M2 from the station. `harvest_snapshot()` counts per station: BSSIDs asked, BSSIDs that answered with an M1, those whose M1 is older than `EAPOL_PAIR_WINDOW_S` (10 s) with no M2 (unanswered), unanswered with a PMKID, and BSSIDs the station sent an M2 to.
 
-`rule_pmkid_harvest()` (`src/alerts/rules_harvest.c:52`) fires when unanswered >= `harvest.min_bssids` (3) and unanswered x 100 >= `harvest.unanswered_pct` (50) x M1-answering BSSIDs. CRIT when PMKID-bearing unanswered >= 3 and the station answered none. Key `pmkidharvest:<sta>`; evidence the newest M1 per unanswered BSSID.
+`rule_pmkid_harvest()` (`src/alerts/rules_harvest.c:84`) fires when unanswered >= `harvest.min_bssids` (3) and unanswered x 100 >= `harvest.unanswered_pct` (50) x M1-answering BSSIDs. CRIT when PMKID-bearing unanswered >= 3 and the station answered none. Key `pmkidharvest:<sta>`; evidence the newest M1 per unanswered BSSID.
 
 ## The mechanism
 
@@ -42,6 +42,12 @@ A cluster is one station row: its id is assigned when the row opens and is never
 
 Separately from the rule: an AP heard handing the PMKID KDE to any station in M1 (`harvest_ap_posture()`) is a hygiene finding, not an attacker signal. With a PSK-family AKM on its beacon the value is attackable offline [1]; with SAE or 802.1X it is not a passphrase target. It is `beacon.harvest_posture` (1 / 0, absent when not observed, JSONL 1.7.0) and a line under the EAPOL view's header for the selected row's AP. The issue's "no 802.11r / FT in RSN capability" qualifier is not applied: FT is an AKM, not an RSN capability bit, and no source in the corpus says FT stops an AP sending the KDE, so FT-PSK counts as PSK.
 
+## First evidence and the withdrawal rate (#245)
+
+`PMKID_HARVEST` is on the preliminary list. Below the threshold above, a station that left one M1 carrying a PMKID KDE unanswered and answered no BSSID is reported at once, LOW, as `alert.preliminary` under the same key (`pmkid_prelim()`), detail opening "not evaluated: first evidence only". If the station reaches the threshold, the same incident is confirmed (`alert` and `alert.create`, same `incident_id`, `prelim_at` and `confirmed_at`). If it does not within 900 s (the `harvest.window_s` default), or the rule stops reporting it first, it is withdrawn (`alert.resolve`, reason `withdrawn`, `withdraw_why` `unconfirmed` or `evidence_aged`) and never reaches `sloth.db`. Basis: Steube, "We receive all the data we need in the first EAPOL frame from the AP" [1]; `research/papers/steube-2018-pmkid.md`, "First evidence (#245)".
+
+**Withdrawal rate: not measured.** The `alert_lifecycle` record carries the kind's preliminary, confirmed and withdrawn counts and the median time from preliminary to confirmed; no reference-host run with the lifecycle on exists yet. The expected benign withdrawal is a station heard asking one AP whose M2 was lost to range. A high rate is the signal to take the kind off the list (`include/sloth_alert_value.def`) or run with `--no-preliminary`.
+
 ## Assessment
 
 The thresholds are judgements; neither source gives counts or timing [1][2]. The window is long (15 min) by design: the issue's complaint was a slow harvest under the flood thresholds, and `ASSOC_FLOOD` counts requests to one BSSID, not distinct BSSIDs per station. A harvester that rotates its MAC per target is not one station here and is missed; that is a stated limit, not a false negative the tests hide.
@@ -55,4 +61,4 @@ The thresholds are judgements; neither source gives counts or timing [1][2]. The
 
 ## Verification notes
 
-Written 2026-11-11 with the rule, against `src/alerts/rules_harvest.c:52`, `src/harvest_track.{c,h}`, `src/eapol_log.c` and `src/assoc_track.c`. Clusters, the QUEUE_EVICT mark and the posture added 2026-11-12 (`tests/test_harvest_track.c` `test_cluster_*`, `test_queue_evict_marks_*`, `test_ap_posture*`; `tests/test_jsonl_lures.c`; `tests/test_views_render.c` `test_eapol_view_*`). Tests: `tests/test_harvest_track.c`, hand-built (re)association requests, EAPOL-Key data frames and deauthentications per IEEE 802.11-2020, through the observers the capture path calls.
+Written 2026-11-11 with the rule, against `src/alerts/rules_harvest.c:52` (now :84), `src/harvest_track.{c,h}`, `src/eapol_log.c` and `src/assoc_track.c`. Clusters, the QUEUE_EVICT mark and the posture added 2026-11-12 (`tests/test_harvest_track.c` `test_cluster_*`, `test_queue_evict_marks_*`, `test_ap_posture*`; `tests/test_jsonl_lures.c`; `tests/test_views_render.c` `test_eapol_view_*`). Tests: `tests/test_harvest_track.c`, hand-built (re)association requests, EAPOL-Key data frames and deauthentications per IEEE 802.11-2020, through the observers the capture path calls.
