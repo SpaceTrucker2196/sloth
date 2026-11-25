@@ -48,6 +48,13 @@ A fire count in the hundreds of millions is per-evaluation counting of a
 standing condition (at least four polls a second), not that many events;
 each file's \`count_semantics\` says how its rule counts.
 
+Reader feedback (sloth-mesh#17): slothweb's \`GET /api/alert-feedback/export\`
+gives each alert type's triage verdicts at one site over 30 and 90 days
+(useful, not useful, false, duplicate; shares only from 20 verdicts) and
+sloth's lifecycle counts. Figures are placed in an assessment by hand
+from that export, naming the site and the window; no job writes them.
+A figure is about the rule at that site, never the rule in general.
+
 | Type | Technique | Severity assessment | False-positive risk | Noise verdict |
 |---|---|---|---|---|
 EOF

@@ -1262,3 +1262,54 @@ links (`relation.via`, v10) and notes alike. It is decided by the
 write path's gate from the request's authentication and never from
 its body ([[slothweb-mcp]] has the design).
 
+## 16. Reader feedback (2026-11-25, sloth-mesh#17)
+
+FM 2-0 (2004) 8-35: the reader "must inform the SIGINT producer of the
+extent to which the product answered" the question, and "providing
+feedback to the SIGINT producer and collector helps improve the
+effectiveness and efficiency" of collection. The triage states of §3
+are that feedback already; sloth-mesh#17 reads them as one figure per
+alert type, with no second control and no write (`web/src/web_feedback.h`).
+
+### 16.1 The words
+
+| Triage state | Feedback word |
+|---|---|
+| `incident` | `useful` |
+| `known` | `useful` (owner ruling 2026-11-25) |
+| `noise` | `not_useful` |
+| `false` | `false` |
+| `untriaged` | none: no verdict |
+| a member of a #198 incident that governs it, not its earliest member | `duplicate` (owner ruling 2026-11-25) |
+
+An alert reads as `web/src/web_incident.h` says: its own newest row when
+that is a decision at or after the incident's, else the incident decided
+last. When the incident governs, its earliest member (the smallest live
+member row id) takes the incident's state through the table above, and
+every later member is a `duplicate`. Explicit members only: an alert an
+incident holds only by a standing filter counts by its own rows.
+Anomalies (§15) are left out; they are the sensor's baselines, not a rule.
+
+### 16.2 The figure
+
+Per alert type, over the alerts that began in the last 30 or 90 days:
+the count of each word, the verdicts (their sum), the alerts judged (a
+triage row or a membership) and seen (sloth.db's findings of the type
+that began in the window, never fewer than judged), and from **20
+verdicts**: the share of seen with a verdict, each word's share, and the
+median seconds from `first_seen` to the first decision. Below 20 the
+shares and the median are null and the page says "not enough verdicts",
+never a percentage. Every figure carries the scope "this rule at this
+site": it is not a statement about the rule in general, and no peer
+site is read (owner ruling 2026-11-25). With a v21 sloth.db the figure
+also carries sloth's own incidents of the type by lifecycle word (#245):
+a count, no minimum.
+
+### 16.3 The export
+
+`GET /api/alert-feedback/export`: both windows, members held to a fixed
+list (`web_fb_export_members[]`), strings only type names, the words,
+the scope sentence and the hostname: no address, SSID or note, held by
+`web/tests/test_feedback.c` with each seeded into the store. Figures
+reach [alert-assessments](wiki/alert-assessments/README.md) by hand,
+naming the site and the window; no job writes them.

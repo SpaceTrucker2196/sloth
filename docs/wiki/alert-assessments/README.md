@@ -22,6 +22,13 @@ A fire count in the hundreds of millions is per-evaluation counting of a
 standing condition (at least four polls a second), not that many events;
 each file's `count_semantics` says how its rule counts.
 
+Reader feedback (sloth-mesh#17): slothweb's `GET /api/alert-feedback/export`
+gives each alert type's triage verdicts at one site over 30 and 90 days
+(useful, not useful, false, duplicate; shares only from 20 verdicts) and
+sloth's lifecycle counts. Figures are placed in an assessment by hand
+from that export, naming the site and the window; no job writes them.
+A figure is about the rule at that site, never the rule in general.
+
 | Type | Technique | Severity assessment | False-positive risk | Noise verdict |
 |---|---|---|---|---|
 | [ADSB_EMERGENCY](ADSB_EMERGENCY.md) | - | agree | medium | not measured |
@@ -106,7 +113,7 @@ each file's `count_semantics` says how its rule counts.
 | [SAE_PSK_SPLIT](SAE_PSK_SPLIT.md) | T1557.004 | agree | medium | not seen on the reference host |
 | [SA_QUERY_FLOOD](SA_QUERY_FLOOD.md) | T1499 | agree | low-to-medium | a confined burst on the reference host |
 | [SENSOR_SOURCE_DOWN](SENSOR_SOURCE_DOWN.md) | - | agree | low | not measured |
-| [SENSOR_SUPPRESSED](SENSOR_SUPPRESSED.md) | - | agree | medium | not measured |
+| [SENSOR_SUPPRESSED](SENSOR_SUPPRESSED.md) | - | agree | medium, unmeasured for silent | not measured |
 | [SENSOR_UNDERVOLT](SENSOR_UNDERVOLT.md) | - | agree | low | not measured |
 | [SMB1_USE](SMB1_USE.md) | T1210 | agree | low | noisy in count, quiet in findings on the reference host |
 | [SNMP_COMMUNITY_BRUTE](SNMP_COMMUNITY_BRUTE.md) | T1110.001 | agree | low | not seen on the reference host |
