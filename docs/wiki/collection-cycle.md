@@ -48,7 +48,7 @@ Rule: the per-frame path never waits on disk or network.
 |---|---|
 | Run the alert rules over the state | today |
 | Incident engine: open, update, close | today |
-| Emit a **preliminary** finding at first qualifying evidence for the listed types | today for `PMKID_HARVEST` and `HANDSHAKE_HARVEST` (#245, [[alerts]] § Finding lifecycle); the other four listed kinds #245 |
+| Emit a **preliminary** finding at first qualifying evidence for the listed types | today for `PMKID_HARVEST`, `HANDSHAKE_HARVEST` and `GNSS_JAMMING` (#245, [[alerts]] § Finding lifecycle); `EVIL_TWIN`, `KARMA_AP` and `ROGUE_RADIUS` #245 |
 | Confirm or withdraw a preliminary finding | today (#245: confirmed by the kind's normal threshold under the same key; withdrawn at the kind's window or when its evidence ages out) |
 | Attach quality fields: completeness, latency, corroboration, source state | #246 |
 | Issue a cue when a finding needs more collection, inside the cue limits | #248 |

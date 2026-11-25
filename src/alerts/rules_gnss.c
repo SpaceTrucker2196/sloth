@@ -485,7 +485,31 @@ void rule_gnss_jamming(const sloth_state_t *s, time_t now) {
      * points spans N seconds. */
     int held = run_from && cur->mono_ms - run_from + 1000 >= hold_ms;
 
-    if (!collapse && !held) return;
+    if (!collapse && !held) {
+        /* First evidence (#245): the indicator at or above gnss.jam_ind
+         * on the newest point, its hold not yet run. LOW, under the key
+         * the finding uses; the hold confirms it, a run that breaks
+         * first is withdrawn when the window (30 s, the hold's
+         * default) passes. research/gnss/jamming-detection.md, "First
+         * evidence (#245)". */
+        if (run_from) {
+            unsigned long run_s =
+                (unsigned long)((cur->mono_ms - run_from + 1000) / 1000);
+            unsigned long hold_s = (unsigned long)(hold_ms / 1000);
+            char pkey[32];
+            akey_t pk;
+            akey_begin(&pk, pkey, sizeof(pkey), "gnssjam");
+            if (!akey_end(&pk)[0]) return;
+            char pdetail[160];
+            snprintf(pdetail, sizeof(pdetail),
+                     "u-blox jamInd >= %d for %lu s of the %lu s hold - "
+                     "interference or jamming, not yet held",
+                     jam_min, run_s, hold_s);
+            fire_prelim(ALERT_TYPE_GNSS_JAMMING, ALERT_SEV_LOW, NULL, 0,
+                        "GNSS_JAMMING", pdetail, pkey, now);
+        }
+        return;
+    }
 
     char key[32];
     akey_t ak;

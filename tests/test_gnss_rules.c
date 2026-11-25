@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include "alert_lifecycle.h"
 #include "runner.h"
 #include "sloth.h"
 #include "alerts.h"
@@ -73,9 +74,19 @@ static void end(void) {
 
 static void evaluate(void) { alerts_update(&g_s); }
 
+/* A finding of type t; a preliminary one (#245) is first evidence,
+ * which find_prelim() looks for. */
 static int find_type(alert_type_t t) {
     for (int i = 0; i < g_s.alert_count; i++)
-        if (g_s.alerts[i].type == t) return i;
+        if (g_s.alerts[i].type == t &&
+            g_s.alerts[i].state != ALERT_STATE_PRELIMINARY) return i;
+    return -1;
+}
+
+static int find_prelim(alert_type_t t) {
+    for (int i = 0; i < g_s.alert_count; i++)
+        if (g_s.alerts[i].type == t &&
+            g_s.alerts[i].state == ALERT_STATE_PRELIMINARY) return i;
     return -1;
 }
 
@@ -407,6 +418,70 @@ static void test_jam_indicator_short_does_not_fire(void) {
     ASSERT_EQ(tune_set("gnss.jam_hold_s=15", NULL, 0), 0);
     evaluate();
     ASSERT(find_type(ALERT_TYPE_GNSS_JAMMING) >= 0);
+    end();
+}
+
+/* #245: the indicator's first high point is first evidence, LOW, under
+ * the finding's key; held for gnss.jam_hold_s it is confirmed, the same
+ * incident at WARN. A run that is never held is withdrawn at the 30 s
+ * window. A point under gnss.jam_ind is not first evidence (seen red
+ * with the run_from test in rule_gnss_jamming()'s preliminary branch
+ * dropped, then restored). */
+static void test_jam_indicator_first_evidence(void) {
+    begin();
+    secs(60, 420, 10, 10, 14, 10, 3);
+    evaluate();
+    ASSERT_EQ(find_prelim(ALERT_TYPE_GNSS_JAMMING), -1);
+    secs(1, 420, 10, 10, 14, 200, 3);
+    evaluate();
+    int i = find_prelim(ALERT_TYPE_GNSS_JAMMING);
+    ASSERT(i >= 0);
+    char iid[ALERT_INCIDENT_ID_LEN] = "";
+    if (i >= 0) {
+        ASSERT_EQ(g_s.alerts[i].sev, ALERT_SEV_LOW);
+        ASSERT_STR(g_s.alerts[i].key, "gnssjam");
+        ASSERT(strstr(g_s.alerts[i].detail, "not evaluated: first evidence only - "
+                      "u-blox jamInd >= 200 for 1 s of the 30 s hold") != NULL);
+        snprintf(iid, sizeof iid, "%s", g_s.alerts[i].incident_id);
+    }
+    for (int t = 0; t < 29; t++) {
+        secs(1, 420, 10, 10, 14, 200, 3);
+        evaluate();
+    }
+    ASSERT_EQ(find_prelim(ALERT_TYPE_GNSS_JAMMING), -1);
+    i = find_type(ALERT_TYPE_GNSS_JAMMING);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)g_s.alerts[i].state, (int)ALERT_STATE_CONFIRMED);
+        ASSERT_EQ(g_s.alerts[i].sev, ALERT_SEV_WARN);
+        ASSERT_STR(g_s.alerts[i].incident_id, iid);
+    }
+    end();
+}
+
+static void test_jam_indicator_first_evidence_withdrawn(void) {
+    begin();
+    secs(60, 420, 10, 10, 14, 10, 3);
+    secs(1, 420, 10, 10, 14, 200, 3);
+    evaluate();
+    ASSERT(find_prelim(ALERT_TYPE_GNSS_JAMMING) >= 0);
+    for (int t = 0; t < 29; t++) {
+        secs(1, 420, 10, 10, 14, t < 10 ? 200 : 10, 3);
+        evaluate();
+    }
+    int i = find_prelim(ALERT_TYPE_GNSS_JAMMING);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(g_s.alerts[i].resolved, 0);
+    secs(1, 420, 10, 10, 14, 10, 3);
+    evaluate();
+    i = -1;
+    for (int k = 0; k < g_s.alert_count; k++)
+        if (g_s.alerts[k].type == ALERT_TYPE_GNSS_JAMMING) i = k;
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)g_s.alerts[i].state, (int)ALERT_STATE_WITHDRAWN);
+        ASSERT_EQ((int)g_s.alerts[i].withdraw_why, (int)ALERT_WITHDRAW_UNCONFIRMED);
+    }
     end();
 }
 
@@ -1649,6 +1724,8 @@ void run_gnss_rules_tests(void) {
     RUN_TEST(test_jam_held_while_down);
     RUN_TEST(test_jam_indicator_held_fires);
     RUN_TEST(test_jam_indicator_short_does_not_fire);
+    RUN_TEST(test_jam_indicator_first_evidence);
+    RUN_TEST(test_jam_indicator_first_evidence_withdrawn);
     RUN_TEST(test_jam_indicator_gap_breaks_the_hold);
     RUN_TEST(test_jam_collapse_through_the_feed_fires);
     RUN_TEST(test_jam_partial_obstruction_does_not_fire);

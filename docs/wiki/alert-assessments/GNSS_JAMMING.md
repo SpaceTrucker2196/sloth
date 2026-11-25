@@ -40,6 +40,12 @@ To lean towards interference rather than an antenna fault: satellites at every e
 
 Excluded and tested (tests/test_gnss_rules.c): a sky falling 20 dB over five minutes; a 12 dB dip that keeps the solution; the list shrinking with the drop; four of ten satellites lost behind an obstruction with the rest unchanged, fed through src/gps.c's own parser; an empty sky (antenna removed); a stale series; a run with a 10 s gap; 20 s of high `jamInd`.
 
+## First evidence and the withdrawal rate (#245)
+
+`GNSS_JAMMING` is on the preliminary list, through the indicator path only. A one-second point with `jam` at or above `gnss.jam_ind` whose run has not yet held for `gnss.jam_hold_s` is reported at once, LOW, as `alert.preliminary` under the finding's key `gnssjam`, detail "not evaluated: first evidence only - u-blox jamInd >= N for S s of the 30 s hold". The hold confirms the same incident (`alert`, `alert.create`, same `incident_id`); a run that breaks first is withdrawn when the 30 s window (the hold's default) passes, `unconfirmed`. The collapse path has no first evidence: it is one measurement against its baseline. Basis: the vendor's "can be used as an indicator for continuous wave (narrowband) jammers/interference", the hold existing because gpsd attaches `jam` about one TPV in four; `research/gnss/jamming-detection.md`, "First evidence (#245)" [2]. sloth-rf's rule; `--no-preliminary` and `--value-period` are sloth-rf flags too.
+
+**Withdrawal rate: not measured.** The indicator is uncalibrated, so an install that reads high near the threshold is the expected source of withdrawals; the `alert_lifecycle` record carries the counts.
+
 ## Assessment
 
 **Severity.** WARN with CRIT on fix loss is right: the loss of fix is the operational consequence (no position stamps, no GNSS time) and is unambiguous, while the cause never is.

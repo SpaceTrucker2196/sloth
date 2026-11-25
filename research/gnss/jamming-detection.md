@@ -154,6 +154,31 @@ Searched for a u-blox jamming/interference application note; none was
 found. The vendor's own description is §13 of the protocol
 specification, above.
 
+## First evidence (#245)
+
+`ALERT_TYPE_GNSS_JAMMING` is on the preliminary list
+(`include/sloth_alert_value.def`), through its indicator path only.
+
+- **Threshold: one point with `jam` at or above `gnss.jam_ind`** (128 by
+  default), its hold not yet run. The basis is the vendor's own
+  description above: `jamInd` "can be used as an indicator for
+  continuous wave (narrowband) jammers/interference". One report is an
+  indication; sloth's hold (`gnss.jam_hold_s`, 30 s) exists because gpsd
+  attaches `jam` about one TPV in four, so a single report is not
+  reported as the finding. The first one is reported at once, LOW, as
+  "not evaluated: first evidence only", and the hold confirms it.
+- **Window: 30 s,** the hold's default: the run that will confirm must
+  hold that long from its first point, so a preliminary opened on that
+  point is confirmed inside it or its run broke. A `--tune
+  gnss.jam_hold_s` does not move the window; a longer hold withdraws the
+  preliminary first and then opens the finding when the hold is met.
+- **The collapse path has no first evidence:** its signature is one
+  measurement against a baseline, with nothing earlier to report.
+- **What this does not establish:** the indicator is uncalibrated
+  ("It is necessary to ... calibrate the 'not jammed' case"), so a
+  preliminary can be an install that reads high; the withdrawal rate
+  the `alert_lifecycle` record carries is how the operator sees it.
+
 ## What this document does not establish
 
 - **No threshold** for `jam`, for a C/N0 drop, or for "simultaneous" on
