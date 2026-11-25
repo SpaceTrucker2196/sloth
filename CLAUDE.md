@@ -42,5 +42,9 @@ quietly inside a feature commit.
 - Only the owner relaxes this. Enforcement points and the tests that
   hold it: agents/AGENTS.md, same heading;
   [ADR 0009](docs/wiki/adr/0009-fleet-monitor-only.md).
+- Owner amendment 2026-11-25 (sloth-mesh#18): alert notification lanes
+  are not fleet sharing. Any alert may notify with a fixed body (type,
+  severity, site label, time); title/SSID and address only on a lane the
+  owner switched for extras. Fleet export/import unchanged.
 
 @agents/AGENTS.md

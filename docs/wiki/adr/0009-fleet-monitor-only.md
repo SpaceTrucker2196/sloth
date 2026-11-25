@@ -1,8 +1,8 @@
 ---
 title: Fleet sharing carries monitor data only and names its host
 date: 2026-11-12
-status: Accepted
-authority: owner hard rule of 2026-11-12, and the owner's clarification of the same day; supersedes the "What travels" clause of ADR 0008
+status: Accepted; amended 2026-11-25 (notification lanes)
+authority: owner hard rule of 2026-11-12, and the owner's clarification of the same day; supersedes the "What travels" clause of ADR 0008. Amended by the owner's ruling of 2026-11-25 on sloth-mesh#18
 ---
 
 # ADR 0009 — Fleet sharing carries monitor data only and names its host
@@ -87,6 +87,38 @@ ADR 0008's transport, opt-in, allow lists and pull model stand. Its
   has each peer's clock and backfill reset once (meta
   `fleet.rule.monitor_only.v2`), so peers are asked again from the start
   for what the rule now lets travel. Nothing it allows is deleted.
+
+## Amendment 2026-11-25: notification lanes
+
+slothweb's alert delivery lanes (sloth-mesh#18: the dashboard, then an
+operator's push URL, then a log line) are not fleet sharing. The owner
+ruled on 2026-11-25, and confirmed explicitly, that the rule above does
+not bind them:
+
+> OWNER RELAXES THE FLEET MONITOR-ONLY HARD RULE FOR NOTIFICATION LANES
+> (2026-11-25, confirmed explicitly): wire/joined-network-only alerts may
+> notify; fixed body (type, severity, site label, time) plus per-lane
+> owner switch for extras (SSID, address) for ALL alerts.
+
+- **Every alert type may notify**, the IP capture's and the joined
+  network's included: a notification goes to the operator, not to a
+  peer.
+- **The body is fixed**: the alert type's name, the severity, the site
+  label and the time (ISO 8601, UTC), and "delayed N s" when it went out
+  late. Nothing else, whatever the alert carried.
+- **Extras only by the owner's switch, per lane**: the alert's title
+  (which names the SSID where the alert has one) and its address, for
+  every alert type alike, on the lanes the operator named.
+- **Each lane that leaves the host is opt-in** (a flag per lane) and is
+  named on slothweb's `/api/health` and on its stderr at start (MISSION
+  §2's announcement).
+- **The fleet's export and import rules are unchanged**: nothing in this
+  amendment lets a row, an alert or a member travel to a peer.
+
+Enforcement point: the body builder `web_notify_body()` in sloth-mesh's
+`src/web_notify.c`, held by `tests/test_notify.c` (the fixed body
+carries no SSID, address or credential-like string from a hand-built
+alert; the extras appear only on a lane switched for them).
 
 ## Consequences
 

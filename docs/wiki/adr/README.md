@@ -9,7 +9,7 @@ a proposal: nothing here is a decision an agent made.
 **Sources**: issue #184 §2 and §5, the owner's comment on #184 of
 2026-11-04, issue #185 (Stage 0).
 
-**Last updated**: 2026-11-15 (ADR 0010), 2026-11-12 (ADR 0009)
+**Last updated**: 2026-11-25 (ADR 0009 amended: notification lanes), 2026-11-15 (ADR 0010), 2026-11-12 (ADR 0009)
 
 A record says what was decided and why, and stays as written once the
 decision is taken. Superseding one means a new record that names it, not
@@ -30,7 +30,7 @@ before Stage 1 starts.
 | [0006](0006-sharing-is-opt-in.md) | Cross-installation sharing is opt-in and sanitised | Accepted |
 | [0007](0007-versioning.md) | Semantic versions per repository, contract versions per seam | Accepted |
 | [0008](0008-own-fleet.md) | The owner's own sensors share at full fidelity over the tailnet (#192) | Accepted |
-| [0009](0009-fleet-monitor-only.md) | Fleet sharing carries monitor data only and names its host (owner rule 2026-11-12) | Accepted; supersedes 0008's "What travels" |
+| [0009](0009-fleet-monitor-only.md) | Fleet sharing carries monitor data only and names its host (owner rule 2026-11-12) | Accepted; supersedes 0008's "What travels"; amended 2026-11-25 by the owner (notification lanes, sloth-mesh#18) |
 | [0010](0010-wifi-rf-daemons.md) | The sensor is two daemons, `sloth-wifi` and `sloth-rf`, in one repository (#211; owner rulings 2026-11-14 and 2026-11-15) | Accepted |
 | [0011](0011-sloth-va-transmits.md) | `sloth-va`, a separate helper that connects to the owner's Victron devices, beside a sloth that stays passive (owner request 2026-11-15) | Accepted |
 

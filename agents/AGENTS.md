@@ -470,6 +470,17 @@ shape by shape) and `tests/test_fleet.c`
 `test_purge_v2_repulls`). A change that makes one of them pass by
 weakening it breaks the rule.
 
+**Amendment, notification lanes (owner, 2026-11-25, confirmed
+explicitly; sloth-mesh#18).** The rule above binds the fleet's export
+and import, which are unchanged. It does not bind slothweb's alert
+delivery lanes: any alert type may notify, the joined network's and the
+wire's included, with a fixed body (type, severity, site label, time);
+the alert's title (its SSID) and address go out only on a lane the
+owner switched for extras, for every type alike. Each lane that leaves
+the host is opt-in and announced. Enforcement point: sloth-mesh's
+`web_notify_body()` (`src/web_notify.c`) and `tests/test_notify.c`;
+[ADR 0009](../docs/wiki/adr/0009-fleet-monitor-only.md), amendment.
+
 ## Hard "don't"s
 
 - Don't run destructive git ops (`reset --hard`, `push --force`, branch
