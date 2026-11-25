@@ -335,6 +335,37 @@ static void test_preliminary_withdrawn_at_the_window_edge(void) {
     al_end();
 }
 
+/* First evidence that keeps moving (a burst that goes on) is not
+ * withdrawn while it moves: the window runs from its newest
+ * observation, and it is withdrawn one window after the last, both
+ * sides of the edge. Seen red with the window timed from prelim_ms
+ * again (withdrawn at 900 s, while the evidence still moved). */
+static void test_moving_first_evidence_keeps_its_window(void) {
+    al_begin();
+    char d[32];
+    alerts_fire_prelim_for_test(K, ALERT_SEV_LOW, KEY, "n=0");
+    al_tick();
+    for (int t = 1; t <= 12; t++) {           /* 1200 s of new evidence */
+        al_advance(100);
+        snprintf(d, sizeof d, "n=%d", t);
+        alerts_fire_prelim_for_test(K, ALERT_SEV_LOW, KEY, d);
+        al_tick();
+    }
+    ASSERT_EQ(al_count("{\"type\":\"alert.resolve\","), 0);
+    al_advance(899);                          /* 899 s since the last */
+    alerts_fire_prelim_for_test(K, ALERT_SEV_LOW, KEY, d);
+    al_tick();
+    ASSERT_EQ(al_count("{\"type\":\"alert.resolve\","), 0);
+    al_advance(1);
+    alerts_fire_prelim_for_test(K, ALERT_SEV_LOW, KEY, d);
+    al_tick();
+    ASSERT_EQ(al_count("{\"type\":\"alert.resolve\","), 1);
+    ASSERT(strstr(al_line("alert.resolve", 0),
+                  "\"withdraw_why\":\"unconfirmed\"") != NULL);
+    ASSERT_EQ(al_count("{\"type\":\"alert.preliminary\","), 1);
+    al_end();
+}
+
 /* A withdrawn key is not held off a confirmation: the threshold met
  * the tick after is a finding at once, opened confirmed. */
 static void test_confirmation_after_withdrawal_opens_confirmed(void) {
@@ -473,6 +504,7 @@ void run_alert_lifecycle_tests(void) {
     RUN_TEST(test_preliminary_on_a_confirmed_key_does_nothing);
     RUN_TEST(test_unlisted_kind_has_no_preliminary);
     RUN_TEST(test_preliminary_withdrawn_at_the_window_edge);
+    RUN_TEST(test_moving_first_evidence_keeps_its_window);
     RUN_TEST(test_confirmation_after_withdrawal_opens_confirmed);
     RUN_TEST(test_preliminary_whose_evidence_ages_out);
     RUN_TEST(test_lapse_and_renewal);

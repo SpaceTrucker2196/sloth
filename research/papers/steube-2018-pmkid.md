@@ -76,8 +76,10 @@ withdrawn if it is not met within the window.
   how long a station's targets are counted at all. That number is
   sloth's judgement (`src/harvest_track.h`), not this source's; it is
   used because a station that does not reach the rule's threshold while
-  its targets are still counted cannot reach it on this evidence. A
-  `--tune harvest.window_s` does not move the window.
+  its targets are still counted cannot reach it on this evidence. It is
+  counted from the newest first evidence (another unanswered PMKID M1,
+  another BSSID asked), as the tracker counts a station from its last
+  activity. A `--tune harvest.window_s` does not move the window.
 - **What it does not say.** One unanswered PMKID M1 is also what a
   station that walked out of range after its association request looks
   like; the preliminary state exists for exactly that uncertainty, and

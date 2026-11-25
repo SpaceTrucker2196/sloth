@@ -1190,6 +1190,51 @@ static void test_deauth_burst_withdrawn(void) {
     hv_end();
 }
 
+/* hcxdumptool keeps deauthenticating until the station comes back
+ * (research/tools/hcxdumptool.md): a burst that goes on for 40 s, then
+ * the reconnect 5 s after its last frame, inside the tracker's 30 s from
+ * that frame. The preliminary that opened on the burst's first frames
+ * is the one confirmed, and it was never withdrawn: the window runs
+ * from the newest first evidence, as the tracker's does. */
+static void test_long_deauth_burst_is_confirmed_not_withdrawn(void) {
+    hv_begin();
+    alert_lc_counts_clear();
+    static sloth_state_t s;
+    uint8_t b[6]; ap(b, 1);
+    uint16_t seq = 300;
+    hv_deauth_flags(PHONE, b, b, 0, seq++, 0);
+    hv_deauth_flags(PHONE, b, b, 0, seq++, 0);
+    hv_poll_keep(&s);
+    int i = hv_find_prelim(&s, ALERT_TYPE_HANDSHAKE_HARVEST);
+    ASSERT(i >= 0);
+    char iid[ALERT_INCIDENT_ID_LEN] = "";
+    if (i >= 0) snprintf(iid, sizeof iid, "%s", s.alerts[i].incident_id);
+    for (int t = 0; t < 40; t++) {
+        hv_advance_ms(1000);
+        hv_deauth_flags(PHONE, b, b, 0, seq++, 0);
+        hv_poll_keep(&s);
+    }
+    i = hv_find_prelim(&s, ALERT_TYPE_HANDSHAKE_HARVEST);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_STR(s.alerts[i].incident_id, iid);
+    hv_advance_ms(5000);
+    hv_assoc_req(PHONE, b, 0);
+    hv_m1m2(PHONE, b, 5, 0);
+    hv_poll_keep(&s);
+    i = hv_find(&s, ALERT_TYPE_HANDSHAKE_HARVEST);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].state, (int)ALERT_STATE_CONFIRMED);
+        ASSERT_STR(s.alerts[i].incident_id, iid);
+    }
+    alert_lc_counts_t n;
+    alert_lc_counts(ALERT_TYPE_HANDSHAKE_HARVEST, &n);
+    ASSERT_EQ(n.withdrawn, 0u);
+    ASSERT_EQ(n.confirmed, 1u);
+    alert_lc_counts_clear();
+    hv_end();
+}
+
 void run_harvest_track_tests(void) {
     TEST_SUITE("PMKID / handshake harvesting (#172)");
     RUN_TEST(test_clientless_solicitation_warns);
@@ -1208,6 +1253,7 @@ void run_harvest_track_tests(void) {
     RUN_TEST(test_deauth_burst_is_preliminary_then_confirmed);
     RUN_TEST(test_one_deauth_is_not_first_evidence);
     RUN_TEST(test_deauth_burst_withdrawn);
+    RUN_TEST(test_long_deauth_burst_is_confirmed_not_withdrawn);
     RUN_TEST(test_tables_are_bounded_and_keep_the_harvester);
     RUN_TEST(test_deauth_then_handshake_warns);
     RUN_TEST(test_two_victims_is_crit);

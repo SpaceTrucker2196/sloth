@@ -459,13 +459,17 @@ static void test_jam_indicator_first_evidence(void) {
     end();
 }
 
+/* A run of 11 s that breaks: withdrawn, unconfirmed, 30 s (the window)
+ * after its last point, both sides of the edge. The window runs from
+ * the newest first evidence: seen red (withdrawn at 30 s from the first
+ * point) with expire_incidents() timing it from prelim_ms again. */
 static void test_jam_indicator_first_evidence_withdrawn(void) {
     begin();
     secs(60, 420, 10, 10, 14, 10, 3);
     secs(1, 420, 10, 10, 14, 200, 3);
     evaluate();
     ASSERT(find_prelim(ALERT_TYPE_GNSS_JAMMING) >= 0);
-    for (int t = 0; t < 29; t++) {
+    for (int t = 0; t < 39; t++) {
         secs(1, 420, 10, 10, 14, t < 10 ? 200 : 10, 3);
         evaluate();
     }

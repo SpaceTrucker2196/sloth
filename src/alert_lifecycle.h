@@ -17,7 +17,9 @@
  *                key (`alert` + `alert.create`, same incident_id);
  *                every other incident opens confirmed, as before.
  *   withdrawn    a preliminary incident whose kind's window passed with
- *                no confirmation, or whose evidence aged out first.
+ *                no confirmation, counted from its newest first evidence
+ *                (its last observation, not its first), or whose
+ *                evidence aged out first.
  *                Closed by one `alert.resolve`, reason "withdrawn",
  *                `withdraw_why` saying which.
  *   lapsed       a confirmed incident with no new observation for its

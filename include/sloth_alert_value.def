@@ -21,8 +21,10 @@
  *   PRELIM_S  0: the kind is not on the preliminary list. Otherwise the
  *             kind's rule reports its first qualifying evidence as a
  *             `preliminary` finding (alert.preliminary), and this is the
- *             window in which today's threshold must be met: met, the
- *             finding is `confirmed` (alert.create); not met, it is
+ *             window in which today's threshold must be met, counted
+ *             from the newest first evidence (the preliminary's last
+ *             observation, so a burst that goes on keeps it open): met,
+ *             the finding is `confirmed` (alert.create); not met, it is
  *             `withdrawn` (alert.resolve, reason "withdrawn"). Nonzero
  *             only where the rule calls fire_prelim() and BASIS names the
  *             research/ document that argues both its first-evidence

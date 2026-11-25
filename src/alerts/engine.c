@@ -1236,7 +1236,15 @@ static void expire_incidents(time_t now, uint64_t mono) {
         if (a->state == ALERT_STATE_PRELIMINARY) {
             if (quiet)
                 lifecycle_withdraw(a, i, now, mono, ALERT_WITHDRAW_AGED);
-            else if (alert_age_ms(mono, a->prelim_ms) >=
+            /* The window runs from the newest first evidence (the
+             * last observation), not from the first: a deauth burst
+             * that goes on, or a jam run that restarts, is still first
+             * evidence, and the trackers' own windows (the reconnect
+             * after the burst's last frame) run from its newest frame.
+             * Timed from prelim_ms, a long burst was withdrawn
+             * "unconfirmed" and its reconnect then opened a second,
+             * confirmed incident. */
+            else if (alert_age_ms(mono, a->last_obs_ms) >=
                      (uint64_t)alert_prelim_window_s(a->type) * 1000u)
                 lifecycle_withdraw(a, i, now, mono,
                                    ALERT_WITHDRAW_UNCONFIRMED);

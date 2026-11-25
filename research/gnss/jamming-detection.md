@@ -167,11 +167,12 @@ specification, above.
   attaches `jam` about one TPV in four, so a single report is not
   reported as the finding. The first one is reported at once, LOW, as
   "not evaluated: first evidence only", and the hold confirms it.
-- **Window: 30 s,** the hold's default: the run that will confirm must
-  hold that long from its first point, so a preliminary opened on that
-  point is confirmed inside it or its run broke. A `--tune
-  gnss.jam_hold_s` does not move the window; a longer hold withdraws the
-  preliminary first and then opens the finding when the hold is met.
+- **Window: 30 s,** the hold's default, counted from the newest first
+  evidence: each second of a run moves the preliminary's detail, so the
+  window restarts while the run lasts and a preliminary is withdrawn 30 s
+  after its run's last point. A `--tune gnss.jam_hold_s` does not move
+  the window, and a longer hold still confirms the same preliminary,
+  because its run keeps it open until the hold is met.
 - **The collapse path has no first evidence:** its signature is one
   measurement against a baseline, with nothing earlier to report.
 - **What this does not establish:** the indicator is uncalibrated

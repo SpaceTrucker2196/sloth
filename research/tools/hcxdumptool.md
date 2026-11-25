@@ -73,9 +73,13 @@ only be used in a 100% controlled environment!"
   "not evaluated: first evidence only"; the reconnect is the second
   half, which confirms it under the same key.
 - **Window: 30 s,** `harvest.reconnect_s`' default: the tracker's own
-  bound on how soon the fresh M1/M2 pair must follow (`src/harvest_track.h`,
-  a judgement labelled there, not a figure from this source). A burst
-  with no reconnect inside it is withdrawn, `unconfirmed`. A `--tune
+  bound on how soon the fresh M1/M2 pair must follow the burst's last
+  frame (`src/harvest_track.h`, a judgement labelled there, not a figure
+  from this source). The window is counted the same way, from the newest
+  first evidence: each new frame of a burst that goes on (the tool keeps
+  disconnecting until the station comes back) moves the preliminary's
+  detail and restarts it. A burst with no reconnect within 30 s of its
+  last frame is withdrawn, `unconfirmed`. A `--tune
   harvest.reconnect_s` does not move the window.
 - **What it does not say.** A band-steering AP or an idle timeout sends
   the same frames; the README gives no count. That uncertainty is why
