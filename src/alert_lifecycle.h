@@ -66,8 +66,12 @@ const char *alert_withdraw_name(int why);
 void alert_lifecycle_set_enabled(int on);
 int  alert_lifecycle_enabled(void);
 
+/* 1 when `t` is a standing condition (sloth's own state, or an 802.11
+ * kind of SHAPE STATE): it never lapses. alert_lifecycle.c says why. */
+int alert_kind_is_standing(alert_type_t t);
 /* The kind's value period in seconds (include/sloth_alert_value.def,
- * or the --value-period override); 0 for a kind outside the list. */
+ * or the --value-period override); 0 for a kind outside the list and
+ * for a standing condition, which never lapses. */
 uint32_t alert_value_period_s(alert_type_t t);
 /* The .def's own value, whatever the override. */
 uint32_t alert_value_period_default_s(alert_type_t t);

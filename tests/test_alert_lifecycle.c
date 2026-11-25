@@ -173,23 +173,53 @@ static void test_value_period_flag(void) {
     ASSERT_EQ(alert_value_period_set("PMKID_HARVEST=600", err, sizeof err), 0);
     ASSERT_EQ(alert_value_period_s(K), 600u);
     ASSERT_EQ(alert_value_period_default_s(K), 300u);
-    ASSERT_EQ(alert_value_period_set("ALERT_TYPE_EVIL_TWIN=2592000", err, sizeof err), 0);
-    ASSERT_EQ(alert_value_period_s(ALERT_TYPE_EVIL_TWIN), 2592000u);
-    ASSERT_EQ(alert_value_period_set("EVIL_TWIN=2592001", err, sizeof err), -1);
+    ASSERT_EQ(alert_value_period_set("ALERT_TYPE_DEAUTH_FLOOD=2592000", err, sizeof err), 0);
+    ASSERT_EQ(alert_value_period_s(ALERT_TYPE_DEAUTH_FLOOD), 2592000u);
+    ASSERT_EQ(alert_value_period_set("DEAUTH_FLOOD=2592001", err, sizeof err), -1);
     ASSERT(strstr(err, "2592000") != NULL);
-    ASSERT_EQ(alert_value_period_set("EVIL_TWIN=0", err, sizeof err), -1);
-    ASSERT_EQ(alert_value_period_set("EVIL_TWIN=-5", err, sizeof err), -1);
-    ASSERT_EQ(alert_value_period_set("EVIL_TWIN=5x", err, sizeof err), -1);
-    ASSERT_EQ(alert_value_period_set("EVIL_TWIN=", err, sizeof err), -1);
+    ASSERT_EQ(alert_value_period_set("DEAUTH_FLOOD=0", err, sizeof err), -1);
+    ASSERT_EQ(alert_value_period_set("DEAUTH_FLOOD=-5", err, sizeof err), -1);
+    ASSERT_EQ(alert_value_period_set("DEAUTH_FLOOD=5x", err, sizeof err), -1);
+    ASSERT_EQ(alert_value_period_set("DEAUTH_FLOOD=", err, sizeof err), -1);
     ASSERT_EQ(alert_value_period_set("NOT_A_KIND=60", err, sizeof err), -1);
     ASSERT(strstr(err, "unknown alert kind") != NULL);
     ASSERT_EQ(alert_value_period_set("ALERT_TYPE_=60", err, sizeof err), -1);
     ASSERT_EQ(alert_value_period_set("=60", err, sizeof err), -1);
-    ASSERT_EQ(alert_value_period_set("EVIL_TWIN", err, sizeof err), -1);
+    ASSERT_EQ(alert_value_period_set("DEAUTH_FLOOD", err, sizeof err), -1);
     /* A refused value leaves the one before it. */
-    ASSERT_EQ(alert_value_period_s(ALERT_TYPE_EVIL_TWIN), 2592000u);
+    ASSERT_EQ(alert_value_period_s(ALERT_TYPE_DEAUTH_FLOOD), 2592000u);
     alert_lifecycle_reset();
-    ASSERT_EQ(alert_value_period_s(ALERT_TYPE_EVIL_TWIN), 300u);
+    ASSERT_EQ(alert_value_period_s(ALERT_TYPE_DEAUTH_FLOOD), 300u);
+}
+
+/* A standing condition never lapses (owner ruling 2026-11-25): sloth's
+ * own state and the 802.11 kinds of SHAPE STATE have no value period,
+ * and --value-period refuses them. */
+static void test_standing_kinds_have_no_value_period(void) {
+    char err[160];
+    alert_lifecycle_reset();
+    static const alert_type_t standing[] = {
+        ALERT_TYPE_SENSOR_SOURCE_DOWN, ALERT_TYPE_SENSOR_UNDERVOLT,
+        ALERT_TYPE_SENSOR_SUPPRESSED, ALERT_TYPE_NO_MONITOR_MODE,
+        ALERT_TYPE_BT_OWN_TRANSMIT, ALERT_TYPE_EVIL_TWIN,
+        ALERT_TYPE_COUNTRY_ABSENT, ALERT_TYPE_OPEN_SETUP_AP,
+    };
+    for (size_t i = 0; i < sizeof standing / sizeof *standing; i++) {
+        ASSERT(alert_kind_is_standing(standing[i]));
+        ASSERT_EQ(alert_value_period_s(standing[i]), 0u);
+    }
+    static const alert_type_t lapsing[] = {
+        ALERT_TYPE_DEAUTH_FLOOD, ALERT_TYPE_MGMT_FUZZ,
+        ALERT_TYPE_PMKID_HARVEST, ALERT_TYPE_HANDSHAKE_HARVEST,
+        ALERT_TYPE_GNSS_JAMMING, ALERT_TYPE_PORT_SCAN,
+    };
+    for (size_t i = 0; i < sizeof lapsing / sizeof *lapsing; i++) {
+        ASSERT(!alert_kind_is_standing(lapsing[i]));
+        ASSERT_EQ(alert_value_period_s(lapsing[i]), 300u);
+    }
+    ASSERT_EQ(alert_value_period_set("SENSOR_SOURCE_DOWN=600", err, sizeof err), -1);
+    ASSERT(strstr(err, "standing") != NULL);
+    ASSERT_EQ(alert_value_period_s(ALERT_TYPE_SENSOR_SOURCE_DOWN), 0u);
 }
 
 /* ── Preliminary, then confirmed ───────────────────────────── */
@@ -452,6 +482,25 @@ static void test_lapse_and_renewal(void) {
     al_end();
 }
 
+/* The #245 review's case: SENSOR_SOURCE_DOWN, the sensor is blind,
+ * re-asserted unchanged long past 300 s, stays confirmed and never
+ * lapses, so slothweb's default list keeps it. */
+static void test_standing_condition_never_lapses(void) {
+    al_begin();
+    for (int t = 0; t < 12; t++) {
+        alerts_fire_for_test(ALERT_TYPE_SENSOR_SOURCE_DOWN, ALERT_SEV_CRIT,
+                             "src:gps", "old", NULL, 0);
+        al_tick();
+        al_advance(100);
+    }
+    ASSERT_EQ(al_count("{\"type\":\"alert.create\","), 1);
+    ASSERT(strstr(al_line("alert.create", 0), "\"value_period_s\":0") != NULL);
+    ASSERT_EQ(al_count("\"reason\":\"lapsed\""), 0);
+    ASSERT_EQ(al_count("{\"type\":\"alert.update\","), 0);
+    ASSERT_EQ(al_count("{\"type\":\"alert.resolve\","), 0);
+    al_end();
+}
+
 /* --value-period moves the lapse for that kind only. */
 static void test_value_period_override_moves_the_lapse(void) {
     al_begin();
@@ -500,6 +549,7 @@ void run_alert_lifecycle_tests(void) {
     RUN_TEST(test_def_matches_alert_list);
     RUN_TEST(test_every_non_default_row_cites_research);
     RUN_TEST(test_value_period_flag);
+    RUN_TEST(test_standing_kinds_have_no_value_period);
     RUN_TEST(test_preliminary_then_confirmed);
     RUN_TEST(test_preliminary_on_a_confirmed_key_does_nothing);
     RUN_TEST(test_unlisted_kind_has_no_preliminary);
@@ -508,6 +558,7 @@ void run_alert_lifecycle_tests(void) {
     RUN_TEST(test_confirmation_after_withdrawal_opens_confirmed);
     RUN_TEST(test_preliminary_whose_evidence_ages_out);
     RUN_TEST(test_lapse_and_renewal);
+    RUN_TEST(test_standing_condition_never_lapses);
     RUN_TEST(test_value_period_override_moves_the_lapse);
     RUN_TEST(test_off_emits_nothing_new);
 }

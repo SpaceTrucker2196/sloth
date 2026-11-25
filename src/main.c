@@ -553,6 +553,7 @@ static void print_usage(const char *argv0) {
             "                     seconds after a finding's last observation\n"
             "                     at which it lapses (1..2592000; default 300\n"
             "                     for every kind). Repeatable. An unknown KIND\n"
+            "                     or a standing condition (it never lapses)\n"
             "                     exits 2.\n"
             "  --tune-list        print every knob with default, current\n"
             "                     value and unit, then exit.\n"

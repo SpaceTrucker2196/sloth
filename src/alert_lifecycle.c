@@ -3,6 +3,7 @@
 #include <string.h>
 #include "alert_lifecycle.h"
 #include "alerts.h"
+#include "rule_coverage.h"
 #include "sloth_compat.h"
 
 /* The finding lifecycle's per-kind table and counts (#245). Contract:
@@ -55,8 +56,28 @@ uint32_t alert_value_period_default_s(alert_type_t t) {
     return in_range(t) ? lc_table[t].value_s : 0;
 }
 
-uint32_t alert_value_period_s(alert_type_t t) {
+/* A standing condition never lapses (owner ruling 2026-11-25, after the
+ * #245 review): its rule re-asserts it every poll while it is true, but
+ * its detail stops moving, so "no new observation" says nothing about
+ * whether it still holds, and slothweb hides a lapsed finding by
+ * default. Two groups, both read from tables that already exist:
+ *   - sloth's own state: the SYS kinds (SENSOR_SOURCE_DOWN, the sensor
+ *     is blind; SENSOR_UNDERVOLT; SENSOR_SUPPRESSED), NO_MONITOR_MODE
+ *     and BT_OWN_TRANSMIT;
+ *   - the 802.11 kinds whose evidence is a standing state, SHAPE STATE
+ *     in sloth_alert_inputs.def (a beacon's content: EVIL_TWIN,
+ *     COUNTRY_ABSENT, ...).
+ * Such a finding stays confirmed until the 300 s resolve. */
+int alert_kind_is_standing(alert_type_t t) {
     if (!in_range(t)) return 0;
+    if (t == ALERT_TYPE_NO_MONITOR_MODE || t == ALERT_TYPE_BT_OWN_TRANSMIT)
+        return 1;
+    const cov_inputs_t *in = cov_inputs(t);
+    return in && (in->input == COV_IN_SYS || in->shape == COV_SHAPE_STATE);
+}
+
+uint32_t alert_value_period_s(alert_type_t t) {
+    if (!in_range(t) || alert_kind_is_standing(t)) return 0;
     return g_override[t] ? g_override[t] : lc_table[t].value_s;
 }
 
@@ -97,6 +118,11 @@ int alert_value_period_set(const char *arg, char *err, int errsz) {
     }
     if (found < 0) {
         snprintf(err, (size_t)errsz, "%s: unknown alert kind", kind);
+        return -1;
+    }
+    if (alert_kind_is_standing((alert_type_t)found)) {
+        snprintf(err, (size_t)errsz,
+                 "%s: a standing condition, it never lapses", kind);
         return -1;
     }
     const char *v = eq + 1;
