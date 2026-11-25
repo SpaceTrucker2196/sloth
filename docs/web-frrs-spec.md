@@ -1289,6 +1289,11 @@ member row id) takes the incident's state through the table above, and
 every later member is a `duplicate`. Explicit members only: an alert an
 incident holds only by a standing filter counts by its own rows.
 Anomalies (§15) are left out; they are the sensor's baselines, not a rule.
+An alert is the one the triage read takes (`TRI_MATCH`): rows filed with
+no finding (a stream handle's, before sloth.db named it) join the alert
+of their descriptor (type, address, port, `first_seen`), so one alert
+triaged on its handle and again on its sloth.db row counts once, its
+newest row deciding.
 
 ### 16.2 The figure
 
@@ -1310,6 +1315,12 @@ a count, no minimum.
 `GET /api/alert-feedback/export`: both windows, members held to a fixed
 list (`web_fb_export_members[]`), strings only type names, the words,
 the scope sentence and the hostname: no address, SSID or note, held by
-`web/tests/test_feedback.c` with each seeded into the store. Figures
-reach [alert-assessments](wiki/alert-assessments/README.md) by hand,
-naming the site and the window; no job writes them.
+`web/tests/test_feedback.c` with each seeded into the store. As it is
+made to leave the host, it is held to the fleet rule
+([ADR 0009](wiki/adr/0009-fleet-monitor-only.md)): only the alert types
+heard in monitor mode (`web_fleet_share_alerts[]`) are named; a type the
+host's own interfaces or the sensor's own state raise, or one not yet
+classified, is withheld and counted per window (`withheld`), and the
+export states `share_rule`. Figures reach
+[alert-assessments](wiki/alert-assessments/README.md) by hand, naming
+the site and the window; no job writes them.

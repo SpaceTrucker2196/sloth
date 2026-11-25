@@ -3101,7 +3101,11 @@ shares and the median time to a verdict ("not enough verdicts" below);
 with a v21 sloth.db, sloth's own incidents by lifecycle word (#245).
 `GET /api/alert-feedback/export` holds both windows: counts, words, type
 names and the hostname, no other member, for placing figures in
-[alert-assessments](alert-assessments/README.md) by hand. This site only:
+[alert-assessments](alert-assessments/README.md) by hand; held to the
+fleet rule ([ADR 0009](adr/0009-fleet-monitor-only.md)), it names only
+the monitor-mode alert types and counts the rest as `withheld`. One
+alert triaged on its stream handle and again on its sloth.db row counts
+once. This site only:
 no peer is read. The Alerts page shows the chosen type's line; the Rule
 performance page (`#rules`) every type, by false share.
 `web/src/web_feedback.c`, `web/tests/test_feedback.c`; `web/README.md` §
