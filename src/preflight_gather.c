@@ -126,7 +126,7 @@ static int op_gpsd(const char *host, int port, int timeout_ms, char *detail, siz
     }
     /* gpsd greets every client with its VERSION object; that read is the
      * whole exchange. Nothing is written: ?WATCH is the reader's. */
-    char buf[512];
+    char buf[512] = {0};
     size_t got = 0;
     while (got < sizeof(buf) - 1 && !memchr(buf, '\n', got)) {
         p.events = POLLIN;

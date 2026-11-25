@@ -1687,9 +1687,14 @@ int main(int argc, char **argv) {
         memset(&pf, 0, sizeof(pf));
         for (int i = 0; i < allow_iface_count && i < PF_MAX_IFACE; i++)
             pf.iface[pf.n_iface++] = allow_ifaces[i];
-        for (int i = 0; i < mon_cli.n && i < PF_MAX_NAMED; i++)
+        /* Bounded by the source arrays too, not only by pf's: the CLI
+         * holds fewer names than PF_MAX_NAMED (cppcheck 2.13
+         * arrayIndexOutOfBounds on the PF_MAX_NAMED bound alone). */
+        const int mon_cap = (int)(sizeof(mon_cli.name) / sizeof(mon_cli.name[0]));
+        const int df_cap  = (int)(sizeof(df_cli.name) / sizeof(df_cli.name[0]));
+        for (int i = 0; i < mon_cli.n && i < mon_cap && i < PF_MAX_NAMED; i++)
             pf.mon[pf.n_mon++] = mon_cli.name[i];
-        for (int i = 0; i < df_cli.n && i < PF_MAX_NAMED; i++)
+        for (int i = 0; i < df_cli.n && i < df_cap && i < PF_MAX_NAMED; i++)
             pf.df[pf.n_df++] = df_cli.name[i];
         pf.monitor_only = monitor_only;
         pf.hop          = g_hop_enabled;

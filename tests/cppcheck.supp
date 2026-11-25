@@ -83,6 +83,14 @@ readdirCalled:src/alert_pcap.c
 # the report's directory into a local DIR* and closedir()s it before
 # returning, on the main thread at start and at shutdown.
 readdirCalled:src/posture.c
+# #250's --handoff: handoff.c fdopendir()s a dup of the packet
+# directory into a local DIR* and closedir()s it in the same block; a
+# one-shot CLI path on the main thread.
+readdirCalled:src/handoff.c
+# #251's --verify: jsonl_verify.c fdopendir()s a dup of the evidence
+# directory into a local DIR* and closedir()s it before returning; a
+# one-shot CLI path on the main thread.
+readdirCalled:src/jsonl_verify.c
 readdirCalled:research/ingest/main.c
 
 # ── False positives, checked by hand ────────────────────────────────────
@@ -98,6 +106,13 @@ uninitvar:src/views/dashboard_bands.c
 uninitvar:src/views/procs.c
 # qsort() of sorted_exts with count sec_c_next, all of which were written.
 uninitvar:src/tls_log.c
+# open() then fdopen(): when fdopen() fails it has not taken the
+# descriptor, so the failure branch close()s fd itself and nothing else
+# does. cppcheck 2.13 counts that close() as a second release of the
+# fd it assumes fdopen() owns. handoff.c copy_snapshot() (#250) and
+# jsonl_verify.c read_manifest()/verify_jsonl() (#251).
+doubleFree:src/handoff.c
+doubleFree:src/jsonl_verify.c
 # fdopen() failure leaves fd open (POSIX), so the close(fd) on that path
 # is the only close, not a second one.
 doubleFree:src/secure_file.c
