@@ -32,6 +32,7 @@
 #include "position_track.h"
 #include "rf_side.h"
 #include "tune.h"
+#include "alert_lifecycle.h"
 
 /* The current schema version as meta stores it: every "migrates to
  * current" test pins this, not a literal, so a bump moves one line. */
@@ -3813,8 +3814,8 @@ static void test_v10_file_migrates_additively(void) {
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
                     " AND name IN ('idx_alert_incidents_key',"
                     "'idx_alert_incidents_last_seen')"), 2);
-    /* Eleven from v11, five more from v19 (#246). */
-    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"), 16);
+    /* Eleven from v11, five more from v19 (#246), four from v21 (#245). */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"), 20);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 0);
     db_close();
     ASSERT_EQ(db_open(db_path), 1);
@@ -4574,23 +4575,26 @@ static void test_v18_migration_failure_leaves_file_unchanged(void) {
 /* ── Schema v20: twin_evidence_snapshots (#228 step 5) ───────────── */
 
 /* A v19 file: a current file with twin_evidence_snapshots and its
- * index dropped and the stamp set to 19, exactly a v19 file's shape,
- * since v19 -> v20 adds a table and touches no other. An alert_incidents
+ * index dropped, alert_incidents put back at its v19 shape (as
+ * write_v20_file() below does) and the stamp set to 19, exactly a v19
+ * file's shape, since v19 -> v20 adds a table. An alert_incidents
  * row rides along, to show the step leaves an unrelated table alone. */
 static void write_v19_file(void) {
     fresh_db();
     db_close();
     sqlite3 *h = NULL;
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
-    ASSERT_EQ(sqlite3_exec(h,
+    char sql[4096];
+    snprintf(sql, sizeof sql, "%s%s%s", PRE_V19_INCIDENTS_SQL,
+             db_schema_migrate_v18_sql(),
         "DROP INDEX idx_twin_evidence_snapshots_last_seen;"
         "DROP TABLE twin_evidence_snapshots;"
         "INSERT INTO alert_incidents (key,incident_id,type,first_seen,"
         "last_seen,sev,peak_sev,count,observations)"
         " VALUES ('v19-key','00000000000000c1',19,1600000000,1600000100,"
         "1,2,40,3);"
-        "UPDATE meta SET value='19' WHERE key='schema_version';",
-        NULL, NULL, NULL), SQLITE_OK);
+        "UPDATE meta SET value='19' WHERE key='schema_version';");
+    ASSERT_EQ(sqlite3_exec(h, sql, NULL, NULL, NULL), SQLITE_OK);
     sqlite3_close(h);
 }
 
@@ -4725,6 +4729,88 @@ static void test_twin_evidence_snapshots_in_finding_retention_tier(void) {
     db_maintain(NOW);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM twin_evidence_snapshots"), 0);
     db_close();
+    unlink(db_path);
+}
+
+/* ── Schema v21: alert_incidents' lifecycle columns (#245) ──────── */
+
+#define V21_COLS_IN \
+    " WHERE name IN ('state','prelim_at','confirmed_at','withdraw_why')"
+
+/* A v20 file: a current file whose alert_incidents is put back at its
+ * v20 shape (the v18 shape plus the five quality columns, by the
+ * v18 -> v19 ALTERs themselves; twin_evidence_snapshots, v20's own
+ * table, stays), exactly a v20 file, since v20 -> v21 touches no other
+ * table. One closed incident rides along. */
+static void write_v20_file(void) {
+    fresh_db();
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    char sql[4096];
+    snprintf(sql, sizeof sql, "%s%s%s", PRE_V19_INCIDENTS_SQL,
+             db_schema_migrate_v18_sql(),
+             "INSERT INTO alert_incidents (key,incident_id,type,first_seen,"
+             "last_seen,sev,peak_sev,count,observations,closed_at,reason,"
+             "complete,latency_ms)"
+             " VALUES ('v20-key','00000000000000c1',19,1600000000,1600000100,"
+             "1,2,40,3,1600000400,'expired','full',250);"
+             "UPDATE meta SET value='20' WHERE key='schema_version';");
+    ASSERT_EQ(sqlite3_exec(h, sql, NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v20 -> v21: the four columns are added, NULL on the incident that was
+ * there (no earlier build gave an incident a state), and its own values
+ * read as they were. With MIGRATE_V20_SQL emptied db_open() fails here
+ * (seen red): the upsert names the four. */
+static void test_v20_file_migrates_additively(void) {
+    write_v20_file();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"
+                    V21_COLS_IN), 0);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, DB_VER_STR);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"
+                    V21_COLS_IN), 4);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE key='v20-key'"
+                    " AND state IS NULL AND prelim_at IS NULL"
+                    " AND confirmed_at IS NULL AND withdraw_why IS NULL"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE key='v20-key'"
+                    " AND incident_id='00000000000000c1' AND type=19"
+                    " AND first_seen=1600000000 AND last_seen=1600000100"
+                    " AND sev=1 AND peak_sev=2 AND count=40 AND observations=3"
+                    " AND closed_at=1600000400 AND reason='expired'"
+                    " AND complete='full' AND latency_ms=250"), 1);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v20 file whose stamp cannot be written stays v20 with none of the
+ * four columns: the ALTERs and the stamp are one transaction. Seen red
+ * with migrate_step() running the step's SQL before its BEGIN
+ * IMMEDIATE. */
+static void test_v20_migration_failure_leaves_file_unchanged(void) {
+    write_v20_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v21 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='21'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "20");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"
+                    V21_COLS_IN), 0);
+    ASSERT_EQ(q_int("SELECT count FROM alert_incidents WHERE key='v20-key'"), 40);
     unlink(db_path);
 }
 
@@ -6196,14 +6282,19 @@ static void test_v4_migration_failure_leaves_file_unchanged(void) {
     unlink(db_path);
 }
 
-/* #245: a preliminary finding is not a row, through either writer (the
- * hook's queue or the snapshot), and a withdrawn one never becomes one;
- * the confirmation is. Seen red with write_events()' two state skips
- * removed, and with alert_resolve()'s hook guard removed (the cleared
- * preliminary's close then queued a row), each then restored. */
-static void test_preliminary_finding_is_not_a_row(void) {
+/* #245, schema v21: a preliminary finding is an alert_incidents row
+ * with its state, never an `alerts` row (that table holds findings); a
+ * withdrawn one stays withdrawn with why, whatever writes after it; the
+ * confirmation fills the `alerts` row and moves the incident to
+ * confirmed with both times. Seen red with write_events()' state skip
+ * removed (an `alerts` row for the preliminary), with the upsert's
+ * withdrawn guard removed (the snapshot's later write cannot move it,
+ * so it is pinned by writing a stale `preliminary` over it below), and
+ * with the state bind dropped, each then restored. */
+static void test_preliminary_finding_rows(void) {
     fresh_db();
     alerts_clear();
+    alert_lifecycle_reset();
     static sloth_state_t s;
     memset(&s, 0, sizeof s);
     const char *key = "pmkidharvest:02:cc:00:00:00:09";
@@ -6211,18 +6302,39 @@ static void test_preliminary_finding_is_not_a_row(void) {
     alerts_update(&s);
     db_tick(&s, 1700000000);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 0);
-    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 0);
-    alerts_clear();                      /* resolves it, "cleared" */
-    memset(&s, 0, sizeof s);
-    db_tick(&s, 1700000001);
-    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE state='preliminary'"
+                    " AND prelim_at IS NOT NULL AND confirmed_at IS NULL"), 1);
 
-    alerts_fire_prelim_for_test(ALERT_TYPE_PMKID_HARVEST, ALERT_SEV_LOW, key, "one");
-    alerts_fire_for_test(ALERT_TYPE_PMKID_HARVEST, ALERT_SEV_WARN, key, "three", NULL, 0);
+    /* Withdrawn, then a stale preliminary write of the same incident. */
+    static sloth_state_t stale;
+    stale = s;
+    alerts_clear();
+    alerts_fire_prelim_for_test(ALERT_TYPE_PMKID_HARVEST, ALERT_SEV_LOW,
+                                "pmkidharvest:02:cc:00:00:00:0a", "one");
     alerts_update(&s);
-    db_tick(&s, 1700000002);
+    db_tick(&s, 1700000001);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE key='pmkidharvest:02:cc:00:00:00:09'"
+                    " AND reason='cleared' AND state='preliminary'"), 1);
+    char sql[512];
+    snprintf(sql, sizeof sql,
+             "UPDATE alert_incidents SET state='withdrawn',"
+             "withdraw_why='unconfirmed' WHERE key='%s'", key);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h, sql, NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    db_tick(&stale, 1700000002);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE key='pmkidharvest:02:cc:00:00:00:09'"
+                    " AND state='withdrawn' AND withdraw_why='unconfirmed'"), 1);
+
+    alerts_fire_for_test(ALERT_TYPE_PMKID_HARVEST, ALERT_SEV_WARN,
+                         "pmkidharvest:02:cc:00:00:00:0a", "three", NULL, 0);
+    alerts_update(&s);
+    db_tick(&s, 1700000003);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 1);
-    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE key='pmkidharvest:02:cc:00:00:00:0a'"
+                    " AND state='confirmed' AND prelim_at IS NOT NULL"
+                    " AND confirmed_at IS NOT NULL"), 1);
     alerts_clear();
     db_close();
 }
@@ -6230,7 +6342,7 @@ static void test_preliminary_finding_is_not_a_row(void) {
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_no_column_can_hold_secret_material);
-    RUN_TEST(test_preliminary_finding_is_not_a_row);
+    RUN_TEST(test_preliminary_finding_rows);
     RUN_TEST(test_schema_has_no_secret_named_columns);
     RUN_TEST(test_eapol_key_material_never_reaches_disk);
     RUN_TEST(test_schema_tables_have_seen_columns);
@@ -6301,6 +6413,8 @@ void run_db_tests(void) {
     RUN_TEST(test_v19_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_twin_evidence_snapshot_overwrites_not_latches);
     RUN_TEST(test_twin_evidence_snapshots_in_finding_retention_tier);
+    RUN_TEST(test_v20_file_migrates_additively);
+    RUN_TEST(test_v20_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_coverage_intervals_age_with_observations);
     RUN_TEST(test_victron_columns_match_the_allow_list);
     RUN_TEST(test_victron_tables_written);

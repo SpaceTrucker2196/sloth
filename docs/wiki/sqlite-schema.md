@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154, #170 and #239.
 
-**Last updated**: 2026-11-25 (#245: a preliminary or withdrawn finding writes no `alerts` or `alert_incidents` row; no schema change), 2026-11-26 (#228 step 5, owner ruling 2026-11-25: schema v20, `twin_evidence_snapshots`, the evidence vector behind an `EVIL_TWIN` pair's confidence for a future labelled-training pass, on the finding tier and deliberately not latched like the rest of this file; the v19 → v20 step and its two tests), 2026-11-24 (#250 review: `alert_incidents` and `coverage_intervals` name their offline readers, `--handoff` and `--interference-report`, and what of each they parse), 2026-11-23 (#246: schema v19, the quality columns of `alert_incidents`, `complete`, `complete_why`, `latency_ms`, `corroboration` and `src_state`, their order-free upsert; the v18 → v19 step and its two tests), 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
+**Last updated**: 2026-11-25 (#245: schema v21 (built as v20, renumbered over #228's v20 on 2026-11-27), `alert_incidents` gains `state`, `prelim_at`, `confirmed_at` and `withdraw_why`, and a preliminary or withdrawn incident is a row there, never an `alerts` row; the v20 → v21 step and its two tests), 2026-11-26 (#228 step 5, owner ruling 2026-11-25: schema v20, `twin_evidence_snapshots`, the evidence vector behind an `EVIL_TWIN` pair's confidence for a future labelled-training pass, on the finding tier and deliberately not latched like the rest of this file; the v19 → v20 step and its two tests), 2026-11-24 (#250 review: `alert_incidents` and `coverage_intervals` name their offline readers, `--handoff` and `--interference-report`, and what of each they parse), 2026-11-23 (#246: schema v19, the quality columns of `alert_incidents`, `complete`, `complete_why`, `latency_ms`, `corroboration` and `src_state`, their order-free upsert; the v18 → v19 step and its two tests), 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
 in the entity tier and `victron_readings` in the observation tier, at
 most one reading row a minute per device, the stamp-only v14 → v15 step
 and its two tests; slothweb's Victron tab charts `victron_readings`).
@@ -181,9 +181,9 @@ These are what make the file trustworthy rather than merely present.
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 | One row per incident: span widens, `peak_sev`/`count`/`observations` only rise, a close once recorded stays; `sev` the latest | `alert_incidents` | Written each tick from the hook's queue and then from the snapshot, and by a full queue's own flush between ticks. Every column but `sev` comes out the same whatever the order; `sev` is the last write's, and the snapshot, the newest view, is written last (#175). See *Per-incident rows* below. |
 
-## Schema — 58 tables, v1 → v20
+## Schema — 58 tables, v1 → v21
 
-`meta` holds `schema_version`, currently **20**. `db_open()` checks it
+`meta` holds `schema_version`, currently **21**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
 to hit first. Since #154 the chain covers the full **v1 → v20**: any
@@ -341,7 +341,7 @@ TABLE IF NOT EXISTS twin_evidence_snapshots` and its index, the same
 DDL the unconditional schema carries — a step with no `ALTER`, since
 the table is new. Nothing is backfilled: no earlier build recorded a
 row. Tested on a v19 file (a current file with the table and its index
-dropped, the stamp set to 19; `test_v19_file_migrates_additively`: the
+dropped, `alert_incidents` at its v19 shape, the stamp set to 19; `test_v19_file_migrates_additively`: the
 table and index present, the table empty) and on one whose stamp a
 trigger refuses (`test_v19_migration_failure_leaves_file_unchanged`: it
 stays v19 without the table or the index).
@@ -364,6 +364,25 @@ On the finding tier (`src/db.c` `TIER_FINDING`), beside
 `karma_candidates` and `rogue_radius`, for the reason those two are
 there: the evidence should outlive nothing less than the finding it
 justifies.
+
+**v21** (2026-11-25 as v20, renumbered 2026-11-27 over #228's v20; #245, [[alerts]] § Finding lifecycle): four
+nullable columns on `alert_incidents`, `state`, `prelim_at`,
+`confirmed_at` and `withdraw_why` (*Per-incident rows* below), and a
+preliminary or withdrawn incident is now a row there (never an `alerts`
+row). No other table or value changes. Not additive for slothweb, for
+the reason v18 gives: sloth-mesh's `WEB_SDB_SCHEMA_MAX` has to reach 21,
+with a contract re-pin, and be installed before this sloth is.
+
+**The v20 → v21 migration.** `db_schema_migrate_v20_sql()` is four
+`ALTER TABLE alert_incidents ADD COLUMN`, in the step's one `BEGIN
+IMMEDIATE` transaction with the stamp, run only where `alert_incidents`
+exists. An existing row keeps NULL in all four: no earlier build gave
+an incident a state. Tested on a v20 file (the pre-v19 table plus the
+v18 → v19 ALTERs, the stamp set to 20, one closed incident;
+`test_v20_file_migrates_additively`: the four present, NULL on that
+row, its values as they were) and on one whose stamp a trigger refuses
+(`test_v20_migration_failure_leaves_file_unchanged`: it stays v20
+without the columns).
 
 **`coverage_intervals`** `(start, last_seen, dur_ms, radio_ms, ms_24,
 ms_5, ms_5dfs, ms_6, ms_unknown, f_beacon, f_probe, f_auth, f_assoc,
@@ -843,11 +862,20 @@ row.
 
 #### Per-incident rows (`alert_incidents`, #175, v11)
 
-**A preliminary finding is not a row (#245).** An incident in the
-`preliminary` state ([[alerts]] § Finding lifecycle) writes neither an
-`alerts` nor an `alert_incidents` row, and the hook is not called for
-it, until it is confirmed; a withdrawn one never does. Its
-`alert.preliminary` and its withdrawal are in the JSONL stream only.
+**The finding lifecycle (#245, v21).** Every incident carries its
+`state` ([[alerts]] § Finding lifecycle): `preliminary`, `confirmed`,
+`withdrawn` or `lapsed`, NULL under `--no-preliminary` and on rows an
+earlier build wrote, with `prelim_at` and `confirmed_at` on an incident
+that began preliminary and `withdraw_why` beside `withdrawn`. A
+preliminary incident is an `alert_incidents` row from its first record
+(the hook sees it open) but **not** an `alerts` row: that table holds
+findings, and first evidence is not one until it is confirmed; a
+withdrawn incident never becomes one. The upsert keeps the columns
+order-free: `state` is the latest write's except that `withdrawn` stays
+(the incident is closed), and the two times and the why are set once.
+`lapsed` is written by the tick's snapshot (the hook is not called for
+it). The withdrawal rate per kind is `COUNT(*) FILTER (WHERE
+state='withdrawn')` over the rows with a `prelim_at`.
 
 The `alerts` row's `sev` is the finding's peak and its `count` the sum
 across incidents. That is right for the finding and wrong for "how bad

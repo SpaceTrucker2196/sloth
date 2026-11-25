@@ -135,11 +135,7 @@ static void alert_resolve(alert_t *a, time_t now, const char *reason) {
     a->resolved = 1;
     a->event_seq++;
     jsonl_emit_alert_event(a, "alert.resolve", now, -1, reason);
-    /* A finding that never got past preliminary was never handed to
-     * the hook (#245): its close is the stream's alone. */
-    if (a->state != ALERT_STATE_PRELIMINARY &&
-        a->state != ALERT_STATE_WITHDRAWN)
-        incident_hook(a, now, reason ? reason : "");
+    incident_hook(a, now, reason ? reason : "");
 }
 
 /* ── Tainted-BSSID tracker (evil-twin Phase 4) ────────────── */
@@ -799,12 +795,14 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
         sd->prelim_block_ms = 0;
     }
     if (a->state == ALERT_STATE_PRELIMINARY) {
-        /* First evidence (#245): one record, to the stream only. The
-         * legacy `alert`, `alert.create` and the hook wait for the
-         * confirmation that may never come. */
+        /* First evidence (#245): one record and the hook (sloth.db's
+         * alert_incidents row, state preliminary). The legacy `alert`
+         * and `alert.create` wait for the confirmation that may never
+         * come. */
         alert_lc_note_prelim(type);
         jsonl_emit_alert_event(a, "alert.preliminary", now, -1, NULL);
         jsonl_emit_alert_lifecycle(type, now);
+        incident_hook(a, now, NULL);
         event_wake_signal();
         return;
     }

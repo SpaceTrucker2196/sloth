@@ -732,6 +732,16 @@ static const char SCHEMA_SQL[] =
     "  latency_ms    INTEGER,"
     "  corroboration INTEGER,"
     "  src_state     TEXT,"
+    /* Schema v21 (#245, src/alert_lifecycle.h): the finding lifecycle.
+     * `state` 'preliminary', 'confirmed', 'withdrawn' or 'lapsed' (NULL
+     * under --no-preliminary and on every row an earlier build wrote);
+     * `prelim_at` / `confirmed_at` only on an incident that began
+     * preliminary; `withdraw_why` beside 'withdrawn'. Last and in
+     * MIGRATE_V20_SQL's order, as the v19 columns are. */
+    "  state         TEXT,"
+    "  prelim_at     INTEGER,"
+    "  confirmed_at  INTEGER,"
+    "  withdraw_why  TEXT,"
     "  PRIMARY KEY (key, incident_id)"
     ");\n"
     /* A key's incidents in order (the alert page, the per-key bound)
@@ -1352,6 +1362,16 @@ static const char MIGRATE_V18_SQL[] =
  * transaction. Nothing is backfilled: no earlier build recorded one. */
 static const char MIGRATE_V19_SQL[] = TWIN_EVIDENCE_SNAPSHOTS_DDL;
 
+/* v20 -> v21 (#245, 2026-11-25): the finding lifecycle, four nullable
+ * columns on alert_incidents. An existing row keeps NULL in all four:
+ * it was written before any incident had a state. Nothing is
+ * backfilled. */
+static const char MIGRATE_V20_SQL[] =
+    "ALTER TABLE alert_incidents ADD COLUMN state TEXT;\n"
+    "ALTER TABLE alert_incidents ADD COLUMN prelim_at INTEGER;\n"
+    "ALTER TABLE alert_incidents ADD COLUMN confirmed_at INTEGER;\n"
+    "ALTER TABLE alert_incidents ADD COLUMN withdraw_why TEXT;\n";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -1374,6 +1394,7 @@ const char *db_schema_migrate_v16_sql(void) { return MIGRATE_V16_SQL; }
 const char *db_schema_migrate_v17_sql(void) { return MIGRATE_V17_SQL; }
 const char *db_schema_migrate_v18_sql(void) { return MIGRATE_V18_SQL; }
 const char *db_schema_migrate_v19_sql(void) { return MIGRATE_V19_SQL; }
+const char *db_schema_migrate_v20_sql(void) { return MIGRATE_V20_SQL; }
 
 /* --print-schema (#185 item 4). The statements a new file gets, in the
  * order db_open() applies them, then the version row check_version()

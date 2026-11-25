@@ -146,7 +146,14 @@
  * CREATE TABLE IF NOT EXISTS and its index, the same DDL the
  * unconditional schema carries: a new table, no existing table or
  * value changes. */
-#define DB_SCHEMA_VERSION 20
+/* Bumped to 21 (#245, built 2026-11-25 as v20, renumbered when rebased
+ * over #228's v20 on 2026-11-27): alert_incidents gains the finding
+ * lifecycle (src/alert_lifecycle.h): state, prelim_at, confirmed_at and
+ * withdraw_why, and a preliminary or withdrawn incident is now a row
+ * (it is still not an `alerts` row: that table holds findings). The
+ * v20 -> v21 step is four ALTER TABLE ADD COLUMN, all nullable. No
+ * existing column or value changes. */
+#define DB_SCHEMA_VERSION 21
 
 /* The random-address purge (#239, owner ruling 2026-11-20). A devices
  * row whose MAC is locally administered, last heard more than
@@ -583,6 +590,9 @@ const char *db_schema_migrate_v18_sql(void);
  * twin_evidence_snapshots and its index, the same DDL the unconditional
  * schema carries. */
 const char *db_schema_migrate_v19_sql(void);
+/* v20 -> v21 (#245): ALTER TABLE alert_incidents ADD COLUMN only, the
+ * four lifecycle columns, nullable. */
+const char *db_schema_migrate_v20_sql(void);
 
 /* victron_readings' value column `i` (0 from voltage_v, in the writer's
  * bind order), NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration
