@@ -846,6 +846,17 @@ static void test_notify(void) {
     ASSERT_EQ(q_notify_poll(&g_s, out), 1);
     ASSERT(contains(nb, "sloth: question Q1 (priority 1): finding, 3 open "
                         "(EVIL_TWIN,KARMA_AP): "));
+    /* A kind gone while the question stays a finding: nothing (it
+     * neither turned, gained a kind nor stopped). Back again: news.
+     * Seen red with any change of the kinds notifying (a line naming
+     * EVIL_TWIN alone). */
+    alert_t *k1 = &g_s.alerts[g_s.alert_count - 1];
+    k1->resolved = 1;
+    ASSERT_EQ(q_notify_poll(&g_s, out), 0);
+    ASSERT(!contains(nb, "finding, 2 open (EVIL_TWIN):"));
+    k1->resolved = 0;
+    ASSERT_EQ(q_notify_poll(&g_s, out), 1);
+    ASSERT_EQ(count_of(nb, "finding, 3 open (EVIL_TWIN,KARMA_AP): "), 2);
     /* Resolved: the question is no longer a finding. */
     for (int i = 0; i < g_s.alert_count; i++) g_s.alerts[i].resolved = 1;
     ASSERT_EQ(q_notify_poll(&g_s, out), 1);

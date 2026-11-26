@@ -14,7 +14,7 @@ static struct {
     char    path[256];
     int     notify_prio;       /* --notify-priority, 0 off */
     /* What the last notification said of each question, by id. */
-    struct { char qid[Q_ID_LEN]; int finding; uint64_t found_sig; } nmem[Q_MAX];
+    struct { char qid[Q_ID_LEN]; int finding; uint8_t found[ALERT_TYPE_COUNT]; } nmem[Q_MAX];
     int     nmem_n;
 } g;
 
@@ -296,7 +296,6 @@ int q_notify_poll(const sloth_state_t *s, FILE *out) {
         const q_result_t *r = &ans[i].r;
         if (q->priority > g.notify_prio) continue;
         int finding = r->st == Q_ST_FINDING;
-        uint64_t found_sig = jsonl_fnv1a(r->found, sizeof(r->found), 0);
         int slot = -1;
         for (int k = 0; k < g.nmem_n; k++)
             if (strcmp(g.nmem[k].qid, q->id) == 0) { slot = k; break; }
@@ -306,14 +305,18 @@ int q_notify_poll(const sloth_state_t *s, FILE *out) {
             /* Both are Q_ID_LEN and q->id is terminated (q_set_parse()). */
             memcpy(g.nmem[slot].qid, q->id, sizeof(g.nmem[slot].qid));
             g.nmem[slot].finding = 0;
-            g.nmem[slot].found_sig = 0;
+            memset(g.nmem[slot].found, 0, sizeof(g.nmem[slot].found));
         }
         int was = g.nmem[slot].finding;
         /* A new kind on a question already a finding is news; more
-         * findings of the same kinds are not. */
-        int changed = finding != was || (finding && found_sig != g.nmem[slot].found_sig);
+         * findings of the same kinds are not, and neither is one of its
+         * kinds closing while another stays open. */
+        int gained = 0;
+        for (int t = 0; finding && t < ALERT_TYPE_COUNT; t++)
+            if (r->found[t] && !g.nmem[slot].found[t]) { gained = 1; break; }
+        int changed = finding != was || (finding && gained);
         g.nmem[slot].finding = finding;
-        g.nmem[slot].found_sig = found_sig;
+        memcpy(g.nmem[slot].found, r->found, sizeof(g.nmem[slot].found));
         if (!changed) continue;
         if (finding) {
             char kinds[1024];

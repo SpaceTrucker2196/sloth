@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: issue #244 (from #241 item 1) and its owner rulings of 2026-11-25; FM 2-0 (2004) figure 1-2 (priority question, specific questions, indicators, collection tasks), 1-34 (a priority question asks only one question and supports a decision) and 4-6 (clear requirements preclude being overwhelmed by too much information), as quoted in the issue; `include/sloth_questions.def` (the questions), `include/sloth_question_map.def` (the indicators); `src/questions.h`, `src/questions.c` (the tables, the file, the status), `src/questions_live.h`, `src/questions_live.c` (the record and the report section); `tests/test_questions.c`; [[coverage-assessment]] (the status every answer carries).
 
-**Last updated**: 2026-11-25 (#244 review: `ids` lists the incidents newest opened first, so a new observation of a counted finding writes no `question_status` row), 2026-11-25 (#244: the page, § 4 the status, § 5 the file format, § 6 the record, the table, the `[!]` view and the report section, § 7 `--notify-priority`)
+**Last updated**: 2026-11-25 (#244 review: `--notify-priority` writes no line when a kind of a question closes while the question stays a finding), 2026-11-25 (#244 review: `ids` lists the incidents newest opened first, so a new observation of a counted finding writes no `question_status` row), 2026-11-25 (#244: the page, § 4 the status, § 5 the file format, § 6 the record, the table, the `[!]` view and the report section, § 7 `--notify-priority`)
 
 ## 1. The default questions
 
@@ -210,7 +210,7 @@ sloth: question Q1 (priority 1): finding, 3 open (EVIL_TWIN,KARMA_AP): Is a devi
 sloth: question Q1 (priority 1): no longer a finding (not_assessed)
 ```
 
-(The lines of `tests/test_questions.c :: test_notify`.) More findings of the kinds already named write nothing. Under systemd stderr is the journal, so `journalctl -u sloth` is the notification log; in the terminal UI it goes to the same terminal, as sloth's other runtime notices do; the `[!]` view shows the same answers there.
+(The lines of `tests/test_questions.c :: test_notify`.) More findings of the kinds already named write nothing, and neither does one of a question's kinds closing while another keeps it a finding; that kind opening again is a gained kind and writes a line. Under systemd stderr is the journal, so `journalctl -u sloth` is the notification log; in the terminal UI it goes to the same terminal, as sloth's other runtime notices do; the `[!]` view shows the same answers there.
 
 **MISSION §2.** The lane is local: nothing is sent over any network, the opt-in is the flag and the first line above is its announcement. `--preflight`'s `notify` row reports it ([[preflight]]). A lane that leaves the host (a phone, a mail box) is sloth-mesh's (sloth-mesh#18): it reads the `question_status` record and, under the owner's amendment to [ADR 0009](adr/0009-fleet-monitor-only.md), sends a fixed body. The line carries the question, its kinds and counts, never an address, a name or a key.
 
