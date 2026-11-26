@@ -141,7 +141,8 @@ int q_found_str(const uint8_t found[ALERT_TYPE_COUNT], char *out, size_t sz);
  *
  * `#` starts a comment line; blank lines are skipped; spaces around a
  * field are dropped. id is 1..15 of [A-Za-z0-9_-]; priority 1..9; the
- * question and the decision are non-empty and under Q_TEXT_LEN bytes;
+ * question and the decision are non-empty, under Q_TEXT_LEN bytes and
+ * free of control bytes (C0 and DEL);
  * the kinds are sloth_alerts.def names (EVIL_TWIN; ALERT_TYPE_EVIL_TWIN
  * too), at least one.
  * Refused, with the line number: an unknown kind, a duplicate id, a

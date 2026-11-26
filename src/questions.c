@@ -206,6 +206,16 @@ static char *trim(char *p) {
 
 #define Q_LINE_MAX 2048
 
+/* 1 when `s` holds a C0 control byte or DEL. The question and the
+ * decision go to stderr (--notify-priority, the journal or the
+ * terminal sloth draws on) and into the Markdown report as written, so
+ * an escape sequence in the file must not reach them. */
+static int has_ctrl(const char *s) {
+    for (; *s; s++)
+        if ((unsigned char)*s < 0x20 || (unsigned char)*s == 0x7f) return 1;
+    return 0;
+}
+
 static int fail(char *err, size_t errsz, int line, const char *fmt, const char *arg) {
     if (err && errsz) {
         char what[256];
@@ -251,6 +261,10 @@ static int parse_line(char *ln, int lineno, q_set_t *set, char *err, size_t errs
         return fail(err, errsz, lineno, "the question must be 1 to 159 bytes", NULL);
     if (!f[3][0] || strlen(f[3]) >= Q_TEXT_LEN)
         return fail(err, errsz, lineno, "the decision must be 1 to 159 bytes", NULL);
+    if (has_ctrl(f[2]))
+        return fail(err, errsz, lineno, "the question holds a control character", NULL);
+    if (has_ctrl(f[3]))
+        return fail(err, errsz, lineno, "the decision holds a control character", NULL);
     if (set->n >= Q_MAX)
         return fail(err, errsz, lineno, "more than 32 questions", NULL);
 

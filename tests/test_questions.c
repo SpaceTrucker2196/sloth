@@ -470,6 +470,11 @@ static void test_parse_refusals(void) {
         { "0123456789abcdef|1|Q?|D.|EVIL_TWIN\n", "line 1: the id must be 1 to 15 characters" },
         { "a|1| |D.|EVIL_TWIN\n", "line 1: the question must be 1 to 159 bytes" },
         { "a|1|Q?||EVIL_TWIN\n", "line 1: the decision must be 1 to 159 bytes" },
+        /* The text reaches stderr (--notify-priority) and the Markdown
+         * report as written: no terminal control sequence. Seen red with
+         * the check dropped (both parsed). */
+        { "a|1|Q\x1b[2J?|D.|EVIL_TWIN\n", "line 1: the question holds a control character" },
+        { "a|1|Q?|D\x7f.|EVIL_TWIN\n", "line 1: the decision holds a control character" },
         { "# nothing\n\n", "no questions" },
         { "", "no questions" },
     };
