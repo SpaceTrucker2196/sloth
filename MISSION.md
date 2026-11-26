@@ -169,8 +169,31 @@ issue.
    lab they own, CTF and training environments, and security-aware
    travellers who want to know what the café Wi-Fi is doing. It is not
    built for surveillance of third parties, harassment, stalking, or
-   any operation against a network the operator does not have explicit
-   written authority to observe.
+   any operation against a network the operator is not authorised on.
+
+   Authorisation has two layers:
+
+   - **Receiving broadcast signals needs no permission.** Beacons,
+     probe requests, BLE advertisements, ADS-B, APRS, GNSS and spectrum
+     energy are sent in the clear to anyone in range. Sloth receives
+     them passively (rule 1) and reports the radios, not the people
+     behind them (rule 6).
+   - **Observing a network from the inside needs authorisation, and
+     joining it is that authorisation.** Watching a network's own
+     traffic (its hosts, ARP, DHCP, mDNS and IP flows, the host-network
+     views) is done only on a network the operator is entitled to join.
+     Authenticating through its WPA login (or its enterprise or
+     captive-portal login) with credentials the network's owner issued
+     or published implies permission to observe it: your own network, a
+     host's network whose password you were given, the café Wi-Fi with
+     its password on the counter. A credential obtained any other way
+     (guessed, cracked, or passed on without the owner's consent) is not
+     authorisation, and rule 2 already forbids recovering one.
+
+   *(Rule restated 2026-11-26 under the operator's explicit ruling of
+   that date: authenticating to a network through its WPA login implies
+   permission to observe it, and passive reception of broadcast signals
+   needs none. It replaces "explicit written authority to observe".)*
 
 5. **Operator owns the consequences.** Sloth surfaces information.
    What the operator does with that information — file an incident,
