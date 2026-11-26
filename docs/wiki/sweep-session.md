@@ -12,7 +12,7 @@ type: reference
 
 **Sources**: issue #249 (from #241 item 14) and its owner rulings of 2026-11-25; FM 2-0 (2004) 11-18 (technical surveillance countermeasures: keeping sensitive areas "clear of any adversary intelligence-placed active or passive electronic sensing, or eavesdropping or collection devices") and chapter 9 (unintentional radiation), both as quoted in the issue and **not re-read against the manual** in this change; IEEE 802.11-2020 §11.1.3.2 (dot11BeaconPeriod, the dwell floor); Bluetooth Core v5.4 Vol 6 Part B §1.3.2 (BLE address kinds); IEEE 802-2014 §8.2 (the locally administered bit); `src/sweep.h`, `src/sweep.c` (inventory, compare), `src/sweep_cov.c` (coverage), `src/sweep_report.c` (reports, record), `src/sweep_run.h`, `src/sweep_run.c` (the run, the files), `src/wifi_chanhop.c` (`chanhop_init_sweep()`), `src/wifi_snapshot.c` (format v2, `wifi_snapshot_read()`), `src/main.c` (the flags); `tests/test_sweep.c`.
 
-**Last updated**: 2026-11-25 (#249: the page).
+**Last updated**: 2026-11-25 (#249 review: an unreadable baseline is refused before the preflight; the exit status; the refusals under `make replay-check`), 2026-11-25 (#249: the page).
 
 ---
 
@@ -28,6 +28,7 @@ sloth --sweep boardroom --sweep-minutes 10 --hop --monitor-iface wlan1 \
 - The sweep directory is `--sweep-dir DIR`, or the `--db` file's directory. It must exist.
 - The `--preflight` checks ([[preflight]]) run in process first; the page goes to stderr and a `fail` exits `2` before anything is opened or a session starts. A warning does not stop the sweep.
 - The `--db` session is labelled `sweep:LABEL`.
+- A label baseline that is there and cannot be read (not a regular file, not readable) exits `2` before the preflight, like the refusals above. A sweep that did not start, or did not write its inventory or a report, exits `1`; one that wrote them exits `0`. `tests/replay/sweep_cli.sh` (run by `make replay-check`) holds every refusal above to exit `2` with nothing left in the sweep directory.
 - Do not run a sweep on a host whose radios a live sensor service is using: the two would compete for the same radios.
 
 The run stops when every radio has finished its one pass, when the time given runs out, or on `q` / a signal; the report says which (`pass`, `time`, `stopped`).

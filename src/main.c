@@ -1035,6 +1035,7 @@ int main(int argc, char **argv) {
     const char *sweep_min_arg = NULL;    /* --sweep-minutes N */
     const char *sweep_dir    = NULL;     /* --sweep-dir DIR */
     unsigned    sweep_minutes = 0;
+    int         sweep_failed  = 0;       /* not started, or a file not written */
     char        sweep_dir_buf[SWEEP_PATH_MAX];
     char        sweep_session[SWEEP_LABEL_MAX + 8];
     time_t      session_start = sloth_wall();
@@ -1487,6 +1488,14 @@ int main(int argc, char **argv) {
         }
         if (strlen(sweep_dir) > SWEEP_PATH_MAX - 96) {
             fprintf(stderr, "sloth: --sweep-dir: path too long\n");
+            return 2;
+        }
+        /* A baseline that is there and cannot be read is a refusal like
+         * any other, before the preflight and before anything opens; a
+         * sweep against nothing would call the whole room new. */
+        char berr[256];
+        if (sweep_baseline_check(sweep_dir, sweep_label, berr, sizeof(berr)) < 0) {
+            fprintf(stderr, "sloth: --sweep %s\n", berr);
             return 2;
         }
         snprintf(sweep_session, sizeof(sweep_session), "sweep:%s", sweep_label);
@@ -2385,6 +2394,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "sloth: --sweep %s\n", serr);
             g_quit = 1;
             sweep_label = NULL;
+            sweep_failed = 1;
         } else {
             fprintf(stderr, "sloth: --sweep %s: baseline %s\n", sweep_label,
                     sweep.base ? sweep.baseline : "none accepted yet: every "
@@ -2570,10 +2580,11 @@ int main(int argc, char **argv) {
 
     /* --sweep (#249): the inventory, the reports and the record, before
      * the JSONL sink closes. */
-    if (sweep_label)
-        (void)sweep_run_finish(&sweep, &g_state, !sweep.done,
-                               bt_monitor || bt_capture != NULL, sloth_wall(),
-                               stderr);
+    if (sweep_label &&
+        sweep_run_finish(&sweep, &g_state, !sweep.done,
+                         bt_monitor || bt_capture != NULL, sloth_wall(),
+                         stderr) != 0)
+        sweep_failed = 1;
 
     dns_cleanup();
     g_platform.cleanup();
@@ -2582,5 +2593,8 @@ int main(int argc, char **argv) {
     db_close();
     discovery_unpublish();
     data_socket_cleanup();
-    return 0;
+    /* A sweep is a command with files for a result: one that did not
+     * start or did not write them says so in its status, not only on
+     * stderr. */
+    return sweep_failed ? 1 : 0;
 }

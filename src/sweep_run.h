@@ -54,6 +54,13 @@ typedef struct {
     int          end_why;
 } sweep_run_t;
 
+/* The label's baseline, checked before anything opens (main.c exits 2
+ * on -1, as on any other refusal): 1 present and readable, 0 none yet,
+ * -1 with `err` filled (not a regular file, not readable, a path that
+ * does not fit). sweep_run_begin() reads it again for the run. */
+int  sweep_baseline_check(const char *dir, const char *label, char *err,
+                          size_t errsz);
+
 /* Start: read the label's baseline if there is one, allocate, and take
  * the plan from `full` (chanhop_init_sweep()'s list). 0, or -1 with
  * `err` filled (no memory, a baseline that cannot be read). */

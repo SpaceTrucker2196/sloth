@@ -55,6 +55,44 @@ void sweep_run_free(sweep_run_t *r) {
     r->inv = r->base = NULL;
 }
 
+/* The label's baseline at `path` into *out (allocated; NULL and 0 when
+ * there is none). 0, or -1 with `err` filled. */
+static int read_baseline(const char *path, sw_inv_t **out, int *version,
+                         char *err, size_t errsz) {
+    *out = NULL;
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        if (errno == ENOENT) return 0;
+        snprintf(err, errsz, "%.200s: %s", path, strerror(errno));
+        return -1;
+    }
+    sw_inv_t *b = sweep_inv_new();
+    if (!b) { snprintf(err, errsz, "out of memory"); return -1; }
+    if (!S_ISREG(st.st_mode) || wifi_snapshot_read(path, b, version) != 0) {
+        snprintf(err, errsz, "%.200s: the baseline cannot be read", path);
+        sweep_inv_free(b);
+        return -1;
+    }
+    *out = b;
+    return 0;
+}
+
+int sweep_baseline_check(const char *dir, const char *label, char *err,
+                         size_t errsz) {
+    char path[SWEEP_PATH_MAX];
+    if (!dir || !label || !err || !errsz) return -1;
+    if (sweep_baseline_path(dir, label, path, sizeof(path)) != 0) {
+        snprintf(err, errsz, "%.200s: path too long", dir);
+        return -1;
+    }
+    sw_inv_t *b = NULL;
+    int ver = 0;
+    if (read_baseline(path, &b, &ver, err, errsz) != 0) return -1;
+    int have = b != NULL;
+    sweep_inv_free(b);
+    return have;
+}
+
 int sweep_run_begin(sweep_run_t *r, const char *label, unsigned minutes,
                     const char *dir, const chanhop_t *full,
                     uint64_t now_ms, time_t wall, char *err, size_t errsz) {
@@ -71,18 +109,7 @@ int sweep_run_begin(sweep_run_t *r, const char *label, unsigned minutes,
     }
     r->inv = sweep_inv_new();
     if (!r->inv) { snprintf(err, errsz, "out of memory"); return -1; }
-    struct stat st;
-    if (stat(r->baseline, &st) == 0) {
-        r->base = sweep_inv_new();
-        if (!r->base) { snprintf(err, errsz, "out of memory"); sweep_run_free(r); return -1; }
-        if (!S_ISREG(st.st_mode) ||
-            wifi_snapshot_read(r->baseline, r->base, &r->base_version) != 0) {
-            snprintf(err, errsz, "%.200s: the baseline cannot be read", r->baseline);
-            sweep_run_free(r);
-            return -1;
-        }
-    } else if (errno != ENOENT) {
-        snprintf(err, errsz, "%.200s: %s", r->baseline, strerror(errno));
+    if (read_baseline(r->baseline, &r->base, &r->base_version, err, errsz) != 0) {
         sweep_run_free(r);
         return -1;
     }

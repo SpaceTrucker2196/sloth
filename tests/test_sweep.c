@@ -803,9 +803,16 @@ static void test_run_writes_and_never_accepts(void) {
     t1 = slurp(path);
     ASSERT(t1 && strstr(t1, "Planted"));
 
+    /* main.c's check before anything opens: present, absent, and (below)
+     * there but not a file. */
+    ASSERT_EQ(sweep_baseline_check(dir, "room", err, sizeof(err)), 1);
+    ASSERT_EQ(sweep_baseline_check(dir, "other", err, sizeof(err)), 0);
+
     /* A baseline that is not a file is refused at the start. */
     unlink(base);
     ASSERT_EQ(mkdir(base, 0700), 0);
+    ASSERT_EQ(sweep_baseline_check(dir, "room", err, sizeof(err)), -1);
+    ASSERT(strstr(err, "cannot be read") != NULL);
     ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &h, 0, 1764000900, err, sizeof(err)), -1);
     rmdir(base);
     if (nul) fclose(nul);

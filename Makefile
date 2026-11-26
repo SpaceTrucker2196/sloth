@@ -1316,6 +1316,7 @@ replay-check: replay-run $(RF_TARGET)
 	    echo "replay-check: --bt-capture DIR exited $$rc, want 2 (not a file or FIFO)" >&2; exit 1; fi
 	@sh tests/replay/rf_refusals.sh ./$(TARGET) ./$(RF_TARGET) ./$(TARGET_ALIAS)
 	@sh tests/replay/preflight_cli.sh ./$(TARGET) $(REPLAY_RUN)/preflight
+	@sh tests/replay/sweep_cli.sh ./$(TARGET) $(REPLAY_RUN)/sweep
 	@sh tests/replay/handoff_cli.sh ./$(TARGET) $(REPLAY_RUN)
 	@echo "replay-check: $$(wc -l < $(REPLAY_GOLDEN)) records match $(REPLAY_GOLDEN)"
 
