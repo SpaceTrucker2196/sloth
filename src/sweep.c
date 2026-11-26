@@ -1,6 +1,7 @@
 #include "sweep.h"
 #include "camera_vendor.h"
 #include "oui.h"
+#include "seqnum_track.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,7 +27,18 @@ const char *sweep_kind_name(int kind) {
 }
 
 const char *sweep_ble_type_name(int t) {
-    return t == SW_BLE_STATIC ? "static" : "public";
+    return t == SW_BLE_STATIC ? "static" : t == SW_BLE_PRIVATE ? "private" : "public";
+}
+
+const char *sweep_res_name(int res) {
+    return res == SW_RES_ASSOC ? "assoc" : res == SW_RES_PERSIST ? "persistent" : "";
+}
+
+/* A private BLE address as received (Address_Type 1, top bits 01
+ * resolvable or 00 non-resolvable): the kind resolution may make a row
+ * of. Anonymous reports and the reserved sub-type never are. */
+static int ble_private(uint8_t addr_type, const uint8_t addr[6]) {
+    return addr_type == 1 && ((addr[0] & 0xC0) == 0x40 || (addr[0] & 0xC0) == 0x00);
 }
 
 const char *sweep_status_name(int st) {
@@ -80,6 +92,22 @@ static void set_add(sw_set_t *set, uint64_t k) {
 }
 
 int sweep_set_count(const sw_set_t *set) { return set ? set->n : 0; }
+
+static int set_has(const sw_set_t *set, uint64_t k) {
+    uint64_t h = k * 0x9E3779B97F4A7C15ull;
+    unsigned i = (unsigned)(h >> 52) % SW_SET_CAP;
+    for (int p = 0; p < SW_SET_CAP; p++) {
+        unsigned j = (i + (unsigned)p) % SW_SET_CAP;
+        if (set->key[j] == k) return 1;
+        if (set->key[j] == 0) return 0;
+    }
+    return 0;
+}
+
+static void key_addr(uint64_t k, uint8_t a[6], unsigned *tag) {
+    for (int i = 0; i < 6; i++) a[i] = (uint8_t)(k >> (8 * (5 - i)));
+    *tag = (unsigned)((k >> 48) & 0xFF);
+}
 
 /* ── rows ── */
 
@@ -198,13 +226,60 @@ static void observe_aps(sw_inv_t *inv, const sloth_state_t *s) {
     }
 }
 
-/* A client address: kept, or counted when locally administered. */
+/* ── resolution of randomised addresses (sweep.h) ── */
+
+static sw_cand_t *cand_find(sw_inv_t *inv, int kind, const uint8_t a[6]) {
+    for (int i = 0; i < inv->ncand; i++)
+        if (inv->cand[i].kind == kind && !memcmp(inv->cand[i].addr, a, 6))
+            return &inv->cand[i];
+    return NULL;
+}
+
+/* Follow a randomised address; the row once it is resolved, else NULL.
+ * A full table follows nothing new: that address stays counted. */
+static sw_emitter_t *cand_note(sw_inv_t *inv, int kind, const uint8_t a[6],
+                               time_t first, time_t last, int assoc) {
+    sw_cand_t *c = cand_find(inv, kind, a);
+    if (!c) {
+        if (inv->ncand >= SW_MAX_CAND) { inv->cand_dropped++; return NULL; }
+        c = &inv->cand[inv->ncand++];
+        memset(c, 0, sizeof(*c));
+        c->kind = (uint8_t)kind;
+        memcpy(c->addr, a, 6);
+        c->first_seen = first;
+    }
+    if (first && (!c->first_seen || first < c->first_seen)) c->first_seen = first;
+    if (last > c->last_seen) c->last_seen = last;
+    if (assoc && kind == SW_K_CLIENT) c->assoc = 1;
+    int bt = kind == SW_K_BLE ? SW_BLE_PRIVATE : 0;
+    if (c->resolved) return find_rw(inv, kind, a, bt);
+    int res = c->assoc ? SW_RES_ASSOC
+            : c->first_seen && c->last_seen - c->first_seen >= SW_STABLE_SPAN_S
+              ? SW_RES_PERSIST : SW_RES_NONE;
+    if (res == SW_RES_NONE) return NULL;
+    sw_emitter_t *e = row(inv, kind, a, bt, c->first_seen);
+    if (!e) return NULL;                /* the kind is full: stays counted */
+    c->resolved = 1;
+    e->res = (uint8_t)res;
+    e->res_conf = res == SW_RES_ASSOC ? SW_CONF_ASSOC : SW_CONF_PERSIST;
+    note_seen(e, c->first_seen, c->last_seen);
+    return e;
+}
+
+/* A client address: kept, or counted when locally administered and
+ * kept as well once resolved. */
 static sw_emitter_t *client_row(sw_inv_t *inv, const uint8_t mac[6],
-                                time_t first) {
+                                time_t first, time_t last, int assoc) {
     if (mac[0] & 0x01) return NULL;               /* group: never a transmitter */
     if (mac[0] & 0x02) {
         set_add(&inv->client_random, set_key(mac, 0));
-        return NULL;
+        sw_emitter_t *e = cand_note(inv, SW_K_CLIENT, mac, first, last, assoc);
+        /* An assoc row's method can only be stronger than persistence. */
+        if (e && assoc && e->res == SW_RES_PERSIST) {
+            e->res = SW_RES_ASSOC;
+            e->res_conf = SW_CONF_ASSOC;
+        }
+        return e;
     }
     sw_emitter_t *e = row(inv, SW_K_CLIENT, mac, 0, first);
     if (e && !e->vendor[0]) {
@@ -218,7 +293,7 @@ static sw_emitter_t *client_row(sw_inv_t *inv, const uint8_t mac[6],
 static void observe_clients(sw_inv_t *inv, const sloth_state_t *s) {
     for (int i = 0; i < s->probe_count && i < MAX_PROBE_CLIENTS; i++) {
         const probe_client_t *p = &s->probe_clients[i];
-        sw_emitter_t *e = client_row(inv, p->mac, p->first_seen);
+        sw_emitter_t *e = client_row(inv, p->mac, p->first_seen, p->last_seen, 0);
         if (!e) continue;
         if (p->channel > 0) e->channel = p->channel;
         note_dbm(e, 1, p->signal_dbm);
@@ -228,15 +303,27 @@ static void observe_clients(sw_inv_t *inv, const sloth_state_t *s) {
      * the AP's and is not the client's (sloth.h, assoc_t). */
     for (int i = 0; i < s->assoc_count && i < MAX_ASSOC_ENTRIES; i++) {
         const assoc_t *a = &s->assocs[i];
-        sw_emitter_t *e = client_row(inv, a->sta_mac, a->first_seen);
+        sw_emitter_t *e = client_row(inv, a->sta_mac, a->first_seen, a->last_seen, 1);
         if (!e) continue;
         if (a->channel > 0 && !e->channel) e->channel = a->channel;
         note_seen(e, a->first_seen, a->last_seen);
     }
     for (int i = 0; i < s->assoc_req_count && i < MAX_ASSOC_ENTRIES; i++) {
         const assoc_req_t *r = &s->assoc_reqs[i];
-        sw_emitter_t *e = client_row(inv, r->sta, r->ts);
+        sw_emitter_t *e = client_row(inv, r->sta, r->ts, r->ts, 1);
         if (e) note_seen(e, r->ts, r->ts);
+    }
+    /* A randomised probe address whose counter continues, strongly,
+     * into a universal one is linked to that device: a count, never a
+     * row (sweep.h). */
+    for (int i = 0; i < s->seqnum_correlation_count &&
+                    i < MAX_SEQNUM_CORRELATIONS; i++) {
+        const seqnum_correlation_t *c = &s->seqnum_correlations[i];
+        if (!seqnum_corr_is_strong(c)) continue;
+        const uint8_t *rnd = c->mac_a_random ? c->mac_a : c->mac_b;
+        if ((rnd[0] & 0x03) != 0x02) continue;
+        set_add(&inv->client_random, set_key(rnd, 0));
+        set_add(&inv->client_linked, set_key(rnd, 0));
     }
 }
 
@@ -244,11 +331,14 @@ static void observe_ble(sw_inv_t *inv, const sloth_state_t *s) {
     for (int i = 0; i < s->ble_device_count && i < MAX_BLE_DEVICES; i++) {
         const ble_device_t *d = &s->ble_devices[i];
         int t = sweep_ble_kept_type(d->addr_type, d->addr);
+        sw_emitter_t *e;
         if (t < 0) {
             set_add(&inv->ble_private, set_key(d->addr, d->addr_type));
-            continue;
+            if (!ble_private(d->addr_type, d->addr)) continue;
+            e = cand_note(inv, SW_K_BLE, d->addr, d->first_seen, d->last_seen, 0);
+        } else {
+            e = row(inv, SW_K_BLE, d->addr, t, d->first_seen);
         }
-        sw_emitter_t *e = row(inv, SW_K_BLE, d->addr, t, d->first_seen);
         if (!e) continue;
         if (d->has_name && d->name[0])
             snprintf(e->name, sizeof(e->name), "%s", d->name);
@@ -294,9 +384,11 @@ int sweep_compare(const sw_inv_t *cur, const sw_inv_t *base, sw_cmp_t *out) {
     out->have_base = base != NULL;
     for (int k = 0; k < SW_K_N; k++)
         out->compared[k] = base && base->has_kind[k];
+    out->compared_resolved = base && base->has_resolved;
     for (int i = 0; i < cur->n; i++) {
         sw_emitter_t r = cur->e[i];
-        const sw_emitter_t *b = out->compared[r.kind]
+        int cmp = out->compared[r.kind] && (!r.res || out->compared_resolved);
+        const sw_emitter_t *b = cmp
             ? sweep_inv_find(base, r.kind, r.addr, r.ble_type) : NULL;
         r.status = b ? SW_ST_KNOWN : SW_ST_NEW;
         r.base_channel = 0;
@@ -311,7 +403,16 @@ int sweep_compare(const sw_inv_t *cur, const sw_inv_t *base, sw_cmp_t *out) {
     for (int i = 0; base && i < base->n; i++) {
         const sw_emitter_t *b = &base->e[i];
         if (!out->compared[b->kind]) continue;
-        if (sweep_inv_find(cur, b->kind, b->addr, b->ble_type)) continue;
+        const sw_emitter_t *h = sweep_inv_find(cur, b->kind, b->addr, b->ble_type);
+        if (h) continue;
+        /* A resolved row heard this sweep only as a count (not followed
+         * long enough to resolve again) was heard: not missing. */
+        if (b->res && b->kind == SW_K_CLIENT &&
+            set_has(&cur->client_random, set_key(b->addr, 0)))
+            continue;
+        if (b->res && b->kind == SW_K_BLE &&
+            set_has(&cur->ble_private, set_key(b->addr, 1)))
+            continue;
         sw_emitter_t r = *b;
         r.status = SW_ST_MISSING;
         r.has_dbm = 0;
@@ -320,6 +421,32 @@ int sweep_compare(const sw_inv_t *cur, const sw_inv_t *base, sw_cmp_t *out) {
     }
     qsort(out->row, (size_t)out->n, sizeof(sw_emitter_t), cmp_rows);
     return 0;
+}
+
+void sweep_rand_counts(const sw_inv_t *inv, sw_rand_t *o) {
+    memset(o, 0, sizeof(*o));
+    if (!inv) return;
+    o->client_random = sweep_set_count(&inv->client_random);
+    o->ble_private = sweep_set_count(&inv->ble_private);
+    o->floor = inv->client_random.full || inv->ble_private.full ||
+               inv->client_linked.full;
+    for (int i = 0; i < inv->n; i++) {
+        if (!inv->e[i].res) continue;
+        if (inv->e[i].kind == SW_K_CLIENT) o->client_resolved++;
+        else if (inv->e[i].kind == SW_K_BLE) o->ble_resolved++;
+    }
+    for (int j = 0; j < SW_SET_CAP; j++) {
+        uint64_t k = inv->client_linked.key[j];
+        if (!k) continue;
+        uint8_t a[6];
+        unsigned tag;
+        key_addr(k, a, &tag);
+        if (!sweep_inv_find(inv, SW_K_CLIENT, a, 0)) o->client_linked++;
+    }
+    o->client_unresolved = o->client_random - o->client_resolved - o->client_linked;
+    o->ble_unresolved = o->ble_private - o->ble_resolved;
+    if (o->client_unresolved < 0) o->client_unresolved = 0;
+    if (o->ble_unresolved < 0) o->ble_unresolved = 0;
 }
 
 void sweep_cmp_free(sw_cmp_t *c) {

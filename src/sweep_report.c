@@ -23,8 +23,10 @@ static const char *const LIMITS[] = {
     "Ubertooth) for the whole sweep; a device that does not advertise "
     "is not found.",
     "A resolvable or non-resolvable private BLE address and a locally "
-    "administered Wi-Fi client address change over time: they are "
-    "counted, never compared, and never new or known.",
+    "administered Wi-Fi client address change over time: one is compared "
+    "only when this sweep resolved it as stable (it associated, or it was "
+    "heard for 15 minutes or more), by its own address, never merged with "
+    "another; the rest are counted, never new or known.",
 };
 
 const char *sweep_end_name(int end_why) {
@@ -102,6 +104,11 @@ static void md_row(FILE *out, const sw_emitter_t *e) {
         md_cell(out, e->base_enc);
         sep = 1;
     }
+    if (e->res) {
+        fprintf(out, "%sresolved randomised address: %s, confidence %d",
+                sep ? "; " : "", sweep_res_name(e->res), e->res_conf);
+        sep = 1;
+    }
     if (!sep) fputs("-", out);
     fputs(" |\n", out);
 }
@@ -152,14 +159,25 @@ void sweep_report_md(FILE *out, const sw_report_t *r) {
             fprintf(out, "| %s | %d | not compared | not compared |\n", kn[k],
                     c->count[k][SW_ST_NEW]);
     }
-    fprintf(out, "\nCounted, not compared: %s%d Wi-Fi client address%s that "
-            "rotate (locally administered), %s%d private BLE address%s.\n",
-            r->inv->client_random.full ? "at least " : "",
-            sweep_set_count(&r->inv->client_random),
-            sweep_set_count(&r->inv->client_random) == 1 ? "" : "es",
-            r->inv->ble_private.full ? "at least " : "",
-            sweep_set_count(&r->inv->ble_private),
-            sweep_set_count(&r->inv->ble_private) == 1 ? "" : "es");
+    sw_rand_t rc;
+    sweep_rand_counts(r->inv, &rc);
+    const char *fl = rc.floor ? "at least " : "";
+    fprintf(out, "\nRandomised addresses: %s%d Wi-Fi client address%s with the "
+            "locally administered bit, of which %d resolved as stable (compared "
+            "above, by address), %d linked by sequence number to a universal "
+            "address, %d unresolved (counted, not compared); %s%d private BLE "
+            "address%s, of which %d resolved as stable, %d unresolved.\n",
+            fl, rc.client_random, rc.client_random == 1 ? "" : "es",
+            rc.client_resolved, rc.client_linked, rc.client_unresolved,
+            fl, rc.ble_private, rc.ble_private == 1 ? "" : "es",
+            rc.ble_resolved, rc.ble_unresolved);
+    if (r->inv->cand_dropped)
+        fprintf(out, "Not followed for resolution (the table was full): %llu "
+                "observation(s); those addresses stay counted.\n",
+                (unsigned long long)r->inv->cand_dropped);
+    if (c->have_base && !c->compared_resolved && (rc.client_resolved || rc.ble_resolved))
+        fputs("The baseline predates resolution: the resolved randomised addresses "
+              "are listed as new, not compared.\n", out);
     uint64_t dropped = r->inv->dropped[0] + r->inv->dropped[1] + r->inv->dropped[2];
     if (dropped)
         fprintf(out, "Not inventoried (a kind's table was full): %llu "
@@ -253,6 +271,9 @@ static void json_row(FILE *out, const sw_emitter_t *e) {
         fputs(",\"category\":", out); pf_json_str(out, e->cat);
     }
     if (e->kind == SW_K_CLIENT) { fputs(",\"vendor\":", out); pf_json_str(out, e->vendor); }
+    if (e->res)
+        fprintf(out, ",\"resolved\":\"%s\",\"confidence\":%d", sweep_res_name(e->res),
+                e->res_conf);
     if (e->has_dbm && e->status != SW_ST_MISSING) fprintf(out, ",\"best_dbm\":%d", e->best_dbm);
     if (e->channel > 0) fprintf(out, ",\"channel\":%d", e->channel);
     if (e->status == SW_ST_KNOWN && e->kind == SW_K_AP) {
@@ -287,6 +308,14 @@ void sweep_report_json(FILE *out, const sw_report_t *r) {
                 k ? "," : "", sweep_kind_name(k), c->compared[k] ? "true" : "false",
                 c->count[k][SW_ST_NEW], c->count[k][SW_ST_KNOWN],
                 c->count[k][SW_ST_MISSING]);
+    sw_rand_t rc;
+    sweep_rand_counts(r->inv, &rc);
+    fprintf(out, ",\"resolved_compared\":%s,\"client_resolved\":%d,"
+            "\"client_linked\":%d,\"client_unresolved\":%d,\"ble_resolved\":%d,"
+            "\"ble_unresolved\":%d",
+            c->compared_resolved ? "true" : "false", rc.client_resolved,
+            rc.client_linked, rc.client_unresolved, rc.ble_resolved,
+            rc.ble_unresolved);
     fprintf(out, ",\"client_random\":%d,\"client_random_floor\":%s,"
             "\"ble_private\":%d,\"ble_private_floor\":%s,\"dropped\":%llu},",
             sweep_set_count(&r->inv->client_random),
@@ -344,7 +373,7 @@ void sweep_report_emit(const sw_report_t *r) {
     char bands[64];
     sweep_bands_not_swept(cv, bands, sizeof(bands));
     const char *end = sweep_end_name(r->end_why);
-    jsonl_field_t f[24];
+    jsonl_field_t f[32];
     int n = 0;
 #define I(k, v) f[n++] = (jsonl_field_t){ k, JSONL_F_INT, NULL, (long long)(v), 0.0, 0 }
 #define S(k, v) f[n++] = (jsonl_field_t){ k, JSONL_F_STR, v, 0, 0.0, 0 }
@@ -365,6 +394,15 @@ void sweep_report_emit(const sw_report_t *r) {
     I("ble_missing", c->count[SW_K_BLE][SW_ST_MISSING]);
     I("client_random", sweep_set_count(&r->inv->client_random));
     I("ble_private", sweep_set_count(&r->inv->ble_private));
+    /* JSONL 2.18.0 (#249 follow-up): the randomised addresses resolved
+     * as stable, linked by sequence number, and left unresolved. */
+    sw_rand_t rc;
+    sweep_rand_counts(r->inv, &rc);
+    I("client_resolved", rc.client_resolved);
+    I("client_linked", rc.client_linked);
+    I("client_unresolved", rc.client_unresolved);
+    I("ble_resolved", rc.ble_resolved);
+    I("ble_unresolved", rc.ble_unresolved);
     I("channels_planned", cv->n);
     I("channels_swept", sweep_cov_swept(cv));
     S("not_swept", not_swept);

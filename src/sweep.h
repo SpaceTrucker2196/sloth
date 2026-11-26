@@ -25,15 +25,38 @@
  *   ble     BLE advertisers (the HCI monitor channel or an Ubertooth),
  *           keyed by address and its kind
  *
- * Addresses that rotate are counts only and never an emitter (owner
- * ruling 2026-11-25 for BLE: public and static random addresses are
- * kept per label; resolvable and non-resolvable private addresses are
- * counted, never NEW or KNOWN). A Wi-Fi client address with the locally
- * administered bit set (IEEE 802-2014 §8.2, the randomised address of
- * every current phone) is held the same way: it changes per network and
- * per scan, so it would be NEW at every sweep. Both are counted as
- * distinct addresses heard, to SW_SET_CAP; past that the count says
- * "at least".
+ * Addresses that rotate are counts unless resolved (owner rulings
+ * 2026-11-25). Public and static random BLE addresses and universal
+ * Wi-Fi client addresses are kept per label. A resolvable or
+ * non-resolvable private BLE address, and a Wi-Fi client address with
+ * the locally administered bit (IEEE 802-2014 §8.2, the randomised
+ * address of every current phone), are counted as distinct addresses
+ * heard, to SW_SET_CAP (past that the count says "at least"), and are
+ * kept and compared only once RESOLVED: the passive evidence says the
+ * address itself is stable (below, and
+ * research/papers/randomised-address-resolution.md). A resolved row's
+ * identity is its own address and nothing else, so a device can be
+ * KNOWN only when the very same address is in the baseline: no two
+ * addresses are ever merged into one baseline identity, because a
+ * wrong merge would hide a new device behind a known one. The rest
+ * stay counted.
+ *
+ *   assoc       a randomised Wi-Fi client address in a (re)association
+ *               exchange: the address a client joins with is per network
+ *               and persistent (Android) or fixed or slowly rotating
+ *               (Apple). Confidence SW_CONF_ASSOC.
+ *   persistent  a randomised Wi-Fi client address, or a private BLE
+ *               address, heard over at least SW_STABLE_SPAN_S within the
+ *               sweep (BLE: past Core v5.4's recommended 15-min private
+ *               address change; Wi-Fi: the same span as a judgement).
+ *               Confidence SW_CONF_PERSIST.
+ *   seqnum      a randomised probe address whose sequence numbers
+ *               continue, strongly (seqnum_corr_is_strong()), into a
+ *               universal client address: counted as LINKED to that
+ *               device, never a row, and no row's status changes.
+ *
+ * IE fingerprints, probed SSID lists and the BLE rotation hints are not
+ * used (the research note says why).
  *
  * The same inventory is what the site snapshot file holds since its
  * format v2 (src/wifi_snapshot.h): wifi_snapshot_write() builds one
@@ -45,6 +68,16 @@
 #define SW_MAX_BLE     512
 #define SW_MAX_EMIT    (SW_MAX_AP + SW_MAX_CLIENT + SW_MAX_BLE)
 #define SW_SET_CAP     4096
+/* Randomised addresses followed for resolution, per sweep. A full table
+ * follows no more: the rest stay counted (unresolved), never merged. */
+#define SW_MAX_CAND    1024
+/* "persistent": heard over this span within the sweep, seconds. */
+#define SW_STABLE_SPAN_S 900
+/* Confidence, 0..100, the seqnum_track axis: how likely the address
+ * names one device at the next sweep. Ordinal judgements, not rates
+ * (research/papers/randomised-address-resolution.md). */
+#define SW_CONF_ASSOC    60
+#define SW_CONF_PERSIST  40
 
 typedef enum { SW_K_AP = 0, SW_K_CLIENT, SW_K_BLE, SW_K_N } sw_kind_t;
 
@@ -52,7 +85,12 @@ typedef enum { SW_K_AP = 0, SW_K_CLIENT, SW_K_BLE, SW_K_N } sw_kind_t;
  * public identity (2); Address_Type 1 with the top two bits 11 (static
  * random, Core v5.4 Vol 6 Part B §1.3.2.1) or a resolved static
  * identity (3). */
-typedef enum { SW_BLE_PUBLIC = 0, SW_BLE_STATIC = 1 } sw_ble_type_t;
+typedef enum { SW_BLE_PUBLIC = 0, SW_BLE_STATIC = 1,
+               SW_BLE_PRIVATE = 2 /* a resolved private address */ } sw_ble_type_t;
+
+/* How a randomised address was resolved (above); NONE for an address
+ * kept for what it is (universal, public, static). */
+typedef enum { SW_RES_NONE = 0, SW_RES_ASSOC, SW_RES_PERSIST } sw_res_t;
 
 /* The flags of the sweep report's own section (cameras, devices in
  * setup mode, hidden-name access points). */
@@ -70,6 +108,8 @@ typedef struct {
     uint8_t  flags;         /* SW_F_* */
     uint8_t  status;        /* sw_status_t, after sweep_compare() */
     uint8_t  has_dbm;       /* best_dbm was measured */
+    uint8_t  res;           /* sw_res_t: a resolved randomised address */
+    uint8_t  res_conf;      /* its confidence, 0..100 */
     int8_t   best_dbm;      /* strongest heard, dBm */
     int      channel;       /* 802.11 channel last heard on; BLE: LL
                              * channel index, -1 unknown */
@@ -95,6 +135,15 @@ typedef struct {
     int      full;          /* an address was not added: n is a floor */
 } sw_set_t;
 
+/* A randomised address followed for resolution. */
+typedef struct {
+    uint8_t  kind;          /* SW_K_CLIENT or SW_K_BLE */
+    uint8_t  addr[6];
+    uint8_t  assoc;         /* seen in a (re)association exchange */
+    uint8_t  resolved;      /* promoted to a row */
+    time_t   first_seen, last_seen;
+} sw_cand_t;
+
 typedef struct {
     int          n;
     sw_emitter_t e[SW_MAX_EMIT];
@@ -102,11 +151,31 @@ typedef struct {
     uint64_t     dropped[SW_K_N];   /* heard while the kind's cap was full */
     sw_set_t     ble_private;       /* RPA / NRPA / anonymous: counted */
     sw_set_t     client_random;     /* locally administered client addresses */
+    sw_set_t     client_linked;     /* of those, linked by seqnum to a universal one */
+    sw_cand_t    cand[SW_MAX_CAND];
+    int          ncand;
+    uint64_t     cand_dropped;      /* not followed: the table was full */
     /* Whether a file read back held the kind (a v1 snapshot holds APs
      * only), and its counts lines. Set by wifi_snapshot_read(). */
     int          has_kind[SW_K_N];
     int          file_ble_private, file_client_random;
+    /* The file holds resolved randomised addresses as rows (its
+     * "# resolved" line): a baseline written before resolution existed
+     * holds none, and a resolved row is then not compared. */
+    int          has_resolved;
 } sw_inv_t;
+
+/* The counts of the randomised addresses: distinct heard, resolved to a
+ * row, linked by seqnum (and not resolved), and the rest, unresolved. */
+typedef struct {
+    int client_random, client_resolved, client_linked, client_unresolved;
+    int ble_private, ble_resolved, ble_unresolved;
+    int floor;              /* a set was full: the figures are floors */
+} sw_rand_t;
+void sweep_rand_counts(const sw_inv_t *inv, sw_rand_t *out);
+
+/* "assoc", "persistent", "" */
+const char *sweep_res_name(int res);
 
 /* Heap: the inventory is about 400 KiB. NULL on allocation failure. */
 sw_inv_t *sweep_inv_new(void);
@@ -131,8 +200,9 @@ const sw_emitter_t *sweep_inv_find(const sw_inv_t *inv, int kind,
 int  sweep_set_count(const sw_set_t *set);
 
 /* A BLE row's kind under the owner ruling: SW_BLE_PUBLIC or
- * SW_BLE_STATIC when the address is kept, -1 when it is counted only
- * (private, anonymous or the reserved sub-type). Pure. */
+ * SW_BLE_STATIC when the address is kept, -1 when it is counted (and
+ * may be resolved: private) or ignored (anonymous, the reserved
+ * sub-type). Pure. */
 int  sweep_ble_kept_type(uint8_t addr_type, const uint8_t addr[6]);
 
 /* ── Compare with the label's baseline ──
@@ -146,12 +216,16 @@ int  sweep_ble_kept_type(uint8_t addr_type, const uint8_t addr[6]);
  * signal first (an unknown strong emitter is probably in the room) and
  * a row with no measured signal last; MISSING last, by kind and
  * address. A KNOWN AP whose channel or encryption moved keeps the
- * baseline's in base_channel / base_enc. */
+ * baseline's in base_channel / base_enc. A resolved randomised row is
+ * compared only against a baseline that holds such rows
+ * (compared_resolved); against an older one it is NEW and the report
+ * says the resolved rows were not compared. */
 typedef struct {
     int           n;
     sw_emitter_t *row;                      /* heap, n rows */
     int           count[SW_K_N][3];         /* [kind][sw_status_t] */
     int           compared[SW_K_N];         /* the baseline holds the kind */
+    int           compared_resolved;        /* ... and resolved rows */
     int           have_base;
 } sw_cmp_t;
 
@@ -252,7 +326,8 @@ void sweep_report_json(FILE *out, const sw_report_t *r);
 /* The `sweep_report` record. A no-op with no JSONL sink open. */
 void sweep_report_emit(const sw_report_t *r);
 
-/* "ap", "client", "ble"; "public", "static"; "new", "known", "missing". */
+/* "ap", "client", "ble"; "public", "static", "private"; "new", "known",
+ * "missing". */
 const char *sweep_kind_name(int kind);
 const char *sweep_ble_type_name(int t);
 const char *sweep_status_name(int st);

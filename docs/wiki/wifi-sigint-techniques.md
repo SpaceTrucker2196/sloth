@@ -15,7 +15,7 @@ this page is receive-only; it is the discipline sloth was built around.
 **Sources**: `docs/views/{probe,pnl,beacons,seqnum,assoc,eapol,channel,devices}.md`,
 `docs/wiki/{wifi-sigint,mac-randomisation,ja3-fingerprinting}.md`.
 
-**Last updated**: 2026-11-25 (#249: snapshot format v2, clients and BLE advertisers, the counts-only addresses). 2026-10-15 (#137: snapshot file format, SSID escaping).
+**Last updated**: 2026-11-25 (#249 follow-up: resolved randomised addresses as v2 rows with method and confidence, `# resolved`). 2026-11-25 (#249: snapshot format v2, clients and BLE advertisers, the counts-only addresses). 2026-10-15 (#137: snapshot file format, SSID escaping).
 
 ---
 
@@ -71,9 +71,15 @@ rows, each starting with its kind. Kept are clients with a universal
 address and BLE advertisers with a public or static random address
 (`type` `public` or `static`); a locally administered client address
 and a resolvable or non-resolvable private BLE address are counted as
-distinct addresses heard and are never a row (owner ruling 2026-11-25
-for BLE; the client side is held the same way because such an address
-changes per network). The vendor, category and name take the SSID's
+distinct addresses heard and are a row only once the sweep resolved
+the address as stable (owner rulings 2026-11-25, [[sweep-session]]
+§ 3): such a row (`client` with a locally administered address, or
+`ble` with `type` `private`) carries two more fields, the method
+(`assoc` or `persistent`) and the confidence (1..100), and the header's
+`# resolved N` line says the file can hold them. A v2 reader before
+them parses a client row's first three fields and refuses the address
+(locally administered), and refuses the `private` type, so it skips
+those rows and reads the rest as before. The vendor, category and name take the SSID's
 escape. A client or BLE row has fewer than the six fields an AP row
 needs, so a v1 reader (`--baseline-in` in any earlier sloth) skips it
 and reads the APs exactly as before; `--baseline-in` itself still

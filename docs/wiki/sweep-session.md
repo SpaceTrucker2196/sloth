@@ -10,9 +10,9 @@ type: reference
 
 **Status**: #249, 2026-11-25 (JSONL 2.16.0). Built in sloth: the flags, the in-process preflight, the sweep plan, the inventory, the comparison, the reports, the `sweep_report` record, the baseline file (snapshot v2) and `--sweep-group`, the directory shared with slothweb (owner ruling 2026-11-25, § 5). The Accept button is slothweb's (sloth-mesh: `POST /api/sweep/accept`, behind its write-path ACL, refused to agents). No PDF (no report export exists).
 
-**Sources**: issue #249 (from #241 item 14) and its owner rulings of 2026-11-25; FM 2-0 (17 May 2004) 11-18, page 11-5 (technical surveillance countermeasures: keeping sensitive and restricted areas "clear of any adversary intelligence-placed active or passive electronic sensing, or eavesdropping or collection devices") and chapter 9, 9-4, page 9-2 (Unintentional Radiation Intelligence, a MASINT subdiscipline), both checked against the manual's text in the #249 review; IEEE 802.11-2020 §11.1.3.2 (dot11BeaconPeriod, the dwell floor); Bluetooth Core v5.4 Vol 6 Part B §1.3.2 (BLE address kinds); IEEE 802-2014 §8.2 (the locally administered bit); `src/sweep.h`, `src/sweep.c` (inventory, compare), `src/sweep_cov.c` (coverage), `src/sweep_report.c` (reports, record), `src/sweep_run.h`, `src/sweep_run.c` (the run, the files), `src/wifi_chanhop.c` (`chanhop_init_sweep()`), `src/wifi_snapshot.c` (format v2, `wifi_snapshot_read()`), `src/main.c` (the flags); `tests/test_sweep.c`.
+**Sources**: issue #249 (from #241 item 14) and its owner rulings of 2026-11-25; FM 2-0 (17 May 2004) 11-18, page 11-5 (technical surveillance countermeasures: keeping sensitive and restricted areas "clear of any adversary intelligence-placed active or passive electronic sensing, or eavesdropping or collection devices") and chapter 9, 9-4, page 9-2 (Unintentional Radiation Intelligence, a MASINT subdiscipline), both checked against the manual's text in the #249 review; IEEE 802.11-2020 §11.1.3.2 (dot11BeaconPeriod, the dwell floor); Bluetooth Core v5.4 Vol 6 Part B §1.3.2 (BLE address kinds); IEEE 802-2014 §8.2 (the locally administered bit); `research/papers/randomised-address-resolution.md` (resolving randomised addresses); `src/sweep.h`, `src/sweep.c` (inventory, compare), `src/sweep_cov.c` (coverage), `src/sweep_report.c` (reports, record), `src/sweep_run.h`, `src/sweep_run.c` (the run, the files), `src/wifi_chanhop.c` (`chanhop_init_sweep()`), `src/wifi_snapshot.c` (format v2, `wifi_snapshot_read()`), `src/main.c` (the flags); `tests/test_sweep.c`.
 
-**Last updated**: 2026-11-25 (#249 follow-up, owner ruling: `--sweep-group`, the directory shared with slothweb, 0640 outputs, the operator's setup, § 5), 2026-11-25 (#249 review: the FM 2-0 citations checked against the manual; an unreadable baseline is refused before the preflight; the exit status; the refusals under `make replay-check`), 2026-11-25 (#249: the page).
+**Last updated**: 2026-11-25 (#249 follow-up, owner ruling: randomised addresses resolved as stable by `assoc` or `persistent` and compared by address, `seqnum` links counted, JSONL 2.18.0, § 3), 2026-11-25 (#249 follow-up, owner ruling: `--sweep-group`, the directory shared with slothweb, 0640 outputs, the operator's setup, § 5), 2026-11-25 (#249 review: the FM 2-0 citations checked against the manual; an unreadable baseline is refused before the preflight; the exit status; the refusals under `make replay-check`), 2026-11-25 (#249: the page).
 
 ---
 
@@ -46,10 +46,20 @@ The inventory is kept for the whole sweep, merged from the state's tables once a
 | kind | source | kept per label | counted only |
 |---|---|---|---|
 | access point | beacon table (monitor radio) | every BSSID | — |
-| Wi-Fi client | probing clients, (re)association requests and responses | universal addresses | locally administered addresses (they change per network) |
-| BLE advertiser | the HCI monitor channel or an Ubertooth | public and static random addresses | resolvable and non-resolvable private addresses, anonymous reports |
+| Wi-Fi client | probing clients, (re)association requests and responses | universal addresses; locally administered ones once resolved | locally administered addresses not resolved |
+| BLE advertiser | the HCI monitor channel or an Ubertooth | public and static random addresses; private ones once resolved | private addresses not resolved, anonymous reports |
 
 The BLE row is the owner's ruling of 2026-11-25; the client row applies the same reasoning to Wi-Fi. A counted address is never new or known: a phone's rotated address would otherwise be new at every sweep. The counts are distinct addresses, to 3072; past that the report says "at least".
+
+**Resolving randomised addresses** (owner ruling 2026-11-25, `src/sweep.h`, [research/papers/randomised-address-resolution.md](../../research/papers/randomised-address-resolution.md)). A randomised address is compared, by its own address, once the passive evidence says that address is stable; the rest stay counted. Never are two addresses merged into one baseline identity, because a wrong merge would hide a new device behind a known one: a device is known only when the very same address is in the baseline.
+
+| method | evidence | confidence |
+|---|---|---|
+| `assoc` | a locally administered client address in a (re)association exchange: the address a client joins with is per network (Android's persistent randomisation, Apple's fixed or slowly rotating private address) | 60 |
+| `persistent` | a locally administered client address, or a resolvable or non-resolvable private BLE address, heard over at least 900 s of the sweep (BLE: longer than Core v5.4's recommended 15-min private address change) | 40 |
+| `seqnum` (linked) | a randomised probe address whose sequence numbers continue, strongly (`seqnum_corr_is_strong()`), into a universal client address of the sweep: counted as linked to that device, never a row; no status changes | the seam's own |
+
+The confidences are ordinal judgements, not measured rates. IE fingerprints and probed SSID lists are not used (they name a model, or a person's network history), nor are the BLE rotation hints (#156: per-run keys and one named consumer). A resolved row in the baseline stores the address, the channel, the vendor where there is one, the method and the confidence: monitor data, nothing the fleet rule forbids. A baseline written before resolution (no `# resolved` line) is not compared for resolved rows: they are listed as new and the report says so. A resolved baseline row heard in this sweep only as a count (too briefly to resolve again) is not missing. The planted device on a fixed locally administered address is the case this serves: it associates, or it stays on the air, so it is resolved and reported as new. The noise runs the other way: a phone on a rotating private address can be new at one sweep and missing at the next.
 
 Each emitter is **new** (not in the baseline), **known**, or, for a baseline row not heard, **missing**. A baseline that holds no clients or BLE (a v1 snapshot) leaves those kinds "not compared". With no accepted baseline every emitter is new.
 
@@ -72,7 +82,7 @@ The report holds: the start, end, time given and why it ended; the baseline (pat
 - Each channel is heard for its dwell only.
 - 6 GHz and sub-GHz are not swept.
 - A device that does not advertise is not found over BLE.
-- Rotating addresses are counted, never compared.
+- A randomised address is compared only when resolved as stable, by its own address; the rest are counted.
 
 The report says nothing about detecting electronics from unintentional radiation: that is research, and it needs a bench measurement with `sloth-rf` before any report makes a claim about it.
 
@@ -101,7 +111,7 @@ What sloth holds the directory to with `--sweep-group` (`src/sweep_run.h`, `swee
 
 A sweep started as root with `--user sloth` drops every supplementary group (`src/privdrop.c`), so the dropped process is not in the group: with `2770` its files still take the group, but it cannot read a baseline slothweb's account wrote unless that account is `sloth`. Run the sweep as `sloth` instead.
 
-The baseline file is outside sloth.db, so the #239 random-address purge never touches it ([[retention]] § 2e); it holds no private BLE address and no locally administered client address, only their counts.
+The baseline file is outside sloth.db, so the #239 random-address purge never touches it ([[retention]] § 2e). Since the resolution ruling it holds the randomised addresses the sweep resolved as stable (§ 3), with their method and confidence, and only the counts of the rest.
 
 ## Related pages
 

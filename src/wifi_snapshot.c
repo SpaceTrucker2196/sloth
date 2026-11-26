@@ -155,6 +155,13 @@ static void emit(FILE *f, const sw_inv_t *inv, const char *label,
     fprintf(f, "# ble_devices\t%d\n", inv->per_kind[SW_K_BLE]);
     fprintf(f, "# client_random\t%d\n", sweep_set_count(&inv->client_random));
     fprintf(f, "# ble_private\t%d\n", sweep_set_count(&inv->ble_private));
+    /* Since the #249 follow-up a randomised address the sweep resolved
+     * (src/sweep.h) is a row, with its method and confidence; this line
+     * says the file can hold such rows, so a reader comparing against
+     * it knows an absent one is absent and not unrecorded. */
+    sw_rand_t rc;
+    sweep_rand_counts(inv, &rc);
+    fprintf(f, "# resolved\t%d\n", rc.client_resolved + rc.ble_resolved);
     fprintf(f, "# bssid\tssid\tenc\tchannel\takm\tmfp\tvendor\n");
     for (int i = 0; i < inv->n; i++) {
         const sw_emitter_t *e = &inv->e[i];
@@ -164,17 +171,26 @@ static void emit(FILE *f, const sw_inv_t *inv, const char *label,
         wifi_snapshot_row(f, bss, e->ssid, e->enc, e->channel, e->akm,
                           e->mfp, e->vendor);
     }
-    fprintf(f, "# client\tmac\tchannel\tvendor\n");
+    fprintf(f, "# client\tmac\tchannel\tvendor\tresolved\tconfidence\n");
     for (int i = 0; i < inv->n; i++) {
         const sw_emitter_t *e = &inv->e[i];
         if (e->kind != SW_K_CLIENT) continue;
         char mac[20], ve[32 * 4 + 1];
         mac_str(e->addr, mac, sizeof(mac));
         field_escape(e->vendor, ve, sizeof(ve));
-        fprintf(f, "client\t%s\t%d\t%s\n", mac,
-                e->channel > 0 && e->channel < 256 ? e->channel : 0, ve);
+        /* A resolved randomised address carries its method and
+         * confidence; a v2 reader before them parses the first three
+         * fields and skips the row (its address is locally
+         * administered), so an older sloth reads the file as before. */
+        if (e->res)
+            fprintf(f, "client\t%s\t%d\t%s\t%s\t%d\n", mac,
+                    e->channel > 0 && e->channel < 256 ? e->channel : 0, ve,
+                    sweep_res_name(e->res), e->res_conf);
+        else
+            fprintf(f, "client\t%s\t%d\t%s\n", mac,
+                    e->channel > 0 && e->channel < 256 ? e->channel : 0, ve);
     }
-    fprintf(f, "# ble\taddr\ttype\tcategory\tname\n");
+    fprintf(f, "# ble\taddr\ttype\tcategory\tname\tresolved\tconfidence\n");
     for (int i = 0; i < inv->n; i++) {
         const sw_emitter_t *e = &inv->e[i];
         if (e->kind != SW_K_BLE) continue;
@@ -184,8 +200,13 @@ static void emit(FILE *f, const sw_inv_t *inv, const char *label,
         mac_str(e->addr, mac, sizeof(mac));
         field_escape(e->cat, cat, sizeof(cat));
         field_escape(e->name, name, sizeof(name));
-        fprintf(f, "ble\t%s\t%s\t%s\t%s\n", mac,
-                sweep_ble_type_name(e->ble_type), cat, name);
+        if (e->res)
+            fprintf(f, "ble\t%s\t%s\t%s\t%s\t%s\t%d\n", mac,
+                    sweep_ble_type_name(e->ble_type), cat, name,
+                    sweep_res_name(e->res), e->res_conf);
+        else
+            fprintf(f, "ble\t%s\t%s\t%s\t%s\n", mac,
+                    sweep_ble_type_name(e->ble_type), cat, name);
     }
 }
 
@@ -451,20 +472,37 @@ static int read_ap(sw_inv_t *inv, char *line) {
     return sweep_inv_add(inv, &e) == 0;
 }
 
+/* A resolved row's method and confidence (src/sweep.h). 1 with them
+ * set, 0 when the fields are not a resolution this writer produces. */
+static int read_res(char *how, char *conf, sw_emitter_t *e) {
+    int c;
+    if (!how || !conf || !field_int(conf, 1, 100, &c)) return 0;
+    if (!strcmp(how, "assoc"))           e->res = SW_RES_ASSOC;
+    else if (!strcmp(how, "persistent")) e->res = SW_RES_PERSIST;
+    else return 0;
+    e->res_conf = (uint8_t)c;
+    return 1;
+}
+
 static int read_client(sw_inv_t *inv, char *rest) {
     char *save = NULL;
     char *mac = strtok_r(rest, "\t", &save);
     char *chan = strtok_r(NULL, "\t", &save);
     char *ven = strtok_r(NULL, "\t", &save);
+    char *how = strtok_r(NULL, "\t", &save);
+    char *conf = strtok_r(NULL, "\t", &save);
     sw_emitter_t e;
     memset(&e, 0, sizeof(e));
     int ch_v;
     if (!mac || !chan || !parse_mac(mac, e.addr) ||
         !field_int(chan, 0, 255, &ch_v))
         return 0;
-    /* A locally administered or group address is a count, never a row
-     * (src/sweep.h), in a hand-edited file as in a sweep. */
-    if (e.addr[0] & 0x03) return 0;
+    /* A group address is never a row. A locally administered one is a
+     * row only as a resolved address, with its method (src/sweep.h), in
+     * a hand-edited file as in a sweep; a universal one never carries a
+     * method. */
+    if (e.addr[0] & 0x01) return 0;
+    if ((e.addr[0] & 0x02) ? !read_res(how, conf, &e) : how != NULL) return 0;
     e.kind = SW_K_CLIENT;
     e.channel = ch_v;
     if (ven) field_unescape(ven, e.vendor, sizeof(e.vendor));
@@ -477,16 +515,24 @@ static int read_ble(sw_inv_t *inv, char *rest) {
     char *type = strtok_r(NULL, "\t", &save);
     char *cat  = strtok_r(NULL, "\t", &save);
     char *name = strtok_r(NULL, "\t", &save);
+    char *how  = strtok_r(NULL, "\t", &save);
+    char *conf = strtok_r(NULL, "\t", &save);
     sw_emitter_t e;
     memset(&e, 0, sizeof(e));
     if (!mac || !type || !parse_mac(mac, e.addr)) return 0;
-    if (!strcmp(type, "public"))      e.ble_type = SW_BLE_PUBLIC;
-    else if (!strcmp(type, "static")) e.ble_type = SW_BLE_STATIC;
+    if (!strcmp(type, "public"))       e.ble_type = SW_BLE_PUBLIC;
+    else if (!strcmp(type, "static"))  e.ble_type = SW_BLE_STATIC;
+    else if (!strcmp(type, "private")) e.ble_type = SW_BLE_PRIVATE;
     else return 0;
-    /* A private address in a hand-edited file is still never a row
-     * (owner ruling 2026-11-25): only a static address's top bits are
-     * 11. */
+    /* Only a static address's top bits are 11; a private one (01 or 00)
+     * is a row only as a resolved address with its method (src/sweep.h,
+     * owner rulings 2026-11-25), and only "persistent" resolves one. */
     if (e.ble_type == SW_BLE_STATIC && (e.addr[0] & 0xC0) != 0xC0) return 0;
+    if (e.ble_type == SW_BLE_PRIVATE &&
+        ((e.addr[0] & 0xC0) == 0xC0 || (e.addr[0] & 0xC0) == 0x80 ||
+         !read_res(how, conf, &e) || e.res != SW_RES_PERSIST))
+        return 0;
+    if (e.ble_type != SW_BLE_PRIVATE && how) return 0;
     e.kind = SW_K_BLE;
     e.channel = -1;
     if (cat)  field_unescape(cat, e.cat, sizeof(e.cat));
@@ -533,6 +579,9 @@ int wifi_snapshot_read_f(FILE *f, sw_inv_t *out, int *version) {
             else if (!strncmp(line, "# client_random\t", 16) &&
                      field_int(line + 16, 0, 1L << 30, &v))
                 out->file_client_random = v;
+            else if (!strncmp(line, "# resolved\t", 11) &&
+                     field_int(line + 11, 0, 1L << 30, &v))
+                out->has_resolved = 1;
             continue;
         }
         if (!line[0]) continue;

@@ -645,7 +645,7 @@ static void test_report_of_a_stopped_sweep(void) {
         ASSERT(strstr(t, "stopped before") != NULL);
         ASSERT(strstr(t, "Lob\\|by\\tX") != NULL);
         ASSERT(strstr(t, "\tX") == NULL);
-        ASSERT(strstr(t, "1 private BLE address.") != NULL);
+        ASSERT(strstr(t, "1 private BLE address, of which 0 resolved") != NULL);
         ASSERT(strstr(t, "uses a wire") != NULL);
         /* The strong unknown first in the New table. */
         const char *n1 = strstr(t, "02:00:00:00:00:01"), *n2 = strstr(t, "02:00:00:00:00:02");
@@ -936,6 +936,204 @@ static void test_run_group_dir(void) {
     test_rm_tree(dir);
 }
 
+/* ── resolving randomised addresses (owner ruling 2026-11-25) ── */
+
+static const uint8_t PLANT[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };  /* fixed LA, associates */
+static const uint8_t PL2[6]   = { 0x06, 0x11, 0x22, 0x33, 0x44, 0x56 };  /* fixed LA, probes 900 s */
+static const uint8_t PL3[6]   = { 0x0a, 0x11, 0x22, 0x33, 0x44, 0x57 };  /* LA, probes 899 s */
+static const uint8_t RND2[6]  = { 0x5a, 0x00, 0x00, 0x00, 0x00, 0x21 };  /* LA, seqnum-linked */
+static const uint8_t RND3[6]  = { 0x5e, 0x00, 0x00, 0x00, 0x00, 0x22 };  /* LA, weak seam */
+
+static void seed_assoc_req(sloth_state_t *s, const uint8_t sta[6], time_t ts) {
+    assoc_req_t *r = &s->assoc_reqs[s->assoc_req_count++];
+    memset(r, 0, sizeof(*r));
+    memcpy(r->sta, sta, 6);
+    memcpy(r->bssid, AP1, 6);
+    r->ts = ts;
+}
+
+static void seed_corr(sloth_state_t *s, const uint8_t rnd[6], const uint8_t uni[6],
+                      int conf) {
+    seqnum_correlation_t *c = &s->seqnum_correlations[s->seqnum_correlation_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac_a, rnd, 6);
+    memcpy(c->mac_b, uni, 6);
+    c->mac_a_random = 1;
+    c->confidence = conf;
+}
+
+/* The room of the ruling's test: a planted device on a fixed locally
+ * administered address is reported (new), a phone's rotating probe
+ * address is not a row, and the counts say which is which. */
+static void seed_random_room(sloth_state_t *s) {
+    memset(s, 0, sizeof(*s));
+    seed_ap(s, AP1, "Lobby", "WPA2", 6, -50);
+    seed_probe(s, CLI, 6, -60);                     /* universal */
+    seed_probe(s, RND, 6, -40);                     /* rotating: 5 s */
+    seed_probe(s, PL2, 6, -45);
+    s->probe_clients[s->probe_count - 1].last_seen = 1000 + SW_STABLE_SPAN_S;
+    seed_probe(s, PL3, 6, -47);
+    s->probe_clients[s->probe_count - 1].last_seen = 1000 + SW_STABLE_SPAN_S - 1;
+    seed_assoc_req(s, PLANT, 1001);
+    seed_corr(s, RND2, CLI, 80);                    /* strong: linked */
+    seed_corr(s, RND3, CLI, 50);                    /* weak: not */
+    seed_ble(s, BRPA, 1, "tag", -55);
+    s->ble_devices[s->ble_device_count - 1].last_seen = 1000 + SW_STABLE_SPAN_S;
+    seed_ble(s, BNRP, 1, NULL, -75);                /* 2 s: rotating */
+}
+
+static void test_resolve_randomised(void) {
+    seed_random_room(&g_s);
+    sw_inv_t *inv = sweep_inv_new(), *base = sweep_inv_new(), *back = sweep_inv_new();
+    ASSERT(inv && base && back);
+    if (!inv || !base || !back) goto out;
+    sweep_inv_observe(inv, &g_s);
+
+    const sw_emitter_t *e = sweep_inv_find(inv, SW_K_CLIENT, PLANT, 0);
+    ASSERT(e && e->res == SW_RES_ASSOC && e->res_conf == SW_CONF_ASSOC);
+    e = sweep_inv_find(inv, SW_K_CLIENT, PL2, 0);
+    ASSERT(e && e->res == SW_RES_PERSIST && e->res_conf == SW_CONF_PERSIST);
+    /* Absent, each seen red under a mutation (commit message): a probe
+     * address heard 5 s or 899 s is not resolved; a weak seam links
+     * nothing; a 2 s private BLE address is not resolved. */
+    ASSERT(sweep_inv_find(inv, SW_K_CLIENT, RND, 0) == NULL);
+    ASSERT(sweep_inv_find(inv, SW_K_CLIENT, PL3, 0) == NULL);
+    ASSERT(sweep_inv_find(inv, SW_K_CLIENT, RND2, 0) == NULL);
+    e = sweep_inv_find(inv, SW_K_BLE, BRPA, SW_BLE_PRIVATE);
+    ASSERT(e && e->res == SW_RES_PERSIST && !strcmp(e->name, "tag"));
+    ASSERT(sweep_inv_find(inv, SW_K_BLE, BNRP, SW_BLE_PRIVATE) == NULL);
+    sw_rand_t rc;
+    sweep_rand_counts(inv, &rc);
+    ASSERT_EQ(rc.client_random, 5);      /* RND PL2 PL3 PLANT RND2 (RND3 unheard) */
+    ASSERT_EQ(rc.client_resolved, 2);
+    ASSERT_EQ(rc.client_linked, 1);
+    ASSERT_EQ(rc.client_unresolved, 2);  /* RND PL3 */
+    ASSERT_EQ(rc.ble_private, 2);
+    ASSERT_EQ(rc.ble_resolved, 1);
+    ASSERT_EQ(rc.ble_unresolved, 1);
+
+    /* Against an accepted v2 baseline that holds none of them: new. */
+    seed_ap(&g_s, AP2, "x", "WPA2", 1, -80);         /* only to make a base */
+    sw_emitter_t ap;
+    memset(&ap, 0, sizeof(ap));
+    ap.kind = SW_K_AP;
+    memcpy(ap.addr, AP1, 6);
+    ASSERT_EQ(sweep_inv_add(base, &ap), 0);
+    for (int k = 0; k < SW_K_N; k++) base->has_kind[k] = 1;
+    base->has_resolved = 1;
+    sw_cmp_t c;
+    ASSERT_EQ(sweep_compare(inv, base, &c), 0);
+    ASSERT(c.compared_resolved);
+    int plant_new = 0;
+    for (int i = 0; i < c.n; i++)
+        if (c.row[i].kind == SW_K_CLIENT && !memcmp(c.row[i].addr, PLANT, 6))
+            plant_new = c.row[i].status == SW_ST_NEW;
+    ASSERT(plant_new);
+    ASSERT_EQ(c.count[SW_K_CLIENT][SW_ST_NEW], 3);   /* CLI PLANT PL2 */
+    ASSERT_EQ(c.count[SW_K_BLE][SW_ST_NEW], 1);
+    sweep_cmp_free(&c);
+
+    /* The file: the resolved rows round-trip with method and confidence,
+     * and the "# resolved" line says the file can hold them. */
+    const char *path = tmpfile_path();
+    ASSERT_EQ(wifi_snapshot_write_inv(inv, path, "room", 1764000000), 0);
+    int ver = 0;
+    ASSERT_EQ(wifi_snapshot_read(path, back, &ver), 0);
+    ASSERT_EQ(ver, 2);
+    ASSERT(back->has_resolved);
+    e = sweep_inv_find(back, SW_K_CLIENT, PLANT, 0);
+    ASSERT(e && e->res == SW_RES_ASSOC && e->res_conf == SW_CONF_ASSOC);
+    e = sweep_inv_find(back, SW_K_BLE, BRPA, SW_BLE_PRIVATE);
+    ASSERT(e && e->res == SW_RES_PERSIST);
+    ASSERT(sweep_inv_find(back, SW_K_CLIENT, RND, 0) == NULL);
+    char *t = slurp(path);
+    ASSERT(t && strstr(t, "# resolved\t3\n") &&
+           strstr(t, "client\t02:11:22:33:44:55\t0\t-\tassoc\t60\n") &&
+           !strstr(t, "5e:00:00:00:00:22"));
+    unlink(path);
+
+    /* The next sweep against it: the planted device is known. */
+    ASSERT_EQ(sweep_compare(inv, back, &c), 0);
+    for (int i = 0; i < c.n; i++)
+        if (!memcmp(c.row[i].addr, PLANT, 6)) ASSERT_EQ(c.row[i].status, SW_ST_KNOWN);
+    ASSERT_EQ(c.count[SW_K_CLIENT][SW_ST_MISSING], 0);
+    sweep_cmp_free(&c);
+
+    /* Heard again only as a count (a short probe, not resolved this
+     * time): it was heard, so not missing. Not heard at all: missing. */
+    memset(&g_s, 0, sizeof(g_s));
+    seed_probe(&g_s, PLANT, 6, -50);
+    sw_inv_t *again = sweep_inv_new();
+    ASSERT(again != NULL);
+    if (again) {
+        sweep_inv_observe(again, &g_s);
+        ASSERT(sweep_inv_find(again, SW_K_CLIENT, PLANT, 0) == NULL);
+        ASSERT_EQ(sweep_compare(again, back, &c), 0);
+        int plant_missing = 0, pl2_missing = 0;
+        for (int i = 0; i < c.n; i++) {
+            if (c.row[i].status != SW_ST_MISSING) continue;
+            if (!memcmp(c.row[i].addr, PLANT, 6)) plant_missing = 1;
+            if (!memcmp(c.row[i].addr, PL2, 6)) pl2_missing = 1;
+        }
+        ASSERT(!plant_missing);
+        ASSERT(pl2_missing);
+        sweep_cmp_free(&c);
+        sweep_inv_free(again);
+    }
+
+    /* A baseline from before resolution (no "# resolved" line) is not
+     * compared for resolved rows: the planted device is new, even when
+     * a hand-edited row of it is there. */
+    back->has_resolved = 0;
+    ASSERT_EQ(sweep_compare(inv, back, &c), 0);
+    ASSERT(!c.compared_resolved);
+    for (int i = 0; i < c.n; i++)
+        if (!memcmp(c.row[i].addr, PLANT, 6) && c.row[i].status != SW_ST_MISSING)
+            ASSERT_EQ(c.row[i].status, SW_ST_NEW);
+    sweep_cmp_free(&c);
+out:
+    sweep_inv_free(inv);
+    sweep_inv_free(base);
+    sweep_inv_free(back);
+}
+
+/* Hand-edited rows: a randomised client address is a row only with a
+ * method this writer produces; a universal one never carries one; a
+ * private BLE address only as "persistent"; a static one never with a
+ * method. Each refused row is absent (seen red with the reader's check
+ * removed, commit message). */
+static void test_resolved_rows_hand_edited(void) {
+    const char *path = tmpfile_path();
+    FILE *f = fopen(path, "w");
+    ASSERT(f != NULL);
+    if (!f) return;
+    fputs("# sloth-snapshot v2\n# resolved\t0\n"
+          "client\t02:00:00:00:00:01\t6\t-\n"                 /* LA, no method */
+          "client\t02:00:00:00:00:02\t6\t-\tguess\t60\n"     /* unknown method */
+          "client\t02:00:00:00:00:03\t6\t-\tassoc\t0\n"      /* confidence 0 */
+          "client\t02:00:00:00:00:04\t6\t-\tassoc\t60\n"     /* kept */
+          "client\t00:00:5e:00:53:05\t6\t-\tassoc\t60\n"     /* universal + method */
+          "client\t03:00:00:00:00:06\t6\t-\tassoc\t60\n"     /* group */
+          "ble\t41:22:33:44:55:01\tprivate\t-\t-\n"           /* no method */
+          "ble\t41:22:33:44:55:02\tprivate\t-\t-\tassoc\t60\n"
+          "ble\tc1:22:33:44:55:03\tprivate\t-\t-\tpersistent\t40\n" /* static bits */
+          "ble\t41:22:33:44:55:04\tprivate\t-\t-\tpersistent\t40\n" /* kept */
+          "ble\tc1:22:33:44:55:05\tstatic\t-\t-\tpersistent\t40\n", f);
+    fclose(f);
+    sw_inv_t *b = sweep_inv_new();
+    ASSERT(b != NULL);
+    if (!b) return;
+    ASSERT_EQ(wifi_snapshot_read(path, b, NULL), 0);
+    ASSERT(b->has_resolved);
+    ASSERT_EQ(b->per_kind[SW_K_CLIENT], 1);
+    ASSERT_EQ(b->per_kind[SW_K_BLE], 1);
+    const uint8_t k1[6] = { 0x02, 0, 0, 0, 0, 0x04 }, k2[6] = { 0x41, 0x22, 0x33, 0x44, 0x55, 0x04 };
+    ASSERT(sweep_inv_find(b, SW_K_CLIENT, k1, 0) != NULL);
+    ASSERT(sweep_inv_find(b, SW_K_BLE, k2, SW_BLE_PRIVATE) != NULL);
+    sweep_inv_free(b);
+    unlink(path);
+}
+
 void run_sweep_tests(void) {
     TEST_SUITE("sweep (#249): inventory");
     RUN_TEST(test_ble_kept_types);
@@ -959,4 +1157,6 @@ void run_sweep_tests(void) {
     RUN_TEST(test_label_and_minutes);
     RUN_TEST(test_run_writes_and_never_accepts);
     RUN_TEST(test_run_group_dir);
+    RUN_TEST(test_resolve_randomised);
+    RUN_TEST(test_resolved_rows_hand_edited);
 }

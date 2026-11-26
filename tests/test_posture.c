@@ -919,8 +919,8 @@ static void test_live_snapshot_beside_the_snapshot(void) {
     /* v2 (#249): the AP row, then the client and BLE column headers
      * with no rows under them. */
     ASSERT(pl_ends_with(r, "02:00:00:00:00:01\tLobby\tWPA2\t6\t-\t0\t-\n"
-                           "# client\tmac\tchannel\tvendor\n"
-                           "# ble\taddr\ttype\tcategory\tname\n"));
+                           "# client\tmac\tchannel\tvendor\tresolved\tconfidence\n"
+                           "# ble\taddr\ttype\tcategory\tname\tresolved\tconfidence\n"));
     struct stat st;
     ASSERT_EQ(stat(live, &st), 0);
     ASSERT_EQ((int)(st.st_mode & 0777), 0600);

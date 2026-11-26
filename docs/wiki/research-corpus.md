@@ -3,7 +3,7 @@
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
-**Last updated**: 2026-11-16 (the gate compares `research.db` by content, since its header carries the SQLite version); 2026-11-11 (#192 I7: `research/adsb/multi-receiver-verification.md`, the basis of slothweb's fleet aircraft cross-check, no alert kind); 2026-11-09 (#187 S4: `research/papers/mbssid-per-bss-ie-variation.md` for `KARMA_AP`'s IE-fingerprint collapse — and a worked example of a document whose job is to say what its sources do *not* support); 2026-11-08 (#186: `research/adsb/emergency-squawks.md` for `ADSB_EMERGENCY`); 2026-11-03 (the four GNSS kinds landed: each document's `alert_kinds` uncommented); 2026-11-02 (four GNSS documents, kinds pending; the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
+**Last updated**: 2026-11-25 (#249 follow-up: `research/papers/randomised-address-resolution.md`, the sweep's resolution of randomised addresses, no alert kind); 2026-11-16 (the gate compares `research.db` by content, since its header carries the SQLite version); 2026-11-11 (#192 I7: `research/adsb/multi-receiver-verification.md`, the basis of slothweb's fleet aircraft cross-check, no alert kind); 2026-11-09 (#187 S4: `research/papers/mbssid-per-bss-ie-variation.md` for `KARMA_AP`'s IE-fingerprint collapse — and a worked example of a document whose job is to say what its sources do *not* support); 2026-11-08 (#186: `research/adsb/emergency-squawks.md` for `ADSB_EMERGENCY`); 2026-11-03 (the four GNSS kinds landed: each document's `alert_kinds` uncommented); 2026-11-02 (four GNSS documents, kinds pending; the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
 
 `agents/AGENTS.md` § Discipline says every detector names its basis. The
 citations exist — in issue bodies, wiki pages and the rule table — but
@@ -420,6 +420,17 @@ site-general fit, the Bluetooth TX Power Level AD type and the extended
 report's TX_Power, and two published measurements of how wrong RSSI
 ranging is indoors — with no `alert_kinds`, because no rule reads the
 estimate. See [[rf-distance]].
+
+The sweep's resolution of randomised addresses (2026-11-25, #249
+follow-up) cites its basis in
+`research/papers/randomised-address-resolution.md` — Vanhoef et al.
+(ASIA CCS 2016), Matte et al. (WiSec 2016), Martin et al. (PoPETs 2017),
+Fenske et al. (PoPETs 2021), the AOSP MAC randomisation page and Apple's
+private Wi-Fi address page — with no `alert_kinds`: no rule reads it.
+Its records and abstracts were checked; the full texts were not
+re-read, and it says which claims are its own reasoning. Its job is
+mostly to say why the techniques that *link* two addresses are not used
+for a baseline's identity. See [[sweep-session]] § 3.
 
 The BLE Devices view's classes (2026-11-02) cite theirs in
 `research/bluetooth/ble-device-classes.md` — Celosia & Cunche 2020 and

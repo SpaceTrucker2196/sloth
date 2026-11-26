@@ -27,7 +27,7 @@ per-alert pcaps in `--pcap-dir` are swept on a 14-day default window
 (`ALERT_PCAP_DEFAULT_RETAIN_DAYS`), `tests/test_alert_pcap.c` for §2d
 (#166).
 
-**Last updated**: 2026-11-25 (#249 — §2e, sweep baselines: public and static BLE addresses kept per label in the snapshot file, outside the #239 purge; private addresses counts only). 2026-11-26 (#228 step 5, owner ruling 2026-11-25 — `twin_evidence_snapshots` on the finding tier, same reasoning as `karma_candidates` and `rogue_radius`: the evidence outlives nothing less than the finding it justifies). 2026-11-23 (#242 item 2 review — the tier table lists the tables `src/db.c` walks, 22 observation and 24 entity, and the ceiling's bound is 64 × 512 × 22). 2026-11-23 (#242 item 2 — `coverage_intervals` on the observation tier, the size ceiling may take it). 2026-11-20 (#239 review — a pass continues across maintenance; observation-tier groupings expire with their tier). 2026-11-20 (#239, owner ruling of that day — §2b, the random-address purge: a random address heard once is a count in `random_devices_daily` after 7 days, not a row; `retention.random_repeat_s`; §2.3 `random_devices_daily` is never pruned). 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
+**Last updated**: 2026-11-25 (#249 follow-up — §2e: randomised addresses the sweep resolved as stable are baseline rows; the rest stay counts). 2026-11-25 (#249 — §2e, sweep baselines: public and static BLE addresses kept per label in the snapshot file, outside the #239 purge; private addresses counts only). 2026-11-26 (#228 step 5, owner ruling 2026-11-25 — `twin_evidence_snapshots` on the finding tier, same reasoning as `karma_candidates` and `rogue_radius`: the evidence outlives nothing less than the finding it justifies). 2026-11-23 (#242 item 2 review — the tier table lists the tables `src/db.c` walks, 22 observation and 24 entity, and the ceiling's bound is 64 × 512 × 22). 2026-11-23 (#242 item 2 — `coverage_intervals` on the observation tier, the size ceiling may take it). 2026-11-20 (#239 review — a pass continues across maintenance; observation-tier groupings expire with their tier). 2026-11-20 (#239, owner ruling of that day — §2b, the random-address purge: a random address heard once is a count in `random_devices_daily` after 7 days, not a row; `retention.random_repeat_s`; §2.3 `random_devices_daily` is never pruned). 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
 
 ---
 
@@ -400,10 +400,16 @@ with a public or static random address per label, exempt from the
 §2b purge; resolvable and non-resolvable private addresses are counts
 only. The baseline is the label's [[sweep-session]] snapshot file (v2,
 [[wifi-sigint-techniques]]), not a sloth.db table, so §2b's purge never
-reaches it: it is kept until an accepted sweep replaces it, and it
-holds no private BLE address and no locally administered client
-address at all (each is a count line). Deleting the file is the
-operator's.
+reaches it: it is kept until an accepted sweep replaces it. Deleting
+the file is the operator's.
+
+**Owner ruling, 2026-11-25 (later the same day, "resolve randomised
+addresses"):** a private BLE address or a locally administered client
+address that the sweep resolved as stable (it associated, or it was
+heard for 900 s or more: [[sweep-session]] § 3) is a row of the
+baseline, with its method and confidence, so it can be compared as new,
+known or missing; every other randomised address is still a count line
+only. Such a row is outside the §2b purge as the rest of the file is.
 
 ## 3. What the size guard actually does
 
