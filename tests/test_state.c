@@ -46,6 +46,7 @@ void test_view_tab_cycles_forward(void) {
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_FRAGATTACK);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_BLE);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_GNSS);
+    v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_QUESTIONS);
     /* VIEW_ADSB stood here, last, until the cutover (#216). */
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_IFACE);   /* wraps */
 }
@@ -74,8 +75,9 @@ void test_view_for_key_selects(void) {
      * key selects nothing here. Seen red with the X(ADSB, ...) row put
      * back in include/sloth_views.def. */
     ASSERT_EQ(view_for_key('^'), -1);
-    ASSERT_EQ((int)VIEW_COUNT, 37);
-    ASSERT_EQ((int)VIEW_GNSS, (int)VIEW_COUNT - 1);
+    ASSERT_EQ(view_for_key('!'), VIEW_QUESTIONS);   /* #244 */
+    ASSERT_EQ((int)VIEW_COUNT, 38);
+    ASSERT_EQ((int)VIEW_QUESTIONS, (int)VIEW_COUNT - 1);
     /* Not view keys: the handler's own globals, the Tab cycle, the
      * arrow codes views navigate with, and the NUL tui_poll_key()
      * returns for "no key". */

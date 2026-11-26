@@ -52,7 +52,7 @@ Sloth has three aims:
    from severity. Reports say what the sensor could not see as well as
    what it saw.
 
-The means are <!-- count:views -->37<!-- /count --> live views, <!-- count:rules -->101<!-- /count --> alert rules, a JSONL stream,
+The means are <!-- count:views -->38<!-- /count --> live views, <!-- count:rules -->101<!-- /count --> alert rules, a JSONL stream,
 local SQLite stores and written reports (§3). The goal is not to *do*
 things to the spectrum or the network. The goal is to *see* what is
 there, surface what is hostile or anomalous, and hand the operator
@@ -295,7 +295,7 @@ them and enables none.
 
 **Detection and views:**
 
-- **<!-- count:views -->37<!-- /count --> views** (`VIEW_COUNT`, `sloth-wifi`'s; `sloth-rf` is headless), keyed
+- **<!-- count:views -->38<!-- /count --> views** (`VIEW_COUNT`, `sloth-wifi`'s; `sloth-rf` is headless), keyed
   `[1]…[0]`, `[a]…[z]`, `[?]` (help), `[*]` (BLE) and `[#]` (GNSS), indexed in
   [`docs/wiki/views-catalog.md`](docs/wiki/views-catalog.md).
 - **<!-- count:rules -->101<!-- /count --> alert rules** in `src/alerts/` — one per `ALERT_TYPE_*`;

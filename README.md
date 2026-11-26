@@ -244,7 +244,7 @@ does not drive the SDRs that feed `sloth-rf`.
 
 ## Terminal views and keys
 
-`sloth-wifi` draws <!-- count:views -->37<!-- /count --> live views; `sloth-rf` is headless and is read
+`sloth-wifi` draws <!-- count:views -->38<!-- /count --> live views; `sloth-rf` is headless and is read
 in slothweb. `[?]` in sloth shows the current card. Per-view pages are
 in [`docs/views/`](docs/views/); the map is
 [views-catalog](docs/wiki/views-catalog.md).
@@ -381,7 +381,7 @@ build: view and rule counts, flags, links. Mutation testing:
 ## Status and roadmap
 
 Current release: v1.8.7 (`SLOTH_VERSION` in
-[`include/sloth.h`](include/sloth.h)), with <!-- count:views -->37<!-- /count --> views and
+[`include/sloth.h`](include/sloth.h)), with <!-- count:views -->38<!-- /count --> views and
 <!-- count:rules -->101<!-- /count --> alert rules across `sloth-wifi` and `sloth-rf`. Release notes are the
 `RELEASE_v*.md` files. What is planned, by theme:
 [MISSION.md §4](MISSION.md) and [ROADMAP.md](ROADMAP.md). What

@@ -511,7 +511,7 @@ static int dc_table_rows(const char *path, const char *only_missing_from) {
 }
 
 static void test_counts_say_which_binary(void) {
-    ASSERT_EQ((int)VIEW_COUNT, 37);
+    ASSERT_EQ((int)VIEW_COUNT, 38);
     ASSERT_EQ((int)ALERT_TYPE_COUNT, 101);
     ASSERT_EQ(dc_wifi_kinds(), 96);
     ASSERT_EQ(dc_rf_kinds(), 6);

@@ -12,7 +12,7 @@ type: reference
 bar, the help card, the draw dispatch and the view-select keys are all
 generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 
-**Count**: `VIEW_COUNT` = **<!-- count:views -->37<!-- /count -->**. Every key below is a row of
+**Count**: `VIEW_COUNT` = **<!-- count:views -->38<!-- /count -->**. Every key below is a row of
 `include/sloth_views.def`; if the two disagree, the `.def` is right.
 
 **Which binary**: these are `sloth-wifi`'s views (`sloth` is a symlink
@@ -23,7 +23,7 @@ was the list's last row, so no other view's number or key moved, and
 `^` selects nothing. The aircraft table is slothweb's ADS-B tab
 ([[adsb]]). The GNSS view (`#`) stays: `sloth-wifi` keeps the receiver.
 
-**Last updated**: 2026-11-15 (#216: the `^` ADS-B row removed; the views are `sloth-wifi`'s, `sloth-rf` has none); 2026-11-07 (the `^` ADS-B row: the `--adsb` decoder's aircraft table, observation only, distance and bearing only with a sensor position); 2026-11-02 (the `#` GNSS row: the `--gps` receiver's sky, observation only); 2026-11-01 (the `*` BLE row names slothweb's BLE tab, key `0`); 2026-10-26 (#150 review: the clip counts wide glyphs as two cells, a cut row ends with `›`, Research's sources and the Interfaces health strip break onto rows instead of being cut); 2026-10-23 (#150: list views size their page from the cursor and clip table rows at the edge, banners above them wrap; Twins keeps Flags whole at 100 columns); 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
+**Last updated**: 2026-11-25 (#244: the `!` Questions row, [[site-questions]]), 2026-11-15 (#216: the `^` ADS-B row removed; the views are `sloth-wifi`'s, `sloth-rf` has none); 2026-11-07 (the `^` ADS-B row: the `--adsb` decoder's aircraft table, observation only, distance and bearing only with a sensor position); 2026-11-02 (the `#` GNSS row: the `--gps` receiver's sky, observation only); 2026-11-01 (the `*` BLE row names slothweb's BLE tab, key `0`); 2026-10-26 (#150 review: the clip counts wide glyphs as two cells, a cut row ends with `›`, Research's sources and the Interfaces health strip break onto rows instead of being cut); 2026-10-23 (#150: list views size their page from the cursor and clip table rows at the edge, banners above them wrap; Twins keeps Flags whole at 100 columns); 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
 
 ---
 
@@ -67,6 +67,7 @@ was the list's last row, so no other view's number or key moved, and
 | `c` | FragAttacks | [fragattack.md](../views/fragattack.md) | per-BSSID FragAttacks counters (#75) — see [[fragattacks]] |
 | `*` | BLE | [ble.md](../views/ble.md) | BLE advertisers per sensor, HID / watchlist flags, `Enter` detail (#144 slice 4) — see [[ble]]. `*` because every letter and digit is taken. In [[slothweb]] the same view is the BLE tab (key `0`), at parity |
 | `#` | GNSS | [gnss.md](../views/gnss.md) | the `--gps` receiver's sky: satellites in view with C/N0, elevation, azimuth, used and health, the DOPs and the receiver's clock against the host's; observation only, the detectors follow (2026-11-02) — see [[gnss]]. `#` because every letter and digit is taken. In [[slothweb]] the same view is the GNSS tab |
+| `!` | Questions | [questions.md](../views/questions.md) | the site questions (#244): each question this daemon answers, most urgent first, with its status (`finding`, `no_finding`, `no_finding_partly`, `not_observable`, `not_assessed`), the reason or the kinds found, and the selected question's decision, indicator coverage and incident ids — see [[site-questions]]. `!` because every letter and digit is taken |
 | `f` | Research  | [research.md](../views/research.md) | the cited source behind each alert that fired (#73) — see [[research-corpus]] |
 | `?` | Help      | — | keybindings, version, and the embedded-data disclosures |
 

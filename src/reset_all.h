@@ -121,6 +121,7 @@
     X(sys_status_reset) \
     X(cov_live_reset) \
     X(q_live_reset) \
+    X(view_questions_reset) \
     X(cov_iv_reset) \
     X(cov_iv_capture_reset) \
     X(cov_tl_reset) \

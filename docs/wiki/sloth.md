@@ -16,7 +16,7 @@ type: reference
 
 ## What sloth surfaces
 
-- **<!-- count:views -->37<!-- /count --> ncurses views** (`VIEW_COUNT`, one per row of `include/sloth_views.def`) organised into observation, synthesis, Wi-Fi SIGINT and other-radio groups — see [[views-catalog]]. They are `sloth-wifi`'s (`sloth` is a symlink to it); the second daemon, `sloth-rf`, is headless ([ADR 0010](adr/0010-wifi-rf-daemons.md)) and is read in [[slothweb]].
+- **<!-- count:views -->38<!-- /count --> ncurses views** (`VIEW_COUNT`, one per row of `include/sloth_views.def`) organised into observation, synthesis, Wi-Fi SIGINT and other-radio groups — see [[views-catalog]]. They are `sloth-wifi`'s (`sloth` is a symlink to it); the second daemon, `sloth-rf`, is headless ([ADR 0010](adr/0010-wifi-rf-daemons.md)) and is read in [[slothweb]].
 - **<!-- count:rules -->101<!-- /count --> alert rules** (one per `ALERT_TYPE_*`, one per row of `include/sloth_alerts.def`) — see [[alerts]]. Each has a written, cited assessment ([Alert assessments](alert-assessments/README.md)). The threat-intel matcher among them ships a **synthetic demo IOC list**, not a feed — see [[threat-intel]].
 - **Finding quality and coverage** — completeness, latency, corroboration and source state on each finding, and which rules can see anything in the present configuration — see [[coverage-assessment]].
 - **Per-alert pcap dumps** when `--pcap-dir` is set — see [[pcap-export]].

@@ -11,7 +11,7 @@ intelligence — Citizen SIGINT (`MISSION.md` §1) — for Linux, in C99.
 It reads what is already on the wire and in the air (Wi-Fi, Bluetooth
 and BLE, ADS-B, APRS, rtl_433, GNSS, SDR sweeps, the host network),
 characterises the emitters, flags hostile or anomalous activity aimed
-at the operator's own networks, and surfaces it through <!-- count:views -->37<!-- /count --> views and <!-- count:rules -->101<!-- /count --> alert rules. Since the cutover
+at the operator's own networks, and surfaces it through <!-- count:views -->38<!-- /count --> views and <!-- count:rules -->101<!-- /count --> alert rules. Since the cutover
 (#216, [ADR 0010](adr/0010-wifi-rf-daemons.md)) the sensor is two
 daemons: **`sloth-wifi`** (IP, 802.11, BLE and every view; `sloth` is a
 symlink to it), which raises <!-- count:rules-wifi -->96<!-- /count --> of the alert kinds, and the
@@ -58,7 +58,7 @@ NTP, ICMP, and the 802.11 frame classes ([[how-wifi-works]] §2). It reads
 every layer; it writes to none. See [[platform-vtable]] for the kernel
 seam and [[architecture]] for the code tree.
 
-## What it shows (<!-- count:views -->37<!-- /count --> views)
+## What it shows (<!-- count:views -->38<!-- /count --> views)
 
 Grouped four ways. Full keybinding map: [[views-catalog]].
 

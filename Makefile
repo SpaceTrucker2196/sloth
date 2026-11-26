@@ -271,6 +271,8 @@ CORE_BASE_SRCS += src/exposure.c
 # Site questions (#244): the default questions, the kind-to-question
 # map and the status of each question; reads alerts and coverage.
 CORE_BASE_SRCS += src/questions.c src/questions_live.c
+# The [!] Questions view (#244).
+CORE_BASE_SRCS += src/views/questions.c
 # The per-interval coverage record (#242 item 2): the record and its
 # writers (cov_interval.c, which db.c reads and which names no capture
 # module) and the capture side's sampler (named by poll.c's wifi table
