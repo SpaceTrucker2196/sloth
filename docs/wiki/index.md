@@ -48,7 +48,7 @@ below):
   that still need an owner ruling marked in place; 0009 is the owner's
   monitor-only rule for fleet sharing (2026-11-12); 0010 splits the
   sensor into the `sloth-wifi` and `sloth-rf` daemons (#211); 0011 is
-  `sloth-va`, the one helper that transmits, to the owner's own Victron
+  `sloth-va`, the one helper that transmits, to the operator's own Victron
   devices.
 - [[architecture-rf-split]] — the measured coupling between the Wi-Fi
   monitor and the SDR and GNSS modules (ADS-B, APRS, rtl_433, GNSS) in
