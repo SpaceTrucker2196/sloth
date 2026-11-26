@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the schema and its v1 → v20 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the schema and its v1 → v22 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154, #170 and #239.
 
-**Last updated**: 2026-11-25 (#245: schema v21 (built as v20, renumbered over #228's v20 on 2026-11-27), `alert_incidents` gains `state`, `prelim_at`, `confirmed_at` and `withdraw_why`, and a preliminary or withdrawn incident is a row there, never an `alerts` row; the v20 → v21 step and its two tests), 2026-11-26 (#228 step 5, owner ruling 2026-11-25: schema v20, `twin_evidence_snapshots`, the evidence vector behind an `EVIL_TWIN` pair's confidence for a future labelled-training pass, on the finding tier and deliberately not latched like the rest of this file; the v19 → v20 step and its two tests), 2026-11-24 (#250 review: `alert_incidents` and `coverage_intervals` name their offline readers, `--handoff` and `--interference-report`, and what of each they parse), 2026-11-23 (#246: schema v19, the quality columns of `alert_incidents`, `complete`, `complete_why`, `latency_ms`, `corroboration` and `src_state`, their order-free upsert; the v18 → v19 step and its two tests), 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
+**Last updated**: 2026-11-25 (#244: schema v22, the `question_status` table, one row each time a site question's answer changes, observation tier), 2026-11-25 (#245: schema v21 (built as v20, renumbered over #228's v20 on 2026-11-27), `alert_incidents` gains `state`, `prelim_at`, `confirmed_at` and `withdraw_why`, and a preliminary or withdrawn incident is a row there, never an `alerts` row; the v20 → v21 step and its two tests), 2026-11-26 (#228 step 5, owner ruling 2026-11-25: schema v20, `twin_evidence_snapshots`, the evidence vector behind an `EVIL_TWIN` pair's confidence for a future labelled-training pass, on the finding tier and deliberately not latched like the rest of this file; the v19 → v20 step and its two tests), 2026-11-24 (#250 review: `alert_incidents` and `coverage_intervals` name their offline readers, `--handoff` and `--interference-report`, and what of each they parse), 2026-11-23 (#246: schema v19, the quality columns of `alert_incidents`, `complete`, `complete_why`, `latency_ms`, `corroboration` and `src_state`, their order-free upsert; the v18 → v19 step and its two tests), 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
 in the entity tier and `victron_readings` in the observation tier, at
 most one reading row a minute per device, the stamp-only v14 → v15 step
 and its two tests; slothweb's Victron tab charts `victron_readings`).
@@ -181,14 +181,14 @@ These are what make the file trustworthy rather than merely present.
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 | One row per incident: span widens, `peak_sev`/`count`/`observations` only rise, a close once recorded stays; `sev` the latest | `alert_incidents` | Written each tick from the hook's queue and then from the snapshot, and by a full queue's own flush between ticks. Every column but `sev` comes out the same whatever the order; `sev` is the last write's, and the snapshot, the newest view, is written last (#175). See *Per-incident rows* below. |
 
-## Schema — 58 tables, v1 → v21
+## Schema — 59 tables, v1 → v22
 
-`meta` holds `schema_version`, currently **21**. `db_open()` checks it
+`meta` holds `schema_version`, currently **22**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
-to hit first. Since #154 the chain covers the full **v1 → v20**: any
+to hit first. Since #154 the chain covers the full **v1 → v22**: any
 file this build has ever written opens and migrates forward. Only a
-file from a *newer* build (`schema_version` above 20) is refused.
+file from a *newer* build (`schema_version` above 22) is refused.
 
 (The table count above is measured — `grep -oE "CREATE TABLE IF NOT
 EXISTS [a-zA-Z_0-9]+" src/db_schema.c | sort -u | wc -l` — not carried
@@ -383,6 +383,38 @@ v18 → v19 ALTERs, the stamp set to 20, one closed incident;
 row, its values as they were) and on one whose stamp a trigger refuses
 (`test_v20_migration_failure_leaves_file_unchanged`: it stays v20
 without the columns).
+
+**v22** (2026-11-25 as v21, renumbered 2026-11-27; #244, [[site-questions]]): a new table,
+`question_status`, with indexes on `last_seen` and `(qid, last_seen)`;
+no other table or value changes. Not additive for slothweb, for the
+reason v18 gives: sloth-mesh's `WEB_SDB_SCHEMA_MAX` has to reach 22,
+with a contract re-pin, and be installed before this sloth is.
+
+**The v21 → v22 migration.** `db_schema_migrate_v21_sql()` is the
+table's own DDL (`CREATE TABLE IF NOT EXISTS`, the same text the
+unconditional schema carries) in the step's one `BEGIN IMMEDIATE`
+transaction with the stamp. Tested on a v21 file (a current file with
+the table and its indexes dropped and the stamp set to 21, a device and
+an incident row riding along; `test_v21_file_migrates_additively`: the
+table empty with its 15 columns and two indexes, the rows as they were)
+and on one whose stamp a trigger refuses
+(`test_v21_migration_failure_leaves_file_unchanged`: it stays v21
+without the table). Every older-version fixture that starts from a
+current file drops it first (`PRE_V22_SQL` in `tests/test_db.c`).
+
+**`question_status`** `(last_seen, daemon, qid, priority, question,
+source, status, why, kinds, observable, partly, blind, n_alerts, found,
+ids)`. One row each time a site question's answer changes in the daemon
+that holds the file, and one for every question after the file opens
+(`write_question_status()`, beside `write_coverage_intervals()`): the
+`question_status` record's fields ([[jsonl-schema]]), `daemon` `wifi`
+or `rf`, `last_seen` the tick's time. `observable`, `partly` and
+`blind` are NULL while the coverage is not assessed, never 0 for that.
+Words, counts and incident ids beside the operator's own question text:
+no address and no SSID. On the observation tier: an answer is derived
+from the finding and coverage rows beside it and expires with them.
+"When did Q1 become a finding" is
+`SELECT last_seen, found, ids FROM question_status WHERE qid='Q1' AND status='finding' ORDER BY last_seen`.
 
 **`coverage_intervals`** `(start, last_seen, dur_ms, radio_ms, ms_24,
 ms_5, ms_5dfs, ms_6, ms_unknown, f_beacon, f_probe, f_auth, f_assoc,
@@ -1097,7 +1129,7 @@ rows. Entities keep **3×**, findings keep **12×**.
 
 | Tier | Window | Contents |
 |---|---|---|
-| observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations, `device_positions`, `sensor_positions`, `gnss_fixes`, `gnss_sightings`, `adsb_sightings`, `aprs_packets`, `victron_readings`, `coverage_intervals` |
+| observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations, `device_positions`, `sensor_positions`, `gnss_fixes`, `gnss_sightings`, `adsb_sightings`, `aprs_packets`, `victron_readings`, `coverage_intervals`, `question_status` |
 | entity | 3× | devices, PNL, beacons, assocs, ARP, leases, discovery, sensors, `adsb_aircraft`, `aprs_stations`, `victron_devices` |
 | finding | 12× | `alerts`, `alert_incidents`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
 

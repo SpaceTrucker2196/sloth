@@ -38,6 +38,8 @@
 #include "cov_interval.h"
 #include "alert_quality.h"
 #include "alert_lifecycle.h"
+#include "questions_live.h"
+#include "rule_coverage_live.h"
 
 /* Maintenance is hourly: pruning is a scan over every table, and the
  * thing it defends against (a disk filling over days) does not move
@@ -88,6 +90,9 @@ static int      g_over_ceiling_reported;
 static sqlite3_int64 g_session_id;        /* current survey session (#56) */
 static time_t        g_prev_session_end;  /* when the last visit ended */
 static uint32_t      g_cov_written;       /* coverage interval last written (#242) */
+/* The last written answer of each site question (#244). */
+static struct { char qid[Q_ID_LEN]; uint64_t sig; } g_qsig[Q_MAX];
+static int           g_qsig_n;
 
 /* ── retention tiers ─────────────────────────────────────
  *
@@ -118,6 +123,10 @@ static const char *const TIER_OBSERVATION[] = {
      * minute. A row says how a past minute was watched; it is worth as
      * much as the observations it qualifies and expires with them. */
     "coverage_intervals",
+    /* Site questions (#244, schema v22): an answer each time it
+     * changed. Derived from the findings and coverage rows beside it,
+     * and expires with them. */
+    "question_status",
 };
 
 /* 3x — the inventory. "Which devices were on this network in March"
@@ -193,6 +202,7 @@ enum {
     ST_APRS_STN, ST_APRS_PKT,
     ST_VICTRON_DEV, ST_VICTRON_READ,
     ST_COV_IV,
+    ST_QSTATUS,
     ST_COUNT
 };
 
@@ -717,6 +727,11 @@ static const char *const SQL[ST_COUNT] = {
     "f_other,f_fcs_bad,cap_drop,cap_ifdrop,mon_drop,mon_ifdrop,chan_overflow,"
     "chans,sources) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,"
     "?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27)",
+/* #244: one row per changed answer of a site question. */
+[ST_QSTATUS] =
+    "INSERT INTO question_status (last_seen,daemon,qid,priority,question,"
+    "source,status,why,kinds,observable,partly,blind,n_alerts,found,ids)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
 [ST_SENSOR_POS] =
     "INSERT OR IGNORE INTO sensor_positions (last_seen,lat,lon,alt_m,acc_m,"
     "loc_src,sats,hdop) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -1309,6 +1324,8 @@ static const db_step_t g_steps[] = {
     { 20, db_schema_migrate_v20_sql, TABLES_ALERT_INCIDENTS,
       "alert_incidents gained state, prelim_at, confirmed_at and"
       " withdraw_why (#245)" },
+    { 21, db_schema_migrate_v21_sql, TABLES_NONE,
+      "question_status created (#244)" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1455,6 +1472,7 @@ int db_open(const char *path) {
     memset(g_gnss_sat_mem, 0, sizeof(g_gnss_sat_mem));
     /* A new file is written every interval the ring still holds. */
     g_cov_written = 0;
+    g_qsig_n = 0;
     memset(g_adsb_mem, 0, sizeof(g_adsb_mem));
     g_aprs_seq = 0;
     memset(g_victron_mem, 0, sizeof(g_victron_mem));
@@ -2202,6 +2220,54 @@ static void write_coverage_intervals(void) {
         step_reset(ST_COV_IV);
     }
     g_cov_written = seq;
+}
+
+/* #244: a row for each site question whose answer changed since the
+ * last write (and for each, once, after the file opens). The answer's
+ * signature is the record's (q_answer_sig()), held per question id in
+ * g_qsig. */
+
+static void write_question_status(const sloth_state_t *s, time_t now) {
+    static q_answer_t ans[Q_MAX];
+    int n = q_live_answers(s, ans);
+    const q_set_t *set = q_live_questions();
+    int assessed = cov_live_state() == COV_LIVE_VALID;
+    const char *daemon = cov_live_daemon() == COV_DAEMON_RF ? "rf" : "wifi";
+    static char kinds[1024], ids[Q_IDS_MAX * ALERT_INCIDENT_ID_LEN + 16];
+    for (int i = 0; i < n; i++) {
+        const q_question_t *q = &set->q[ans[i].qi];
+        const q_result_t *r = &ans[i].r;
+        uint64_t sig = q_answer_sig(r, assessed, q, kinds, sizeof(kinds), ids, sizeof(ids));
+        int slot = -1;
+        for (int k = 0; k < g_qsig_n; k++)
+            if (strcmp(g_qsig[k].qid, q->id) == 0) { slot = k; break; }
+        if (slot >= 0 && g_qsig[slot].sig == sig) continue;
+        if (slot < 0) {
+            if (g_qsig_n >= Q_MAX) continue;
+            slot = g_qsig_n++;
+            snprintf(g_qsig[slot].qid, sizeof(g_qsig[slot].qid), "%s", q->id);
+        }
+        g_qsig[slot].sig = sig;
+        sqlite3_stmt *st = g_st[ST_QSTATUS];
+        sqlite3_bind_int64(st, 1, (sqlite3_int64)now);
+        bind_txt(st, 2, daemon);
+        bind_txt(st, 3, q->id);
+        sqlite3_bind_int(st, 4, q->priority);
+        bind_txt(st, 5, q->text);
+        bind_txt(st, 6, q_live_path()[0] ? "file" : "defaults");
+        bind_txt(st, 7, q_status_name(r->st));
+        bind_txt(st, 8, cov_reason_name(r->why));
+        sqlite3_bind_int(st, 9, r->kinds);
+        if (assessed) {
+            sqlite3_bind_int(st, 10, r->observable);
+            sqlite3_bind_int(st, 11, r->partly);
+            sqlite3_bind_int(st, 12, r->blind);
+        }
+        sqlite3_bind_int(st, 13, r->n_alerts);
+        bind_txt(st, 14, kinds);
+        bind_txt(st, 15, ids);
+        step_reset(ST_QSTATUS);
+    }
 }
 
 /* --gps (2026-10-27): drain src/position_track.c's queues. INSERT OR
@@ -3434,6 +3500,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_detector_evidence(s, now);
     write_positions      ();
     write_coverage_intervals();
+    write_question_status(s, now);
     /* gnss_fixes / gnss_sightings and the decoders' tables are
      * sloth-rf's alone since the cutover (#216, ADR 0010). sloth-wifi
      * holds a receiver's fix and sky too (it links the same reader, for

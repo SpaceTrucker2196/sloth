@@ -153,7 +153,13 @@
  * (it is still not an `alerts` row: that table holds findings). The
  * v20 -> v21 step is four ALTER TABLE ADD COLUMN, all nullable. No
  * existing column or value changes. */
-#define DB_SCHEMA_VERSION 21
+/* Bumped to 22 (#244, built 2026-11-25 as v21, renumbered 2026-11-27): question_status is a new table,
+ * one row each time a site question's answer changes in the daemon
+ * (src/questions_live.h), on the observation tier. The v21 -> v22 step
+ * creates it and its indexes (the same DDL the unconditional schema
+ * carries) with the stamp in one transaction. No existing table or
+ * value changes. */
+#define DB_SCHEMA_VERSION 22
 
 /* The random-address purge (#239, owner ruling 2026-11-20). A devices
  * row whose MAC is locally administered, last heard more than
@@ -593,6 +599,9 @@ const char *db_schema_migrate_v19_sql(void);
 /* v20 -> v21 (#245): ALTER TABLE alert_incidents ADD COLUMN only, the
  * four lifecycle columns, nullable. */
 const char *db_schema_migrate_v20_sql(void);
+/* v21 -> v22 (#244): CREATE TABLE IF NOT EXISTS question_status and its
+ * indexes. */
+const char *db_schema_migrate_v21_sql(void);
 
 /* victron_readings' value column `i` (0 from voltage_v, in the writer's
  * bind order), NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration

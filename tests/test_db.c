@@ -33,6 +33,7 @@
 #include "rf_side.h"
 #include "tune.h"
 #include "alert_lifecycle.h"
+#include "questions.h"
 
 /* The current schema version as meta stores it: every "migrates to
  * current" test pins this, not a literal, so a bump moves one line. */
@@ -220,7 +221,11 @@ static void test_schema_tables_have_seen_columns(void) {
                                            * v18): one closed minute per
                                            * row, its span start to
                                            * last_seen, a sample. */
-                                          "coverage_intervals (" };
+                                          "coverage_intervals (",
+                                          /* question_status (#244, v22):
+                                           * one answer, as it changed,
+                                           * per row, a sample. */
+                                          "question_status (" };
 
     int tables = 0, entities = 0, with_both = 0;
     for (const char *p = strstr(sql, "CREATE TABLE"); p;
@@ -4167,6 +4172,12 @@ static void test_v13_migration_failure_leaves_file_unchanged(void) {
  * victron_readings, not with ALTER TABLE DROP COLUMN: that arrived in
  * SQLite 3.35.0 and sloth's floor is 3.31.0 (src/db.c). The table is
  * empty on a fresh file, so nothing is lost. */
+/* A file before v22 (#244) has no question_status table. */
+#define PRE_V22_SQL \
+    "DROP INDEX idx_question_status_last_seen;" \
+    "DROP INDEX idx_question_status_qid;" \
+    "DROP TABLE question_status;"
+
 #define PRE_V19_INCIDENTS_SQL \
     "DROP TABLE alert_incidents;" \
     "CREATE TABLE alert_incidents (key TEXT NOT NULL," \
@@ -4196,6 +4207,7 @@ static void write_v14_file(void) {
     ASSERT_EQ(sqlite3_exec(h,
         "DROP TABLE victron_devices; DROP TABLE victron_readings;"
         PRE_V19_INCIDENTS_SQL
+        PRE_V22_SQL
         "INSERT INTO alerts (key,type,sev,title,count,first_seen,last_seen)"
         " VALUES ('v14-key',1,1,'v14-row',7,1600000000,1600000100);"
         "UPDATE meta SET value='14' WHERE key='schema_version';",
@@ -4269,6 +4281,7 @@ static void write_v15_file(void) {
     ASSERT_EQ(sqlite3_exec(h,
         "DROP TABLE victron_readings;"
         PRE_V19_INCIDENTS_SQL
+        PRE_V22_SQL
         "CREATE TABLE victron_readings (last_seen INTEGER NOT NULL,"
         " mac TEXT NOT NULL, src TEXT NOT NULL, rssi INTEGER,"
         " voltage_v REAL, aux_voltage_v REAL, mid_voltage_v REAL,"
@@ -4344,6 +4357,7 @@ static void write_v16_file(void) {
     ASSERT_EQ(sqlite3_exec(h,
         "DROP TABLE random_devices_daily;"
         PRE_V19_INCIDENTS_SQL
+        PRE_V22_SQL
         "INSERT INTO devices (mac,first_seen,last_seen,sources)"
         " VALUES ('02:00:00:00:00:01',1600000000,1600000000,16);"
         "UPDATE meta SET value='16' WHERE key='schema_version';",
@@ -4416,6 +4430,7 @@ static void write_v17_file(void) {
         "DROP INDEX idx_coverage_intervals_last_seen;"
         "DROP TABLE coverage_intervals;"
         PRE_V19_INCIDENTS_SQL
+        PRE_V22_SQL
         "INSERT INTO devices (mac,first_seen,last_seen,sources)"
         " VALUES ('00:11:22:00:00:01',1600000000,1600000100,16);"
         "INSERT INTO random_devices_daily (day,sources,count,first_seen,last_seen)"
@@ -4503,6 +4518,7 @@ static void write_v18_file(void) {
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     ASSERT_EQ(sqlite3_exec(h,
         PRE_V19_INCIDENTS_SQL
+        PRE_V22_SQL
         "INSERT INTO alert_incidents (key,incident_id,type,first_seen,"
         "last_seen,sev,peak_sev,count,observations,closed_at,reason)"
         " VALUES ('v18-key','00000000000000b1',18,1600000000,1600000100,"
@@ -4585,7 +4601,7 @@ static void write_v19_file(void) {
     sqlite3 *h = NULL;
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     char sql[4096];
-    snprintf(sql, sizeof sql, "%s%s%s", PRE_V19_INCIDENTS_SQL,
+    snprintf(sql, sizeof sql, "%s%s%s", PRE_V19_INCIDENTS_SQL PRE_V22_SQL,
              db_schema_migrate_v18_sql(),
         "DROP INDEX idx_twin_evidence_snapshots_last_seen;"
         "DROP TABLE twin_evidence_snapshots;"
@@ -4748,7 +4764,7 @@ static void write_v20_file(void) {
     sqlite3 *h = NULL;
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     char sql[4096];
-    snprintf(sql, sizeof sql, "%s%s%s", PRE_V19_INCIDENTS_SQL,
+    snprintf(sql, sizeof sql, "%s%s%s", PRE_V19_INCIDENTS_SQL PRE_V22_SQL,
              db_schema_migrate_v18_sql(),
              "INSERT INTO alert_incidents (key,incident_id,type,first_seen,"
              "last_seen,sev,peak_sev,count,observations,closed_at,reason,"
@@ -4811,6 +4827,148 @@ static void test_v20_migration_failure_leaves_file_unchanged(void) {
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"
                     V21_COLS_IN), 0);
     ASSERT_EQ(q_int("SELECT count FROM alert_incidents WHERE key='v20-key'"), 40);
+    unlink(db_path);
+}
+
+
+/* ── Schema v22: question_status (#244) ────────────────────────────── */
+
+/* A v21 file: a current file with question_status and its indexes
+ * dropped and the stamp set to 21, exactly a v21 file's shape, since
+ * v21 -> v22 adds a table and touches no other. A device row and a
+ * v21 incident row ride along. */
+static void write_v21_file(void) {
+    fresh_db();
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        PRE_V22_SQL
+        "INSERT INTO devices (mac,first_seen,last_seen,sources)"
+        " VALUES ('00:11:22:00:00:21',1600000000,1600000100,16);"
+        "INSERT INTO alert_incidents (key,incident_id,type,first_seen,"
+        "last_seen,sev,peak_sev,count,observations,state)"
+        " VALUES ('v21-key','00000000000000d1',18,1600000000,1600000100,"
+        "1,2,40,3,'confirmed');"
+        "UPDATE meta SET value='21' WHERE key='schema_version';",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v21 -> v22: the table and its two indexes arrive empty, and the rows
+ * that were there read as they were. */
+static void test_v21_file_migrates_additively(void) {
+    write_v21_file();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name='question_status'"), 0);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, DB_VER_STR);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('question_status')"), 15);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                    " AND name IN ('idx_question_status_last_seen',"
+                    "'idx_question_status_qid')"), 2);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices WHERE mac='00:11:22:00:00:21'"
+                    " AND first_seen=1600000000 AND last_seen=1600000100"
+                    " AND sources=16"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE key='v21-key'"
+                    " AND incident_id='00000000000000d1' AND count=40"
+                    " AND state='confirmed'"), 1);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v21 file whose stamp cannot be written stays v21 without the
+ * table: the CREATE and the stamp are one transaction. Seen red with
+ * migrate_step() running the step's SQL before its BEGIN IMMEDIATE (the
+ * table stayed beside a v21 stamp). */
+static void test_v21_migration_failure_leaves_file_unchanged(void) {
+    write_v21_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v22 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='22'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "21");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE name IN"
+                    " ('question_status','idx_question_status_last_seen',"
+                    "'idx_question_status_qid')"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 1);
+    ASSERT_EQ(q_int("SELECT count FROM alert_incidents WHERE key='v21-key'"), 40);
+    unlink(db_path);
+}
+
+/* One row per question when the file opens, then a row only for an
+ * answer that changed. Seen red with write_question_status()'s
+ * signature test dropped (seven more rows on the unchanged tick). */
+TEST_STATE(g_qs);
+static void test_question_status_rows(void) {
+    fresh_db();
+    memset(&g_qs, 0, sizeof(g_qs));
+    db_tick(&g_qs, 1700000000);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status"), Q_DEFAULT_COUNT);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status WHERE daemon='wifi'"
+                    " AND source='defaults' AND status='not_assessed'"
+                    " AND observable IS NULL AND partly IS NULL AND blind IS NULL"
+                    " AND last_seen=1700000000"), Q_DEFAULT_COUNT);
+    ASSERT_EQ(q_int("SELECT kinds FROM question_status WHERE qid='Q1'"), 16);
+    ASSERT_EQ(q_int("SELECT priority FROM question_status WHERE qid='Q5'"), 3);
+    db_tick(&g_qs, 1700000001);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status"), Q_DEFAULT_COUNT);
+
+    alert_t *a = &g_qs.alerts[g_qs.alert_count++];
+    a->type = ALERT_TYPE_EVIL_TWIN;
+    a->sev = ALERT_SEV_WARN;
+    snprintf(a->key, sizeof(a->key), "twin:02:11:22:33:44:55");
+    snprintf(a->title, sizeof(a->title), "HomeNet");
+    snprintf(a->incident_id, sizeof(a->incident_id), "00000000000000e1");
+    a->first_seen = a->last_seen = 1700000002;
+    db_tick(&g_qs, 1700000002);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status"), Q_DEFAULT_COUNT + 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status WHERE qid='Q1'"
+                    " AND last_seen=1700000002 AND status='finding' AND n_alerts=1"
+                    " AND found='EVIL_TWIN' AND ids='00000000000000e1' AND why=''"), 1);
+    /* No address or name from the finding. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status WHERE found LIKE '%02:11%'"
+                    " OR ids LIKE '%02:11%' OR question LIKE '%HomeNet%'"), 0);
+    /* A reopened file writes every answer again. */
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_tick(&g_qs, 1700000003);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status"), 2 * Q_DEFAULT_COUNT + 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* question_status is on the observation tier. Seen red with
+ * "question_status" taken out of TIER_OBSERVATION (the old row stayed). */
+static void test_question_status_ages_with_observations(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    long long old = NOW - 45 * DAY, recent = NOW - 2 * DAY;
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO question_status (last_seen,daemon,qid,priority,question,"
+        "source,status,kinds) VALUES (%lld,'wifi','Q1',1,'q?','defaults','finding',16);"
+        "INSERT INTO question_status (last_seen,daemon,qid,priority,question,"
+        "source,status,kinds) VALUES (%lld,'wifi','Q1',1,'q?','defaults','no_finding',16);",
+        old, recent);
+    insert_at(sql);
+    db_maintain(NOW);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status"), 1);
+    ASSERT_EQ(q_int("SELECT last_seen FROM question_status"), recent);
+    db_close();
     unlink(db_path);
 }
 
@@ -6415,6 +6573,10 @@ void run_db_tests(void) {
     RUN_TEST(test_twin_evidence_snapshots_in_finding_retention_tier);
     RUN_TEST(test_v20_file_migrates_additively);
     RUN_TEST(test_v20_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v21_file_migrates_additively);
+    RUN_TEST(test_v21_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_question_status_rows);
+    RUN_TEST(test_question_status_ages_with_observations);
     RUN_TEST(test_coverage_intervals_age_with_observations);
     RUN_TEST(test_victron_columns_match_the_allow_list);
     RUN_TEST(test_victron_tables_written);

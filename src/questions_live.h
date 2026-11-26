@@ -48,6 +48,12 @@ int q_live_answers(const sloth_state_t *s, q_answer_t out[Q_MAX]);
 void q_report_md(FILE *out, const sloth_state_t *s);
 void q_report_json(FILE *out, const sloth_state_t *s);
 
+/* The answer's change signature, as the record and the question_status
+ * table use it, and its `found` kinds and `ids` strings, written to
+ * `kinds` / `ids`. */
+uint64_t q_answer_sig(const q_result_t *r, int assessed, const q_question_t *q,
+                      char *kinds, size_t ksz, char *ids, size_t isz);
+
 /* The question_status records. */
 void q_emit(const sloth_state_t *s);
 

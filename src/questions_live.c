@@ -202,6 +202,20 @@ void q_report_json(FILE *out, const sloth_state_t *s) {
 
 /* ── The stream ───────────────────────────────────────────────────── */
 
+uint64_t q_answer_sig(const q_result_t *r, int assessed, const q_question_t *q,
+                      char *kinds, size_t ksz, char *ids, size_t isz) {
+    q_found_str(r->found, kinds, ksz);
+    ids_str(r, ids, isz);
+    /* Words, counts and incident ids: each changes only when the
+     * answer does (agents/AGENTS.md, change-only emission). */
+    const int sig_v[8] = { (int)r->st, (int)r->why, r->kinds, assessed,
+                           r->observable, r->partly, r->blind, r->n_alerts };
+    uint64_t sig = jsonl_fnv1a(sig_v, sizeof(sig_v), 0);
+    sig = jsonl_fnv1a(kinds, strlen(kinds), sig);
+    sig = jsonl_fnv1a(ids, strlen(ids), sig);
+    return jsonl_fnv1a(q->text, strlen(q->text), sig);
+}
+
 void q_emit(const sloth_state_t *s) {
     if (!jsonl_any_sink()) return;
     time_t wall = sloth_wall();
@@ -212,16 +226,7 @@ void q_emit(const sloth_state_t *s) {
         const q_question_t *q = &g.set.q[ans[i].qi];
         const q_result_t *r = &ans[i].r;
         char kinds[1024], ids[Q_IDS_MAX * ALERT_INCIDENT_ID_LEN + 16];
-        q_found_str(r->found, kinds, sizeof(kinds));
-        ids_str(r, ids, sizeof(ids));
-        /* Words, counts and incident ids: each changes only when the
-         * answer does (agents/AGENTS.md, change-only emission). */
-        const int sig_v[8] = { (int)r->st, (int)r->why, r->kinds, assessed,
-                               r->observable, r->partly, r->blind, r->n_alerts };
-        uint64_t sig = jsonl_fnv1a(sig_v, sizeof(sig_v), 0);
-        sig = jsonl_fnv1a(kinds, strlen(kinds), sig);
-        sig = jsonl_fnv1a(ids, strlen(ids), sig);
-        sig = jsonl_fnv1a(q->text, strlen(q->text), sig);
+        uint64_t sig = q_answer_sig(r, assessed, q, kinds, sizeof(kinds), ids, sizeof(ids));
         if (!jsonl_changed(JD_QUESTION, q->id, strlen(q->id), sig, wall)) continue;
 
         jsonl_field_t f[16];

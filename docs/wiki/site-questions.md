@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: issue #244 (from #241 item 1) and its owner rulings of 2026-11-25; FM 2-0 (2004) figure 1-2 (priority question, specific questions, indicators, collection tasks), 1-34 (a priority question asks only one question and supports a decision) and 4-6 (clear requirements preclude being overwhelmed by too much information), as quoted in the issue; `include/sloth_questions.def` (the questions), `include/sloth_question_map.def` (the indicators); `src/questions.h`, `src/questions.c` (the tables, the file, the status), `src/questions_live.h`, `src/questions_live.c` (the record and the report section); `tests/test_questions.c`; [[coverage-assessment]] (the status every answer carries).
 
-**Last updated**: 2026-11-25 (#244: the page, § 4 the status, § 5 the file format, § 6 the record and the report section)
+**Last updated**: 2026-11-25 (#244: the page, § 4 the status, § 5 the file format, § 6 the record, the table and the report section)
 
 ## 1. The default questions
 
@@ -191,6 +191,7 @@ The file is refused, and sloth exits 2 naming the line, for an unknown kind, a d
 `src/questions_live.c` reads the daemon's alert snapshot and the coverage status it keeps ([[coverage-assessment]] § 4) each time it is asked:
 
 - **The `question_status` record** (JSONL 2.17.0, both daemons, [[jsonl-schema]]): one row per question the daemon answers, change-only with the 300 s heartbeat, keyed by the question's id. More observations of a finding already counted write nothing; a new finding, a changed status, reason or coverage count does.
+- **The `question_status` table** of `--db` (schema v22, [[sqlite-schema]]; owner ruling 2026-11-25): one row each time an answer changes, and one per question after the file opens, so the history of an answer is a query. On the observation tier.
 - **`--report` and `--report-json`** ([[posture-report]]): a "Site questions" section after "What this site reveals", the questions most urgent first (priority 1 first, then the set's order), each with its status, reason, indicator counts and decision, then the two limits of [[coverage-assessment]] § 5; `questions` in the JSON, after `exposure`.
 
 Both carry kinds, counts, status words and incident ids beside the operator's own question and decision text: never an address, a name, an SSID or an alert key, whichever capture a finding came from. sloth-mesh's fleet export writes only its own fixed line types, so neither travels ([ADR 0009](adr/0009-fleet-monitor-only.md)).

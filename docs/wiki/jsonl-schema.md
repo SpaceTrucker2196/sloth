@@ -2271,8 +2271,10 @@ counts, `n_alerts`, `found`, `ids` and the question's text.
 
 **Kinds, counts, words and incident ids only**, beside the operator's
 own question and decision text. A row never carries an address, a host
-name, an SSID or an alert key. sloth-mesh's fleet export writes only
-its own fixed line types, so it does not travel.
+name, an SSID or an alert key. Each change is also a row of `sloth.db`'s
+`question_status` table (schema v22, [[sqlite-schema]]); sloth-mesh's
+fleet export writes only its own fixed line types, so it does not
+travel.
 
 | Field | Content |
 |---|---|

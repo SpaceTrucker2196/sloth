@@ -122,6 +122,37 @@
     "CREATE INDEX IF NOT EXISTS idx_twin_evidence_snapshots_last_seen" \
     "  ON twin_evidence_snapshots(last_seen);\n"
 
+/* question_status (#244, schema v22). One row each time a site
+ * question's answer changes in this daemon (src/questions_live.h): the
+ * question, its status word, the reason, its indicators' coverage
+ * counts (NULL while not assessed) and the open findings' count, kinds
+ * and incident ids. last_seen is when the answer was taken, the column
+ * the observation tier ages rows out by. Words, counts and incident ids
+ * beside the operator's own question text: no address, no SSID. Shared
+ * by the unconditional schema and the v21 -> v22 step. */
+#define QUESTION_STATUS_DDL \
+    "CREATE TABLE IF NOT EXISTS question_status (" \
+    "  last_seen   INTEGER NOT NULL," \
+    "  daemon      TEXT NOT NULL," \
+    "  qid         TEXT NOT NULL," \
+    "  priority    INTEGER NOT NULL," \
+    "  question    TEXT NOT NULL," \
+    "  source      TEXT NOT NULL," \
+    "  status      TEXT NOT NULL," \
+    "  why         TEXT NOT NULL DEFAULT ''," \
+    "  kinds       INTEGER NOT NULL," \
+    "  observable  INTEGER," \
+    "  partly      INTEGER," \
+    "  blind       INTEGER," \
+    "  n_alerts    INTEGER NOT NULL DEFAULT 0," \
+    "  found       TEXT NOT NULL DEFAULT ''," \
+    "  ids         TEXT NOT NULL DEFAULT ''" \
+    ");\n" \
+    "CREATE INDEX IF NOT EXISTS idx_question_status_last_seen" \
+    "  ON question_status(last_seen);\n" \
+    "CREATE INDEX IF NOT EXISTS idx_question_status_qid" \
+    "  ON question_status(qid, last_seen);\n"
+
 static const char SCHEMA_SQL[] =
     /* ── meta ────────────────────────────────────────────── */
     "CREATE TABLE IF NOT EXISTS meta ("
@@ -1161,7 +1192,8 @@ static const char SCHEMA_SQL[] =
 
     RANDOM_DEVICES_DAILY_DDL
 
-    COVERAGE_INTERVALS_DDL;
+    COVERAGE_INTERVALS_DDL
+    QUESTION_STATUS_DDL;
 
 /* Applied before the version check — see db.h. */
 static const char META_SQL[] =
@@ -1372,6 +1404,10 @@ static const char MIGRATE_V20_SQL[] =
     "ALTER TABLE alert_incidents ADD COLUMN confirmed_at INTEGER;\n"
     "ALTER TABLE alert_incidents ADD COLUMN withdraw_why TEXT;\n";
 
+/* v21 -> v22 (#244, 2026-11-25): question_status, a new table and its
+ * indexes. No existing table or value changes. */
+static const char MIGRATE_V21_SQL[] = QUESTION_STATUS_DDL;
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -1395,6 +1431,7 @@ const char *db_schema_migrate_v17_sql(void) { return MIGRATE_V17_SQL; }
 const char *db_schema_migrate_v18_sql(void) { return MIGRATE_V18_SQL; }
 const char *db_schema_migrate_v19_sql(void) { return MIGRATE_V19_SQL; }
 const char *db_schema_migrate_v20_sql(void) { return MIGRATE_V20_SQL; }
+const char *db_schema_migrate_v21_sql(void) { return MIGRATE_V21_SQL; }
 
 /* --print-schema (#185 item 4). The statements a new file gets, in the
  * order db_open() applies them, then the version row check_version()
