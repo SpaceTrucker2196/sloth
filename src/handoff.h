@@ -34,9 +34,11 @@
  *   interference.md         --interference-report for the last 30 days
  *   false_positives.txt     empty: triage is sloth-mesh's
  *
- * baseline.tsv and snapshot.tsv are "# sloth-snapshot v1" files: the
- * next run reads either with --baseline-in, and its exit diff is
- * against this site.
+ * snapshot.tsv from --db is a "# sloth-snapshot v1" file; baseline.tsv,
+ * and snapshot.tsv copied from --snapshot-out, may be v2 (#249: client
+ * and BLE rows a v1 reader skips). The next run reads either with
+ * --baseline-in, and its exit diff (access points) is against this
+ * site.
  *
  * WITHHELD. No file holds a column sloth.db's readers withhold
  * (sloth-mesh's web_secret.h list): alerts.key and alerts.detail carry
