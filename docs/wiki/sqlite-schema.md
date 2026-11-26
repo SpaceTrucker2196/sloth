@@ -399,7 +399,7 @@ bit is kept, § 2b of [[retention]]). `count` is how many rows were
 purged into it, `first_seen` / `last_seen` the earliest and latest
 among them. An upsert adds to `count` and widens the two times; it is
 never rewritten or aged out (no tier names it). Counts and times only:
-no address and no SSID. On the W9FJC copy of 2026-11-20 the first
+no address and no SSID. On the sensor A copy of 2026-11-20 the first
 pass counted 44,995 rows into 29 day rows.
 
 **`victron_devices` and `victron_readings`.** Written only with
@@ -1120,14 +1120,14 @@ fixed assumptions.
 table's and the index's names, and `stat`, integers (the row count, then
 the average rows per distinct key prefix). No value from any row. With
 `analysis_limit` set SQLite collects no `sqlite_stat4` samples (those
-would be index keys: MACs, SSIDs, IPs); measured on the W9FJC copy
+would be index keys: MACs, SSIDs, IPs); measured on the sensor A copy
 (Debian's library has `ENABLE_STAT4`): `sqlite_stat4` absent, 65
 `sqlite_stat1` rows. `tests/test_db.c ::
 test_maintenance_writes_planner_statistics` holds both: every `stat` is
 digits and spaces, and `sqlite_stat4` is absent or empty. The
 dashboard's SQL box refuses `sqlite_stat3` and `sqlite_stat4` regardless.
 
-**Cost, measured on a copy of the W9FJC file (2026-11-20, 486 MiB,
+**Cost, measured on a copy of the sensor A file (2026-11-20, 486 MiB,
 87,224 devices, NVMe):** the first run, with no statistics, 49 ms; a
 run after it with nothing changed, under a millisecond. 65 rows, a few
 pages written. Not measured on the SD-card host (the live sensor is not

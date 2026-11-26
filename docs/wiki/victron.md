@@ -23,7 +23,7 @@ it and links none of it.
 `Makefile` (`sloth-va`, `WITH_SDBUS`),
 `research/victron/instant-readout-and-gatt.md`.
 
-**Last updated**: 2026-11-16 (the inverter record, 0x03, decoded: state, alarm, battery V and the AC output's V, A and VA, for the Phoenix behind the VE.Direct dongle; three new values on sloth's allow-list, JSONL 2.1.0, sloth.db v16, an inverter card in slothweb); 2026-11-16 (sloth-va registers its advertisement monitor asynchronously; the beta-site worker's fix); 2026-11-15 (#216, the cutover: `--victron` is `sloth-rf`'s alone; `sloth-wifi` refuses it); 2026-11-15 (the web: slothweb's Victron tab,
+**Last updated**: 2026-11-16 (the inverter record, 0x03, decoded: state, alarm, battery V and the AC output's V, A and VA, for the Phoenix behind the VE.Direct dongle; three new values on sloth's allow-list, JSONL 2.1.0, sloth.db v16, an inverter card in slothweb); 2026-11-16 (sloth-va registers its advertisement monitor asynchronously; the sensor B worker's fix); 2026-11-15 (#216, the cutover: `--victron` is `sloth-rf`'s alone; `sloth-wifi` refuses it); 2026-11-15 (the web: slothweb's Victron tab,
 `/api/victron` and `/api/victron/history`; sloth.db v15
 `victron_devices` / `victron_readings`; the `victron` `source_status`
 row, so `SENSOR_SOURCE_DOWN` covers the file; the fleet decision,
@@ -40,9 +40,9 @@ which cites each item:
 
 | Device (owner's label) | Instant Readout | GATT session | Status |
 |---|---|---|---|
-| BMV-712 Smart, SN HQ2501YV9FU | record 0x02 "battery monitor": voltage, current, SOC, consumed Ah, TTG, alarm reason, aux (starter V / mid V / temperature) | reads the 65970000 service if the device has it (voltage, current, power, consumed Ah, SOC); otherwise records its service list | readout: Victron's published layout, two published vectors reproduced. GATT: Victron documented the service for the SmartShunt only — unverified here |
-| Orion-Tr Smart 12/12-18A isolated, SN HQ2515QP3RX | record 0x04 "DC/DC converter": device state, charger error, input V, output V, off reason (no currents) | as above | readout as above; GATT unverified |
-| VE.Direct Bluetooth Smart dongle, SN HQ25232KEJG, on a Phoenix Inverter 12V 500VA 120V (model 0xA259) | record 0x03 "inverter": device state, alarm reason, battery V (`voltage_v`), AC output apparent power (`ac_apparent_va`), AC output V (`ac_voltage_v`), AC output A (`ac_current_a`) | as above; needs its MAC in `victron-va.conf` | readout: Victron's published layout, checked against hand-built vectors only (no published one). sloth-rf carries all six (JSONL 2.1.0, sloth.db v16) and slothweb's card shows them, charting battery V, AC V and AC VA. GATT unverified |
+| BMV-712 Smart, SN HQXXXXXXXXX | record 0x02 "battery monitor": voltage, current, SOC, consumed Ah, TTG, alarm reason, aux (starter V / mid V / temperature) | reads the 65970000 service if the device has it (voltage, current, power, consumed Ah, SOC); otherwise records its service list | readout: Victron's published layout, two published vectors reproduced. GATT: Victron documented the service for the SmartShunt only — unverified here |
+| Orion-Tr Smart 12/12-18A isolated, SN HQXXXXXXXXX | record 0x04 "DC/DC converter": device state, charger error, input V, output V, off reason (no currents) | as above | readout as above; GATT unverified |
+| VE.Direct Bluetooth Smart dongle, SN HQXXXXXXXXX, on a Phoenix Inverter 12V 500VA 120V (model 0xA259) | record 0x03 "inverter": device state, alarm reason, battery V (`voltage_v`), AC output apparent power (`ac_apparent_va`), AC output V (`ac_voltage_v`), AC output A (`ac_current_a`) | as above; needs its MAC in `victron-va.conf` | readout: Victron's published layout, checked against hand-built vectors only (no published one). sloth-rf carries all six (JSONL 2.1.0, sloth.db v16) and slothweb's card shows them, charting battery V, AC V and AC VA. GATT unverified |
 
 Not implemented: VictronConnect's own service
 (306b0001-b081-4037-83dc-e59fcc3cdfd0) and its framing, which Victron
@@ -59,13 +59,13 @@ readable by its account. Both must exist (an empty one is fine).
 
 ```
 # /etc/sloth/victron-va.conf   SERIAL PIN [MAC]  # comment
-HQ2501YV9FU 123456                    # BMV-712 Smart
-HQ2515QP3RX 123456                    # Orion-Tr Smart
-HQ25232KEJG 123456 e4:b9:aa:47:57:1f  # VE.Direct dongle (no readout, so the owner names its address)
+HQXXXXXXXXX 123456                    # BMV-712 Smart
+HQXXXXXXXXX 123456                    # Orion-Tr Smart
+HQXXXXXXXXX 123456 00:00:5e:00:53:03  # VE.Direct dongle (no readout, so the owner names its address)
 
 # /etc/sloth/victron.keys      MAC KEY(32 hex)  # comment
-c7:fe:23:b1:1c:5f 0123456789abcdef0123456789abcdef
-f5:d8:0c:b6:31:cf 0123456789abcdef0123456789abcdef
+00:00:5e:00:53:01 0123456789abcdef0123456789abcdef
+00:00:5e:00:53:02 0123456789abcdef0123456789abcdef
 ```
 
 (PINs and keys above are placeholders.) The PIN is the device's
@@ -106,7 +106,7 @@ on the device it belongs to:
   sloth-va says so and runs GATT only. `RegisterMonitor` is sent
   asynchronously and its reply handled in the event loop: BlueZ answers
   it by calling back into sloth-va's `GetManagedObjects`, which a
-  blocking call left unanswered (beta-site, 2026-11-15: no `Activate`,
+  blocking call left unanswered (sensor B, 2026-11-15: no `Activate`,
   no scan). It never falls back to discovery
   (`StartDiscovery` is an active scan; a test holds that the call is not
   in the source). One record per device per `--readout-every` (30 s).
@@ -130,13 +130,13 @@ on the device it belongs to:
 One line per reading or session, `type` `victron`:
 
 ```
-{"type":"victron","t":1763200000,"source":"readout","mac":"c7:fe:23:b1:1c:5f",
- "serial":"HQ2501YV9FU","label":"BMV-712 HQ2501YV9FU","model_id":"0xa381",
+{"type":"victron","t":1763200000,"source":"readout","mac":"00:00:5e:00:53:01",
+ "serial":"HQXXXXXXXXX","label":"BMV-712 HQXXXXXXXXX","model_id":"0xa381",
  "model":"BMV-712 Smart","record":"battery_monitor","rssi":-71,
  "values":{"voltage_v":13.200,"alarm_reason":0,"aux_input":3,"aux_input_name":"none",
            "current_a":-1.500,"consumed_ah":-12.300,"soc_pct":87.500}}
-{"type":"victron","t":1763200300,"source":"gatt","mac":"c7:fe:23:b1:1c:5f",
- "serial":"HQ2501YV9FU","session":"ok","values":{"voltage_v":13.200,...}}
+{"type":"victron","t":1763200300,"source":"gatt","mac":"00:00:5e:00:53:01",
+ "serial":"HQXXXXXXXXX","session":"ok","values":{"voltage_v":13.200,...}}
 ```
 
 - `source`: `readout` (decrypted advertisement) or `gatt` (a session).

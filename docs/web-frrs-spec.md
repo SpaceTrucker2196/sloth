@@ -740,7 +740,7 @@ tokens (the same mechanism `test_glyph.c` uses to pin `glyph.js`).
 slothweb has no accounts. A triage row records the **peer address**
 the write came from (always) and the **`by` text** the operator typed
 (optional, 32 bytes, kept per browser in the prefs store as
-`frrs.by` so it is typed once). The page shows both: "noise · by jeff ·
+`frrs.by` so it is typed once). The page shows both: "noise · by operator ·
 from 127.0.0.1 · 2026-10-27 14:02". Neither is an identity; the
 allow list is the trust boundary, and `docs/wiki/slothweb.md` and the
 README say so beside the flag. Q9 asks whether that is enough or a
@@ -899,7 +899,7 @@ One JSON document, `slothweb-tacdb-1`:
    "emitters":[{"kind":"sta","addr":"aa:bb:cc:dd:3f:9a","role":"primary","label":""},
                {"kind":"ble","addr":"c4:…:01/1","role":"primary","label":""}]}],
  "triage":[{"descriptor":{"type":"SMB1_SESSION","addr":"192.0.2.10","port":445,"first_seen":1792000000},
-   "history":[{"state":"noise","prev_state":"untriaged","via":"manual","note":"the NAS","by":"jeff",
+   "history":[{"state":"noise","prev_state":"untriaged","via":"manual","note":"the NAS","by":"operator",
                "peer":"127.0.0.1","ts":1792627000}]}]}
 ```
 

@@ -199,7 +199,7 @@ prunes the directory (`sdrs_write_hist()`, `sdrs_hist_prune()`):
 `floor` is the median of the rows' floors. Records older than 25 h
 (24 h and a margin) go, then the oldest while more than 400 are left;
 only names of digits plus `.json` are ever touched. Size, computed from
-a real run's `latest.json` on Beta-Site (2026-11-15, 19,995 bins, 400
+a real run's `latest.json` on sensor B (2026-11-15, 19,995 bins, 400
 peaks found): 33.8 KB a record (26.7 KB of base64, 6.8 KB of peaks),
 so 288 runs a day is 9.7 MB and the 400-record cap 13.5 MB. A record
 that cannot be written is said on stderr and does not fail the run.

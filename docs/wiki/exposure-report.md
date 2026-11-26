@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: issue #243 (from #241 item 6); FM 2-0 (2004) 1-30 (a commander lists the information to protect) and 1-111 (counterintelligence finds how an observer could collect it); `include/sloth_exposure.def` (the table); `src/exposure.c`; `docs/wiki/alert-remediation.md` (each line's fix); `tests/test_exposure.c`.
 
-**Last updated**: 2026-11-24 (#243 review: § 2 and § 6, a twin beaconing a designated SSID is not the site once BSSIDs are designated, a raw SSID is matched only where `SAE_PSK_REGRESSION` writes it, a camera is tied by its alert's `match_ip`; § 3's example is the test's sensor, not Beta-Site; § 4, the evidence fallback), 2026-11-24 (#243: first version)
+**Last updated**: 2026-11-24 (#243 review: § 2 and § 6, a twin beaconing a designated SSID is not the site once BSSIDs are designated, a raw SSID is matched only where `SAE_PSK_REGRESSION` writes it, a camera is tied by its alert's `match_ip`; § 3's example is the test's sensor, not sensor B; § 4, the evidence fallback), 2026-11-24 (#243: first version)
 
 ## 1. The groups
 
@@ -52,7 +52,7 @@ Every group carries the coverage status of its kinds ([[coverage-assessment]] §
 | `not_assessed` | `Nothing found; coverage not assessed: <why>.` (before the first status sample, or a `--replay`) |
 | `needs_designation` | the section's one paragraph naming the flags |
 
-So an empty group is never silent: "nothing found" always comes with whether the rules could have found anything. Example, a sensor with one hopping radio, no IP capture and a roster but no designated network (the sensor `tests/test_exposure.c :: test_nothing_found_states_coverage` builds): group 1 reads `Not observable: no_own_net.` and group 4 `Not observable: no_source.`. Beta-Site on 2026-11-24 has IP capture: its stream's `rule_status` rows read the four group-4 kinds `observable`, so its group 4 reads `Nothing found, rules observable.` while group 1 reads `Not observable: no_own_net.`.
+So an empty group is never silent: "nothing found" always comes with whether the rules could have found anything. Example, a sensor with one hopping radio, no IP capture and a roster but no designated network (the sensor `tests/test_exposure.c :: test_nothing_found_states_coverage` builds): group 1 reads `Not observable: no_own_net.` and group 4 `Not observable: no_source.`. Sensor B on 2026-11-24 has IP capture: its stream's `rule_status` rows read the four group-4 kinds `observable`, so its group 4 reads `Nothing found, rules observable.` while group 1 reads `Not observable: no_own_net.`.
 
 ## 4. In the report
 

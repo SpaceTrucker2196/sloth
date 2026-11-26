@@ -100,9 +100,9 @@ firmware's `-n` path (`le_phy.c`) never reads its CRC-verify setting,
 and libbtbb's pcap writer sets neither CRC-checked nor CRC-passed. It
 does write the CRC: each record is Access Address, header, payload and
 the 3 CRC octets. Unchecked, a bit error in an AdvA became a new
-advertiser — Beta-Site's rows filled with near-duplicate public
-addresses heard once each (04:4b:ed:ae:a3:7f, 00:4b:e5:aa:a3:7f,
-04:4b:ec:ce:bb:7f). So since 2026-11-20 (owner decision) **sloth
+advertiser — sensor B's rows filled with near-duplicate public
+addresses heard once each (00:00:5e:00:53:07, 00:00:5e:00:53:08,
+00:00:5e:00:53:09). So since 2026-11-20 (owner decision) **sloth
 checks it**. A packet on the advertising Access Address whose CRC
 octets are all inside the record and inside the Ubertooth's 50 octets
 gets the CRC-24 of Core Specification v5.4 Vol 6 Part B §3.1.1 computed

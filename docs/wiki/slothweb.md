@@ -85,7 +85,7 @@ tick counter. Every method other than `GET`/`HEAD` is `405` on every
 path, a header block over 8 KB `431`, and idle or slow clients time out
 on an absolute budget.
 
-**Sources**: `web/README.md` (Design), `web/ui/theme.css`, `web/ui/page.css`, `web/tools/palette.c`, `web/tests/test_tui_colors.c`, `src/tui.c` (`tui_ip_addstr()`, `tui_ssid_addstr()`, `find_brand()`, `tui_brand_addstr()`, `tui_info_color()`), `src/tui_palette.c`, `src/ip_color.c`, `src/views/dashboard_primitives.c` (`draw_sparkline_at()`), www.river.io/jeff (the Spacetrucker design system), `web/src/web_flows.c`, `web/tools/demo.c`,
+**Sources**: `web/README.md` (Design), `web/ui/theme.css`, `web/ui/page.css`, `web/tools/palette.c`, `web/tests/test_tui_colors.c`, `src/tui.c` (`tui_ip_addstr()`, `tui_ssid_addstr()`, `find_brand()`, `tui_brand_addstr()`, `tui_info_color()`), `src/tui_palette.c`, `src/ip_color.c`, `src/views/dashboard_primitives.c` (`draw_sparkline_at()`), the Spacetrucker design system, `web/src/web_flows.c`, `web/tools/demo.c`,
 `web/tools/quickstart_check.sh`, `web/tests/test_flows.c`,
 `web/tests/test_readme.c`, `docs/assets/slothweb/`, `include/sloth.h`
 (`smb_session_t`'s dialect), `web/src/web_slothdb.c`,
@@ -988,7 +988,7 @@ sloth-mesh's `README.md`. In short:
 ## The restyle: Spacetrucker chrome, TUI data (2026-10-23)
 
 The page took the owner's own design system, Spacetrucker
-(www.river.io/jeff), for its chrome, and sloth's TUI colours for its
+for its chrome, and sloth's TUI colours for its
 data (owner ruling 2026-10-23: "color code all data the same as the
 sloth cli"). The full account, with the token mapping, the data table
 and the contrast table, is `web/README.md`'s Design section.
@@ -3230,7 +3230,7 @@ no subresource: `web/ui/camera.js` fetches the JPEG, decodes it with
 `createImageBitmap()` and draws it on a canvas, so the page audit's
 bans (`<img`, `url(`, `.src =`) and `img-src data:` stay as they are.
 
-On Beta-Site the helper is `sloth-camera.service`
+On sensor B the helper is `sloth-camera.service`
 (`/usr/local/sbin/sloth-camera-gopro`, a site script, not shipped):
 a GoPro MAX2 on USB (CDC NCM network, camera at `172.2X.1YZ.51`,
 Open GoPro HTTP API) streams its preview as MPEG-TS/HEVC to UDP 8554;

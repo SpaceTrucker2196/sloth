@@ -16,8 +16,8 @@ by linking each PID to its parent and rendering DFS pre-order.
      400 wpa_supplicant
      512 chronyd
      743 sshd
-       1024 sshd: spacetrucker [priv]
-         1100 sshd: spacetrucker@pts/0
+       1024 sshd: alice [priv]
+         1100 sshd: alice@pts/0
            1102 bash
              1500 sloth
    2   kthreadd

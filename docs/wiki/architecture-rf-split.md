@@ -548,7 +548,7 @@ From `gh issue list`, titles as filed.
 | S3 | #214 | slothweb reads two daemons: `--rf-socket` and `--rf-db`. **Landed 2026-11-15; §11.** |
 | S4 | #215 | Packaging: `sloth-rf.service` and `sloth-migrate-rf`. |
 | S5 | #216 | Cutover: `sloth-wifi` rename, RF leaves the Wi-Fi daemon, JSONL 2.0.0. **Landed 2026-11-15; §12.** |
-| S6 | #217 | Deploy both daemons: W9FJC, then beta-site. |
+| S6 | #217 | Deploy both daemons: sensor A, then sensor B. |
 
 Which section each slice cuts: S1 is §5 and the stage table and source
 list of §3 and §2.1; S2 is §2 and the rest of §3; S3 is §6; S4 is §7;

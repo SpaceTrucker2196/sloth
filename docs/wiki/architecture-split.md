@@ -363,7 +363,7 @@ the README-only `sloth-dash` repository renamed under the 2026-11-15 name
 ruling, so every `sloth-dash` above means `sloth-mesh`. Only the
 repository is new; the binary, the unit and the store keep their names
 (`slothweb`, `slothweb.service`, `slothweb.db`), and deployment does not
-change in this stage: W9FJC and beta-site keep building slothweb from
+change in this stage: sensor A and sensor B keep building slothweb from
 this tree until Stage 5.
 
 `git filter-repo` carved it from a fresh clone at **`56d9c7f2`** with
@@ -466,7 +466,7 @@ It also made CI fetch sloth-comint's whole history (its pack is dated by
   `mesh-against-contract`): build, install into `/`, `systemd-analyze
   verify`, `systemd-sysusers` with one `sloth` account, the five modes.
 - **Migration note.** [[deployment]] §12.1.
-- **Not done here.** Deploying sloth-comintd on W9FJC or beta-site (the
+- **Not done here.** Deploying sloth-comintd on sensor A or sensor B (the
   owner's word), renaming slothweb, Stage 6, and #184's "copy the
   appliance's `/etc/default/sloth` and `slothweb.db` through the
   migration" (no appliance data enters CI).

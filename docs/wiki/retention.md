@@ -141,7 +141,7 @@ historically."
 
 Measured that day on copies of both reference sensors' files, about
 95% of `devices` rows were randomised addresses heard in one tick
-(W9FJC: 83,000 of 87,224; beta-site: 61,373 of 64,157). Such a row
+(sensor A: 83,000 of 87,224; sensor B: 61,373 of 64,157). Such a row
 says only that some phone probed once. After a week it is kept as a
 count, not a row.
 
@@ -191,7 +191,7 @@ pass at the first rowid. A batch reads the next
 deletes the qualifying ones, and commits; maintenance takes one batch
 and each tick after it one more, until the pass has walked the table.
 A tick therefore never waits on more than one batch, however large the
-first purge. On a copy of the W9FJC file (2026-11-20, NVMe) the first
+first purge. On a copy of the sensor A file (2026-11-20, NVMe) the first
 pass took 87 batches: 28 ms on average, the worst 246 ms, 2.5 s in
 all. A pass still walking when the next maintenance comes (fewer
 ticks in an hour than batches in the table, as with a long
@@ -202,7 +202,7 @@ one. Two of the groupings are observation-tier rows
 (`seqnum_correlations`, `eapol_events`, kept `db.retain_days`, default
 30): a random address held only by one of those is purged once that
 row ages out, when nothing in the file groups it any longer. On the
-W9FJC copy that was 2 rows.
+sensor A copy that was 2 rows.
 
 **Measured on that copy**, the first pass:
 

@@ -4,7 +4,7 @@ technique: ""
 rule_file: src/alerts/rules_sensor.c:602 rule_sensor_suppressed()
 count_semantics: per rule evaluation - one fire() per alerts_update() tick per signal whose last one-minute window was over its threshold. Four keys, one per signal (`suppressed:evict`, `suppressed:drop`, `suppressed:silent`, and since #248 `suppressed:cue`); the detail names the worst table, the handle or the channel and the threshold passed, never the minute's own count, so `observations` moves only when what is named changes.
 severity_assessment: agree - WARN. The sensor is still hearing and is losing a share of what it hears; a whole domain gone is SENSOR_SOURCE_DOWN's CRIT. No source gives a loss rate past which the sensor should be called blind.
-false_positive_risk: medium, unmeasured for silent - the eviction and drop thresholds are set well above the reference sensor's measured baseline (2026-11-23), not from a source; the silent-channel run of 3 has no baseline at all (the look's hop_silent_channels 0 counts never-heard channels, which the signal excludes), and a sparse channel heard once early in the run beside a busy one in its band can raise it on a quiet site. A segment far busier than Beta-Site's can evict past 600 a minute without anyone attacking it, and a channel whose only transmitters switch off reads as silent; both are the rule saying what it measures, and both still cost the rules evidence.
+false_positive_risk: medium, unmeasured for silent - the eviction and drop thresholds are set well above the reference sensor's measured baseline (2026-11-23), not from a source; the silent-channel run of 3 has no baseline at all (the look's hop_silent_channels 0 counts never-heard channels, which the signal excludes), and a sparse channel heard once early in the run beside a busy one in its band can raise it on a quiet site. A segment far busier than sensor B's can evict past 600 a minute without anyone attacking it, and a channel whose only transmitters switch off reads as silent; both are the rule saying what it measures, and both still cost the rules evidence.
 noise_verdict: not measured - written 2026-11-23 with the rule; the baseline is one 115 s look at the live stream, no firing data yet.
 prevalence: not an adversary technique - a state of the sensor's own collection. Its causes include a beacon or probe spray (mdk4, a Flipper or ESP32 spammer), a deauth or RTS flood, a host too slow for the link, and a jammer on one channel, and (`suppressed:cue`) a stream of false triggers aimed at the `--cue` hop plan; the rule does not tell them apart.
 tuning: --tune suppress.evict_per_min (600), suppress.drop_pct (1), suppress.drop_min (100), suppress.silent_intervals (3), suppress.cue_refused_per_min (5)
@@ -50,7 +50,7 @@ A segment busier than the tables are sized for (a conference hall, a stadium), m
 2. pcap_stats(3PCAP), libpcap - ps_recv, ps_drop, ps_ifdrop (accessed 2026-11-23)
 3. src/cov_interval.h, docs/wiki/jsonl-schema.md `coverage_interval` - the per-channel time and frames (accessed 2026-11-23)
 4. docs/wiki/coverage-assessment.md - the statuses and the `suppressed` reason (accessed 2026-11-23)
-5. Beta-Site live stream, tcp:127.0.0.1:8765, 2026-11-23, 115 s of `sensor_health` - the baseline in src/alerts.h (accessed 2026-11-23)
+5. Sensor B live stream, tcp:127.0.0.1:8765, 2026-11-23, 115 s of `sensor_health` - the baseline in src/alerts.h (accessed 2026-11-23)
 
 ## Verification notes
 

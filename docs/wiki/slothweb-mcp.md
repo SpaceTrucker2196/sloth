@@ -378,7 +378,7 @@ openclaw mcp probe          # lists the 26 read tools
 **With writes** (owner ruling 2026-11-11: the secret is read through a
 group, with no sudo rule). These are steps for the owner to apply, as
 root where marked; nothing in this tree does them. They assume the
-shipped unit (`User=sloth`), the operator's own user `spacetrucker`
+shipped unit (`User=sloth`), the operator's own user `alice`
 running the agent, and the group name `slothweb-agent`; any free name
 will do.
 
@@ -386,7 +386,7 @@ will do.
 # 1. A group holding slothweb's user and the operator's (as root, once):
 sudo groupadd --system slothweb-agent
 sudo usermod -aG slothweb-agent sloth
-sudo usermod -aG slothweb-agent spacetrucker
+sudo usermod -aG slothweb-agent alice
 # 2. The unit from this tree: it adds RuntimeDirectory=slothweb
 #    (/run/slothweb, 0711) and gives fchown back to slothweb's
 #    system-call filter. Only this one unit is replaced:
@@ -422,7 +422,7 @@ systemd service started before step 1 still lacks the group, and every
 write it makes answers `secret_no_access`. Log out of every session of
 that user and back in (the user manager, `systemd --user`, stays up
 while any session or lingering keeps it, so with lingering enabled
-restart it: `sudo systemctl restart user@$(id -u spacetrucker)`), or
+restart it: `sudo systemctl restart user@$(id -u alice)`), or
 reboot; then restart the gateway from the new session. `newgrp
 slothweb-agent` in one shell is enough to test by hand, not for a
 gateway started elsewhere. `grep Groups /proc/<gateway pid>/status`
@@ -456,7 +456,7 @@ never leaves the sensor host, and each ssh login gets the operator's
 groups fresh, so the group note above does not apply to it:
 
 ```sh
-openclaw mcp set slothweb '{"command":"ssh","args":["-T","-o","BatchMode=yes","spacetrucker@sensor-host","/usr/local/bin/slothweb-mcp","--url","http://100.x.y.z:8770","--from-loopback","--agent","claw-triage","--secret-file","/run/slothweb/agent.secret"]}'
+openclaw mcp set slothweb '{"command":"ssh","args":["-T","-o","BatchMode=yes","alice@sensor-host","/usr/local/bin/slothweb-mcp","--url","http://100.x.y.z:8770","--from-loopback","--agent","claw-triage","--secret-file","/run/slothweb/agent.secret"]}'
 ```
 
 For any other MCP client the entry is the usual one:

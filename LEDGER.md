@@ -267,7 +267,7 @@
 | b6a39ea | 2026-10-26T16:11:06Z | claude-opus-5-5 | 18 | 4634 | 4665962 | 1275577 | 11.2306 | #150: list views size pages from the cursor via view_page_budget (27 views), clip wide rows, nothing drawn off-screen; per-view 100x33 fit tests; Deauth/BTM/FragAttacks/Interfaces fixes |
 | ab91626 | 2026-10-26T16:11:22Z | claude-opus-5-5 | 6 | 1027 | 1995121 | 1765 | 0.4337 | #156 follow-up: BLE_ADV_FLOOD and BLE_WATCHLIST pinned identical with rotation hints on/off; three-rotation scenario |
 | 70eedb3 | 2026-10-26T16:46:24Z | claude-opus-5-5 | 76 | 17875 | 22931516 | 44449 | 5.2997 | #153 repo side: sloth-migrate-sensor (dry-run, preflight, checksum-verified copy, hardened unit, verify, rollback), deploy-test 262 checks + shellcheck in CI; SC2317 fix for CI's shellcheck 0.9 |
-| 2214b59 | 2026-10-26T17:33:57Z | claude-opus-5-5 | 18 | 7092 | 5731312 | 10373 | 1.3712 | slothweb restyle: Spacetrucker (river.io/jeff) design system for chrome + light theme, all data in the TUI's colours generated from src/tui_palette.c with C-vs-JS parity test |
+| 2214b59 | 2026-10-26T17:33:57Z | claude-opus-5-5 | 18 | 7092 | 5731312 | 10373 | 1.3712 | slothweb restyle: Spacetrucker design system for chrome + light theme, all data in the TUI's colours generated from src/tui_palette.c with C-vs-JS parity test |
 | 49893c7 | 2026-10-26T18:12:24Z | claude-opus-5-5 | 76 | 23169 | 26734082 | 34726 | 6.0883 | deploy-test: stub socat counter written atomically (CI race on 2214b59) |
 | dbbb5db | 2026-10-26T20:53:37Z | claude-opus-5-5 | 78 | 68909 | 29943546 | 92504 | 8.1072 | #166: 14-day --pcap-dir age sweep (pcap.retain_days), shared-dir refusal, stale-clock guard |
 | 58b8b42 | 2026-10-26T20:54:35Z | claude-opus-5-5 | 12 | 3493 | 5220856 | 7248 | 1.1721 | #170: one alerts row per finding across reopens (schema v8), --db-compact-alerts copy; integration header merges |
@@ -353,7 +353,7 @@
 | ede113e5 | 2026-11-14T13:05:19Z | claude-opus-5 | 574 | 219426 | 80711875 | 693200 | 52.7765 | #208 — rtl_433 JSON event log as a passive sub-GHz sensor (slice 1) |
 | b56d646 | 2026-11-14T13:55:51Z | claude-fable-5-1, claude-opus-5-5 | 176 | 12992 | 2958173 | 160942 | 3.3863 | #208 rtl_433 passive sub-GHz sensor (--rtl433) + review |
 | 265d406 | 2026-11-14T16:03:19Z | claude-opus-5-5 | 56 | 15581 | 3104196 | 27974 | 1.1565 | #208 slothweb rtl_433 tab + /api/rtl433, review fixes (dedup key, stale sensor, tests) |
-| ec8a9d0 | 2026-11-14T16:34:29Z | claude-fable-5-1, claude-opus-5-5 | 252 | 28396 | 12699051 | 135230 | 5.4107 | CI ASan twin_field jsonl_open diagnostic; W9FJC ADS-B/APRS setup; deploy 85579c66 |
+| ec8a9d0 | 2026-11-14T16:34:29Z | claude-fable-5-1, claude-opus-5-5 | 252 | 28396 | 12699051 | 135230 | 5.4107 | CI ASan twin_field jsonl_open diagnostic; sensor A ADS-B/APRS setup; deploy 85579c66 |
 | 33f69cfa | 2026-11-15T13:55:39Z | claude-opus-5 | 412 | 197513 | 43179930 | 582060 | 32.3505 | #207 — persist beacon_aps.operating_width for the Spectrum overlay (slice 1) |
 | d22b810 | 2026-11-15T16:55:54Z | claude-fable-5-1, claude-fable-5-2 | 168 | 27444 | 2581065 | 227123 | 5.9335 | ADR 0010 and the wifi/rf coupling inventory (#211 S0) |
 | b7ceb81 | 2026-11-15T17:20:45Z | claude-fable-5-2 | 8 | 1189 | 530613 | 1876 | 0.1838 | Build seam for the wifi/rf split: source groups, run flag, poll stage table (#212) |
@@ -403,7 +403,7 @@
 | ea25309 | 2026-11-20T00:04:21Z | claude-opus-5-5 | 142 | 34155 | 11885738 | 627220 | 6.1969 | Review fixes for #235: shellcheck 0.9, CI token scope, stale contract names |
 | b0fd419 | 2026-11-20T03:25:55Z | claude-fable-5-1, claude-opus-5-5 | 838 | 225697 | 60553202 | 1148963 | 29.8369 | Install the three packages together and run each alone (#236) |
 | cd9e82d | 2026-11-20T03:53:21Z | claude-opus-5-5 | 144 | 37259 | 11702011 | 165474 | 3.9135 | Review fixes for #236: comint's full history in CI, only the three packages' units |
-| 9ba2d9d | 2026-11-20T05:59:42Z | claude-fable-5-1, claude-opus-5-5 | 1076 | 320704 | 126596851 | 1708658 | 44.3874 | sloth-mesh#4 learned facts (mesh c7ea796..0b2b0c5) + slothweb-mcp wiki counts; also mesh rtl_433 F/psi, WiFi layout, FAA db + daily refresh on W9FJC, table-parity and api-golden fixes |
+| 9ba2d9d | 2026-11-20T05:59:42Z | claude-fable-5-1, claude-opus-5-5 | 1076 | 320704 | 126596851 | 1708658 | 44.3874 | sloth-mesh#4 learned facts (mesh c7ea796..0b2b0c5) + slothweb-mcp wiki counts; also mesh rtl_433 F/psi, WiFi layout, FAA db + daily refresh on sensor A, table-parity and api-golden fixes |
 | 878b338b | 2026-11-20T12:42:32Z | claude-opus-5 | 484 | 161078 | 50924428 | 618212 | 35.6737 | #232 — EVIL_TWIN: no CRIT on a weak enc label read off one beacon |
 | 7f27f3e | 2026-11-20T17:05:57Z | claude-fable-5-1, claude-opus-5-5 | 666 | 170987 | 50512383 | 1395488 | 25.6849 | #232 review: EVIL_TWIN malformed-IE demotion WEP-only |
 | 7bb8b6a | 2026-11-20T20:53:38Z | claude-fable-5-1, claude-opus-5-5 | 2056 | 816422 | 219911664 | 4634115 | 89.5373 | #239 random-device purge + planner stats (sloth 7c5cd9f3, 7bb8b6a2); also mesh #13 device-list serving table, #12 docs, #5/#6/#7/#8, comint #2/#3/#4 registries + host deploys |

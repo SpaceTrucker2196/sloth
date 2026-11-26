@@ -208,8 +208,8 @@ per-link address of one affiliated AP. The AP's own M1 to its own
 client is therefore FromDS with addr3 = SA = the MLD MAC, and the
 client's M2 is ToDS with addr3 = DA = the MLD MAC — neither equal to
 the BSSID. The reference host's alert `d10040` was exactly that: an
-Arcadyan Wi-Fi 7 AP at `18:60:41:b4:24:30` sending its handshakes as
-`3a:60:41:b4:24:2f` (the BSSID with bits 1 and 5 of octet 0 set and
+Arcadyan Wi-Fi 7 AP at `00:00:5e:00:53:30` sending its handshakes as
+`22:00:5e:00:53:2f` (the BSSID with bits 1 and 5 of octet 0 set and
 octet 5 minus one) to a client that had associated to it; 2,964,009
 evaluations over three incidents, every one a false positive.
 
