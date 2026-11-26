@@ -106,6 +106,8 @@ typedef struct {
     int         pcap_retain_days, eapol_retain_days;
     /* The operator's configuration the rules need (COV_N_*). */
     unsigned    config;
+    /* --notify-priority (#244), 0 off. */
+    int         notify_priority;
     /* The build. */
     int         have_pcap, have_wifi, have_sqlite;
 } pf_config_t;

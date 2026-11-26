@@ -54,6 +54,28 @@ void q_report_json(FILE *out, const sloth_state_t *s);
 uint64_t q_answer_sig(const q_result_t *r, int assessed, const q_question_t *q,
                       char *kinds, size_t ksz, char *ids, size_t isz);
 
+/* ── Notification above a priority (owner ruling 2026-11-25) ─────────
+ *
+ * --notify-priority N (1..9, 0 off, the default): when a question of
+ * priority N or more urgent turns to `finding`, gains a kind, or stops
+ * being a finding, one line goes to `out` (the daemons pass stderr,
+ * which systemd writes to the journal):
+ *
+ *   sloth: question Q1 (priority 1): finding, 1 open (EVIL_TWIN): Is a device ...?
+ *   sloth: question Q1 (priority 1): no longer a finding (no_finding_partly)
+ *
+ * Local only: nothing is sent over any network, so MISSION §2's opt-in
+ * is the flag and the announcement is the start line
+ * q_live_notify_announce() prints. The line carries the question, its
+ * kinds and counts: never an address, a name or a key. Delivery to a
+ * phone or a mail box is sloth-mesh's (sloth-mesh#18), which reads the
+ * question_status record. */
+int  q_live_notify_flag(const char *arg);     /* 0, or 2 with a line on stderr */
+int  q_live_notify_priority(void);            /* 0 off */
+void q_live_notify_announce(FILE *out);       /* nothing when off */
+/* After the alert stage: the lines that are due. Returns how many. */
+int  q_notify_poll(const sloth_state_t *s, FILE *out);
+
 /* The question_status records. */
 void q_emit(const sloth_state_t *s);
 

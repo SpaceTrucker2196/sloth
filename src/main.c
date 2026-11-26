@@ -376,7 +376,7 @@ static void print_usage(const char *argv0) {
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-preliminary] [--value-period KIND=SECS ...]\n"
-            "       [--questions PATH]\n"
+            "       [--questions PATH] [--notify-priority N]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
             "       [--wps-pin-brute-cycles N] [--wps-lockout-cycles N]\n"
             "       [--wps-pbc-concurrent N]\n"
@@ -566,6 +566,12 @@ static void print_usage(const char *argv0) {
             "                     KIND,KIND. Replaces the seven defaults. An\n"
             "                     unknown kind or a duplicate id exits 2\n"
             "                     naming the line.\n"
+            "  --notify-priority N\n"
+            "                     write one line to stderr (the journal\n"
+            "                     under systemd) when a site question of\n"
+            "                     priority N or more urgent (1..9; 0 off,\n"
+            "                     the default) turns to a finding, gains a\n"
+            "                     kind or stops being one. Local only.\n"
             "  --tune-list        print every knob with default, current\n"
             "                     value and unit, then exit.\n"
             "  --allow-active     opt in to the two active behaviours sloth has:\n"
@@ -1211,6 +1217,9 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--questions")) {
             if (q_live_flag(i + 1 < argc ? argv[i + 1] : NULL) != 0) return 2;
             i++;
+        } else if (!strcmp(argv[i], "--notify-priority")) {
+            if (q_live_notify_flag(i + 1 < argc ? argv[i + 1] : NULL) != 0) return 2;
+            i++;
         } else if (!strcmp(argv[i], "--tune-list")) {
             tune_print_list(stdout);
             return 0;
@@ -1759,6 +1768,9 @@ int main(int argc, char **argv) {
                         "nl80211 scan triggers on wireless interfaces; "
                         "everything else stays passive\n");
     }
+    /* --notify-priority (#244): local lines only, announced like the
+     * other opt-ins; not under --preflight or --handoff. */
+    if (!offline_cmd) q_live_notify_announce(stderr);
     g_hop_enabled = prof.hop_enabled;
     /* --cue (#248, owner rulings 2026-11-23). Off by default; announced
      * with what it enables, the kinds and the limits before anything can
@@ -1867,6 +1879,7 @@ int main(int argc, char **argv) {
         pf.data_socket_remote = data_socket && ds_allow_remote &&
                                 data_socket_spec_is_remote(data_socket) == 1;
         pf.db_max_mb    = db_max_mb();
+        pf.notify_priority = q_live_notify_priority();
         pf.pcap_retain_days  = (int)tune_val(TUNE_PCAP_RETAIN_DAYS);
         pf.eapol_retain_days = (int)tune_val(TUNE_HANDSHAKE_RETENTION_DAYS);
         if (ownership_any())             pf.config |= COV_N_OWN_NET;

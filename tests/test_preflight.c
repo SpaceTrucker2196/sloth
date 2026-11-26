@@ -495,6 +495,14 @@ static void test_output(void) {
     ASSERT_EQ(level("output", "socket"), PF_NOT_CHECKED);
     ASSERT(says("output", "socket", "binds nothing"));
     ASSERT_EQ(level("output", "notify"), PF_NA);
+    /* #244: --notify-priority is sloth's one notification path, local. */
+    base();
+    g_c.notify_priority = 1;
+    run();
+    ASSERT_EQ(level("output", "notify"), PF_OK);
+    ASSERT(says("output", "notify", "--notify-priority 1: a site question of priority 1 "
+                                    "that turns to a finding is a line on stderr"));
+    ASSERT(says("output", "notify", "local only"));
 }
 
 /* ── 8. Rule status ──────────────────────────────────────────────── */

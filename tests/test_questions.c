@@ -751,6 +751,61 @@ static void test_operator_file(void) {
     end();
 }
 
+/* --notify-priority: one line when a question at or above the priority
+ * turns to a finding, gains a kind or stops being one; nothing for a
+ * less urgent question, nothing when off, nothing when unchanged. Seen
+ * red with the priority test dropped (Q5's line appeared) and with the
+ * change test dropped (a second line for the same finding). */
+static void test_notify(void) {
+    begin();
+    static char nb[8192];
+    FILE *out = fmemopen(nb, sizeof(nb), "w");
+    ASSERT(out != NULL);
+    if (!out) { end(); return; }
+    setvbuf(out, NULL, _IONBF, 0);
+    /* Off: nothing, and no announcement. */
+    seed(ALERT_TYPE_EVIL_TWIN, "00000000000000e1");
+    ASSERT_EQ(q_notify_poll(&g_s, out), 0);
+    q_live_notify_announce(out);
+    ASSERT_STR(nb, "");
+    ASSERT_EQ(q_live_notify_flag("10"), 2);
+    ASSERT_EQ(q_live_notify_flag("x"), 2);
+    ASSERT_EQ(q_live_notify_flag(NULL), 2);
+    ASSERT_EQ(q_live_notify_priority(), 0);
+    ASSERT_EQ(q_live_notify_flag("2"), 0);
+    ASSERT_EQ(q_live_notify_priority(), 2);
+    q_live_notify_announce(out);
+    ASSERT(contains(nb, "sloth: --notify-priority 2: a site question of priority 2 or "
+                        "more urgent that turns to a finding is written here"));
+    ASSERT(contains(nb, "nothing is sent over any network\n"));
+    rewind(out);
+    memset(nb, 0, sizeof(nb));
+    /* Q1 (priority 1) and Q5 (priority 3): only Q1's line. */
+    seed(ALERT_TYPE_OPEN_SETUP_AP, "00000000000000f1");
+    ASSERT_EQ(q_notify_poll(&g_s, out), 1);
+    ASSERT_STR(nb, "sloth: question Q1 (priority 1): finding, 1 open (EVIL_TWIN): "
+                   "Is a device impersonating one of my networks?\n");
+    /* Unchanged: nothing more. */
+    ASSERT_EQ(q_notify_poll(&g_s, out), 0);
+    /* A second finding of the same kind: nothing; a new kind: a line. */
+    seed(ALERT_TYPE_EVIL_TWIN, "00000000000000e2");
+    ASSERT_EQ(q_notify_poll(&g_s, out), 0);
+    seed(ALERT_TYPE_KARMA_AP, "00000000000000k1");
+    ASSERT_EQ(q_notify_poll(&g_s, out), 1);
+    ASSERT(contains(nb, "sloth: question Q1 (priority 1): finding, 3 open "
+                        "(EVIL_TWIN,KARMA_AP): "));
+    /* Resolved: the question is no longer a finding. */
+    for (int i = 0; i < g_s.alert_count; i++) g_s.alerts[i].resolved = 1;
+    ASSERT_EQ(q_notify_poll(&g_s, out), 1);
+    ASSERT(contains(nb, "sloth: question Q1 (priority 1): no longer a finding "
+                        "(not_assessed)\n"));
+    ASSERT(!contains(nb, "Q5"));
+    ASSERT(!contains(nb, "02:11:22"));
+    ASSERT(!contains(nb, "HomeNet"));
+    fclose(out);
+    end();
+}
+
 void run_questions_tests(void) {
     TEST_SUITE("site questions (#244)");
     RUN_TEST(test_map_matches_alert_list);
@@ -773,4 +828,5 @@ void run_questions_tests(void) {
     RUN_TEST(test_report_assessed);
     RUN_TEST(test_record);
     RUN_TEST(test_operator_file);
+    RUN_TEST(test_notify);
 }

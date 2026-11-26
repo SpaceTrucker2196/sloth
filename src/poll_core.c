@@ -5,6 +5,7 @@
 #include "rule_coverage_live.h"
 #include "alerts.h"
 #include "db.h"
+#include "questions_live.h"
 
 /* The poll runner, and the stages every daemon's table carries (#212).
  *
@@ -36,6 +37,8 @@ void poll_st_health_host(sloth_state_t *s, const poll_ctx_t *ctx) {
 void poll_st_alerts(sloth_state_t *s, const poll_ctx_t *ctx) {
     (void)ctx;
     alerts_update(s);
+    /* --notify-priority (#244): a question that turned to a finding. */
+    q_notify_poll(s, stderr);
 }
 
 /* ── DURABLE ──────────────────────────────────────────────── */

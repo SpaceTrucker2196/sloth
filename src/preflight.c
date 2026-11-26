@@ -642,10 +642,18 @@ void pf_check_output(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r) 
         add(r, "output", "socket", PF_WARN, "%s: its directory is not writable by "
             "the account running --preflight", c->data_socket);
     /* Read in the source, not assumed: no file under src/ sends a
-     * message (mail, webhook, push) to anyone. A notification path is
-     * sloth-mesh's (sloth-mesh#18), and its test message is that
-     * repository's to send. */
-    add(r, "output", "notify", PF_NA, "not applicable: no notification path in sloth");
+     * message (mail, webhook, push) to anyone. sloth's one notification
+     * path is --notify-priority (#244), lines on its own stderr; a lane
+     * that leaves the host is sloth-mesh's (sloth-mesh#18), and its test
+     * message is that repository's to send. */
+    if (!c->notify_priority)
+        add(r, "output", "notify", PF_NA, "no --notify-priority: no notification "
+            "path in sloth");
+    else
+        add(r, "output", "notify", PF_OK, "--notify-priority %d: a site question of "
+            "priority %d%s that turns to a finding is a line on stderr (the journal "
+            "under systemd); local only, no test message is sent", c->notify_priority,
+            c->notify_priority, c->notify_priority > 1 ? " or more urgent" : "");
 }
 
 /* ── 8. Rule status ────────────────────────────────────────────── */

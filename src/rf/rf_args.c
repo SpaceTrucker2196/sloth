@@ -26,7 +26,7 @@ void rf_usage(FILE *fp, const char *argv0) {
             "       [--data-socket [SPEC]] [--data-socket-allow-remote]\n"
             "       [--strict] [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-preliminary] [--value-period KIND=SECS ...]\n"
-            "       [--questions PATH]\n"
+            "       [--questions PATH] [--notify-priority N]\n"
             "       [--user NAME] [--no-privdrop] [--ticks N]\n"
             "       [--help] [--version] [--print-schema]\n"
             "\n"
@@ -138,6 +138,12 @@ void rf_usage(FILE *fp, const char *argv0) {
             "                     KIND,KIND. Replaces the seven defaults. An\n"
             "                     unknown kind or a duplicate id exits 2\n"
             "                     naming the line.\n"
+            "  --notify-priority N\n"
+            "                     write one line to stderr (the journal\n"
+            "                     under systemd) when a site question of\n"
+            "                     priority N or more urgent (1..9; 0 off,\n"
+            "                     the default) turns to a finding, gains a\n"
+            "                     kind or stops being one. Local only.\n"
             "  --tune-list        print every knob, then exit.\n"
             "  --user NAME        account a root run drops to once a serial\n"
             "                     --gps is open (default: sloth, when that\n"
@@ -229,6 +235,9 @@ int rf_args_parse(int argc, char **argv, rf_args_t *a) {
             i++;
         } else if (!strcmp(argv[i], "--questions")) {
             if (q_live_flag(has ? argv[i + 1] : NULL) != 0) return 2;
+            i++;
+        } else if (!strcmp(argv[i], "--notify-priority")) {
+            if (q_live_notify_flag(has ? argv[i + 1] : NULL) != 0) return 2;
             i++;
         } else if (!strcmp(argv[i], "--tune-list")) {
             tune_print_list(stdout);

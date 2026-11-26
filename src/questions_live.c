@@ -1,5 +1,6 @@
 /* Site questions, the running half (#244): src/questions_live.h. */
 
+#include <stdlib.h>
 #include <string.h>
 #include "questions_live.h"
 #include "rule_coverage_live.h"
@@ -11,6 +12,10 @@ static struct {
     int     loaded;            /* set holds the file's questions */
     q_set_t set;
     char    path[256];
+    int     notify_prio;       /* --notify-priority, 0 off */
+    /* What the last notification said of each question, by id. */
+    struct { char qid[Q_ID_LEN]; int finding; uint64_t found_sig; } nmem[Q_MAX];
+    int     nmem_n;
 } g;
 
 static void ensure(void) {
@@ -18,7 +23,7 @@ static void ensure(void) {
 }
 
 void q_live_reset(void) {
-    memset(&g, 0, sizeof(g));
+    memset(&g, 0, sizeof(g));   /* --notify-priority back to off too */
     q_set_defaults(&g.set);
 }
 
@@ -254,4 +259,73 @@ void q_emit(const sloth_state_t *s) {
 #undef FI
         jsonl_emit_fields("question_status", wall, f, k);
     }
+}
+
+/* ── Notification above a priority ────────────────────────────────── */
+
+int q_live_notify_flag(const char *arg) {
+    char *end = NULL;
+    long v = arg ? strtol(arg, &end, 10) : -1;
+    if (!arg || !arg[0] || !end || *end || v < 0 || v > Q_PRIORITY_MAX) {
+        fprintf(stderr, "sloth: --notify-priority %s: want 0..9 (0 off; 1 the most "
+                        "urgent questions only)\n", arg ? arg : "");
+        return 2;
+    }
+    g.notify_prio = (int)v;
+    g.nmem_n = 0;
+    return 0;
+}
+
+int q_live_notify_priority(void) { return g.notify_prio; }
+
+void q_live_notify_announce(FILE *out) {
+    if (!out || !g.notify_prio) return;
+    fprintf(out, "sloth: --notify-priority %d: a site question of priority %d%s that "
+                 "turns to a finding is written here (stderr, the journal under "
+                 "systemd); nothing is sent over any network\n",
+            g.notify_prio, g.notify_prio, g.notify_prio > 1 ? " or more urgent" : "");
+}
+
+int q_notify_poll(const sloth_state_t *s, FILE *out) {
+    if (!g.notify_prio || !out) return 0;
+    ensure();
+    static q_answer_t ans[Q_MAX];
+    int n = q_live_answers(s, ans), lines = 0;
+    for (int i = 0; i < n; i++) {
+        const q_question_t *q = &g.set.q[ans[i].qi];
+        const q_result_t *r = &ans[i].r;
+        if (q->priority > g.notify_prio) continue;
+        int finding = r->st == Q_ST_FINDING;
+        uint64_t found_sig = jsonl_fnv1a(r->found, sizeof(r->found), 0);
+        int slot = -1;
+        for (int k = 0; k < g.nmem_n; k++)
+            if (strcmp(g.nmem[k].qid, q->id) == 0) { slot = k; break; }
+        if (slot < 0) {
+            if (g.nmem_n >= Q_MAX) continue;
+            slot = g.nmem_n++;
+            /* Both are Q_ID_LEN and q->id is terminated (q_set_parse()). */
+            memcpy(g.nmem[slot].qid, q->id, sizeof(g.nmem[slot].qid));
+            g.nmem[slot].finding = 0;
+            g.nmem[slot].found_sig = 0;
+        }
+        int was = g.nmem[slot].finding;
+        /* A new kind on a question already a finding is news; more
+         * findings of the same kinds are not. */
+        int changed = finding != was || (finding && found_sig != g.nmem[slot].found_sig);
+        g.nmem[slot].finding = finding;
+        g.nmem[slot].found_sig = found_sig;
+        if (!changed) continue;
+        if (finding) {
+            char kinds[1024];
+            q_found_str(r->found, kinds, sizeof(kinds));
+            fprintf(out, "sloth: question %s (priority %d): finding, %d open (%s): %s\n",
+                    q->id, q->priority, r->n_alerts, kinds, q->text);
+        } else {
+            fprintf(out, "sloth: question %s (priority %d): no longer a finding (%s)\n",
+                    q->id, q->priority, q_status_name(r->st));
+        }
+        lines++;
+    }
+    if (lines) fflush(out);
+    return lines;
 }

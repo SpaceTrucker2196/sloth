@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: issue #244 (from #241 item 1) and its owner rulings of 2026-11-25; FM 2-0 (2004) figure 1-2 (priority question, specific questions, indicators, collection tasks), 1-34 (a priority question asks only one question and supports a decision) and 4-6 (clear requirements preclude being overwhelmed by too much information), as quoted in the issue; `include/sloth_questions.def` (the questions), `include/sloth_question_map.def` (the indicators); `src/questions.h`, `src/questions.c` (the tables, the file, the status), `src/questions_live.h`, `src/questions_live.c` (the record and the report section); `tests/test_questions.c`; [[coverage-assessment]] (the status every answer carries).
 
-**Last updated**: 2026-11-25 (#244: the page, § 4 the status, § 5 the file format, § 6 the record, the table, the `[!]` view and the report section)
+**Last updated**: 2026-11-25 (#244: the page, § 4 the status, § 5 the file format, § 6 the record, the table, the `[!]` view and the report section, § 7 `--notify-priority`)
 
 ## 1. The default questions
 
@@ -199,6 +199,21 @@ Both carry kinds, counts, status words and incident ids beside the operator's ow
 
 The answer is derived each time from what the daemon holds now: a finding counts while its incident is open (300 s after its last evaluation it resolves), so `finding` turns back into a `no_finding` word when the incident closes.
 
+## 7. Notification above a priority
+
+Owner ruling 2026-11-25: notifications above a priority are built in sloth. `--notify-priority N` (`1`..`9`; `0`, the default, is off), in both daemons, writes one line to stderr when a question of priority `N` or more urgent turns to `finding`, gains an alert kind, or stops being a finding (`q_notify_poll()`, after the alert stage of every tick):
+
+```
+sloth: --notify-priority 2: a site question of priority 2 or more urgent that turns to a finding is written here (stderr, the journal under systemd); nothing is sent over any network
+sloth: question Q1 (priority 1): finding, 1 open (EVIL_TWIN): Is a device impersonating one of my networks?
+sloth: question Q1 (priority 1): finding, 3 open (EVIL_TWIN,KARMA_AP): Is a device impersonating one of my networks?
+sloth: question Q1 (priority 1): no longer a finding (not_assessed)
+```
+
+(The lines of `tests/test_questions.c :: test_notify`.) More findings of the kinds already named write nothing. Under systemd stderr is the journal, so `journalctl -u sloth` is the notification log; in the terminal UI it goes to the same terminal, as sloth's other runtime notices do; the `[!]` view shows the same answers there.
+
+**MISSION §2.** The lane is local: nothing is sent over any network, the opt-in is the flag and the first line above is its announcement. `--preflight`'s `notify` row reports it ([[preflight]]). A lane that leaves the host (a phone, a mail box) is sloth-mesh's (sloth-mesh#18): it reads the `question_status` record and, under the owner's amendment to [ADR 0009](adr/0009-fleet-monitor-only.md), sends a fixed body. The line carries the question, its kinds and counts, never an address, a name or a key.
+
 ## Related pages
 
 - [[collection-cycle]] — the Plan and Analyze steps this page builds
@@ -206,4 +221,5 @@ The answer is derived each time from what the daemon holds now: a finding counts
 - [[exposure-report]] — the groups Q5 is made of
 - [[alerts]] — the kinds
 - [[posture-report]] — the Site questions section
+- [[preflight]] — the `notify` row
 - [[jsonl-schema]] — the `question_status` record

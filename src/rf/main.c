@@ -23,6 +23,7 @@
 #include "rf_args.h"
 #include "rf_side.h"
 #include "rf_trim.h"
+#include "questions_live.h"
 
 /* sloth-rf: the RF half of the sensor (#213, ADR 0010).
  *
@@ -162,6 +163,7 @@ int main(int argc, char **argv) {
      * its one ?WATCH line and a routable --data-socket streams to
      * whoever connects, each announced on its own line above, so this
      * line does not say "nothing transmitted" after them. */
+    q_live_notify_announce(stderr);
     fprintf(stderr, "sloth-rf: running (headless; no radio opened, "
                     "no SDR tuned)\n");
 
