@@ -85,7 +85,7 @@ tick counter. Every method other than `GET`/`HEAD` is `405` on every
 path, a header block over 8 KB `431`, and idle or slow clients time out
 on an absolute budget.
 
-**Sources**: `web/README.md` (Design), `web/ui/theme.css`, `web/ui/page.css`, `web/tools/palette.c`, `web/tests/test_tui_colors.c`, `src/tui.c` (`tui_ip_addstr()`, `tui_ssid_addstr()`, `find_brand()`, `tui_brand_addstr()`, `tui_info_color()`), `src/tui_palette.c`, `src/ip_color.c`, `src/views/dashboard_primitives.c` (`draw_sparkline_at()`), www.river.io/jeff (the Spacetrucker design system), `web/src/web_flows.c`, `web/tools/demo.c`,
+**Sources**: `web/README.md` (Design), `web/ui/theme.css`, `web/ui/page.css`, `web/tools/palette.c`, `web/tests/test_tui_colors.c`, `src/tui.c` (`tui_ip_addstr()`, `tui_ssid_addstr()`, `find_brand()`, `tui_brand_addstr()`, `tui_info_color()`), `src/tui_palette.c`, `src/ip_color.c`, `src/views/dashboard_primitives.c` (`draw_sparkline_at()`), the Spacetrucker design system, `web/src/web_flows.c`, `web/tools/demo.c`,
 `web/tools/quickstart_check.sh`, `web/tests/test_flows.c`,
 `web/tests/test_readme.c`, `docs/assets/slothweb/`, `include/sloth.h`
 (`smb_session_t`'s dialect), `web/src/web_slothdb.c`,
