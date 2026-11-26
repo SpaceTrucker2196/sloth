@@ -34,6 +34,7 @@ static const int SWEEP_5[]  = { 36, 40, 44, 48, 52, 56, 60, 64,
 uint32_t chanhop_sweep_dwell_ms(const chanhop_t *h) {
     if (!h || !h->sweep_ms || h->count == 0) return 0;
     uint64_t d = h->sweep_ms / (uint64_t)h->count;
+    if (h->sweep_quantum_ms) d -= d % h->sweep_quantum_ms;
     if (d < CHANHOP_SWEEP_FLOOR_MS) d = CHANHOP_SWEEP_FLOOR_MS;
     if (d > UINT32_MAX) d = UINT32_MAX;
     return (uint32_t)d;
@@ -142,6 +143,10 @@ int chanhop_init_sweep(chanhop_t *h, unsigned minutes) {
         chanhop_add(h, WIFI_BAND_5GHZ, SWEEP_5[i]);
     h->sweep_ms = (uint64_t)minutes * 60000u;
     return h->count;
+}
+
+void chanhop_sweep_quantum(chanhop_t *h, uint32_t poll_ms) {
+    if (h) h->sweep_quantum_ms = poll_ms;
 }
 
 void chanhop_observe(chanhop_t *h, uint32_t observations) {
@@ -459,6 +464,7 @@ int chanhop_split(chanhop_t *h, const chanhop_t *full, int radios, int k) {
     /* A sweep's share keeps the sweep's time (#249): each radio spreads
      * the whole time over its own share. */
     h->sweep_ms = full->sweep_ms;
+    h->sweep_quantum_ms = full->sweep_quantum_ms;
     return h->count;
 }
 

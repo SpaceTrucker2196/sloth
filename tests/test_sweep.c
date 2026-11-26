@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "tmp_dir.h"
 #include "frame_build.h"
 #include "beacon_snoop.h"
@@ -16,6 +17,7 @@
 #include "wifi_chanhop.h"
 #include <errno.h>
 #include "jsonl.h"
+#include "sweep_run.h"
 
 /* The sweep session (#249). Addresses are locally administered or
  * documentation-like values chosen here; a camera vendor's block is read
@@ -684,6 +686,132 @@ static void test_report_of_a_stopped_sweep(void) {
     unlink(p);
 }
 
+/* ── the run: files, the end, and the baseline never written ── */
+
+static void test_label_and_minutes(void) {
+    ASSERT(sweep_label_ok("board-room_2.a"));
+    ASSERT(!sweep_label_ok(""));
+    ASSERT(!sweep_label_ok(".hidden"));
+    ASSERT(!sweep_label_ok("-x"));
+    ASSERT(!sweep_label_ok("a/b"));
+    ASSERT(!sweep_label_ok("a b"));
+    ASSERT(!sweep_label_ok("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));  /* 49 */
+    unsigned m = 0;
+    ASSERT_EQ(sweep_minutes_parse("15", &m), 0);
+    ASSERT_EQ(m, 15u);
+    ASSERT_EQ(sweep_minutes_parse("0", &m), -1);
+    ASSERT_EQ(sweep_minutes_parse("1441", &m), -1);
+    ASSERT_EQ(sweep_minutes_parse("5m", &m), -1);
+}
+
+static int file_eq(const char *a, const char *b) {
+    FILE *fa = fopen(a, "rb"), *fb = fopen(b, "rb");
+    int eq = fa && fb;
+    while (eq) {
+        int ca = fgetc(fa), cb = fgetc(fb);
+        if (ca != cb) eq = 0;
+        if (ca == EOF || cb == EOF) break;
+    }
+    if (fa) fclose(fa);
+    if (fb) fclose(fb);
+    return eq;
+}
+
+static int copy_file(const char *from, const char *to) {
+    FILE *a = fopen(from, "rb"), *b = fopen(to, "wb");
+    int ok = a && b;
+    int c;
+    while (ok && (c = fgetc(a)) != EOF) fputc(c, b);
+    if (a) fclose(a);
+    if (b) fclose(b);
+    return ok;
+}
+
+static void test_run_writes_and_never_accepts(void) {
+    char dir[TEST_TMP_MAX] = "";
+    ASSERT(mkdtemp(test_tmp_tpl(dir, sizeof(dir), "sloth_sweepdir_XXXXXX")) != NULL);
+    fake_net_reset();
+    FILE *nul = fopen("/dev/null", "w");
+    chanhop_t h;
+    chanhop_init_sweep(&h, 1);
+    chanhop_sweep_quantum(&h, 50);        /* the loop below polls every 50 ms */
+    ASSERT_EQ(chanhop_sweep_dwell_ms(&h), 1550u);
+    static sweep_run_t r;
+    char err[256];
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &h, 0, 1764000000, err, sizeof(err)), 0);
+    ASSERT(r.base == NULL);
+    memset(&g_s, 0, sizeof(g_s));
+    seed_ap(&g_s, AP1, "Lobby", "WPA2", 6, -50);
+    g_s.mon_health.running = 1;
+    /* The run ends when the time given runs out (one minute), or the
+     * pass, whichever first; with the dwell rounded to the poll, the
+     * pass, 38 x 1.55 s = 58.9 s. Unrounded (1578 ms) every dwell would
+     * run to the next poll and the time would end first. */
+    int done = 0;
+    uint64_t t;
+    for (t = 0; t <= 61000 && !done; t += 50) {
+        (void)chanhop_step(&h, "mon0", t, 0, NULL, NULL);
+        done = sweep_run_tick(&r, &g_s, &h, t);
+    }
+    ASSERT(done);
+    ASSERT_EQ(r.end_why, SW_END_PASS);
+    ASSERT_EQ(sweep_run_finish(&r, &g_s, 0, 0, 1764000060, nul), 0);
+
+    char stem[SWEEP_PATH_MAX], path[SWEEP_PATH_MAX + 8], base[SWEEP_PATH_MAX];
+    ASSERT_EQ(sweep_record_stem(dir, "room", 1764000000, stem, sizeof(stem)), 0);
+    ASSERT_EQ(sweep_baseline_path(dir, "room", base, sizeof(base)), 0);
+    snprintf(path, sizeof(path), "%s.md", stem);
+    char *t1 = slurp(path);
+    ASSERT(t1 && strstr(t1, "Ended: every channel visited once") &&
+           strstr(t1, "Baseline: none accepted"));
+    snprintf(path, sizeof(path), "%s.json", stem);
+    ASSERT(slurp(path) != NULL);
+    snprintf(path, sizeof(path), "%s.tsv", stem);
+    struct stat st;
+    ASSERT_EQ(stat(path, &st), 0);
+    ASSERT_EQ((int)(st.st_mode & 0777), 0600);
+    /* Nothing accepted it: no baseline was written. */
+    ASSERT(stat(base, &st) != 0);
+
+    /* The accept (slothweb's) copies the inventory to the baseline. A
+     * second sweep reads it, and a third AP is the one new emitter; the
+     * baseline is left byte for byte as it was. */
+    ASSERT(copy_file(path, base));
+    char keep[SWEEP_PATH_MAX + 8];
+    snprintf(keep, sizeof(keep), "%s.keep", base);
+    ASSERT(copy_file(base, keep));
+    chanhop_init_sweep(&h, 1);
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &h, 0, 1764000600, err, sizeof(err)), 0);
+    ASSERT(r.base != NULL);
+    ASSERT_EQ(r.base_version, 2);
+    seed_ap(&g_s, AP2, "Planted", "WPA2", 1, -30);
+    (void)sweep_run_tick(&r, &g_s, &h, 50);
+    /* Stopped (q) well before the pass. */
+    ASSERT_EQ(sweep_run_finish(&r, &g_s, 1, 0, 1764000610, nul), 0);
+    ASSERT(file_eq(base, keep));
+    ASSERT_EQ(sweep_record_stem(dir, "room", 1764000600, stem, sizeof(stem)), 0);
+    snprintf(path, sizeof(path), "%s.md", stem);
+    t1 = slurp(path);
+    ASSERT(t1 && strstr(t1, "| access points | 1 | 1 | 0 |") &&
+           strstr(t1, "stopped before") && strstr(t1, "Planted"));
+
+    /* One sweep never replaces another's record: the same second again
+     * is refused, and the first record stays. */
+    chanhop_init_sweep(&h, 1);
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &h, 0, 1764000600, err, sizeof(err)), 0);
+    ASSERT_EQ(sweep_run_finish(&r, &g_s, 1, 0, 1764000620, nul), -1);
+    t1 = slurp(path);
+    ASSERT(t1 && strstr(t1, "Planted"));
+
+    /* A baseline that is not a file is refused at the start. */
+    unlink(base);
+    ASSERT_EQ(mkdir(base, 0700), 0);
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &h, 0, 1764000900, err, sizeof(err)), -1);
+    rmdir(base);
+    if (nul) fclose(nul);
+    test_rm_tree(dir);
+}
+
 void run_sweep_tests(void) {
     TEST_SUITE("sweep (#249): inventory");
     RUN_TEST(test_ble_kept_types);
@@ -703,4 +831,7 @@ void run_sweep_tests(void) {
     RUN_TEST(test_sweep_stopped_early);
     TEST_SUITE("sweep (#249): the report");
     RUN_TEST(test_report_of_a_stopped_sweep);
+    TEST_SUITE("sweep (#249): the run");
+    RUN_TEST(test_label_and_minutes);
+    RUN_TEST(test_run_writes_and_never_accepts);
 }

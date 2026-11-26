@@ -61,7 +61,7 @@ outside either is skipped rather than read as channel 0. The
 `--baseline-in` drift report shows SSIDs in the same escaped form, so
 no on-air byte reaches the terminal raw.
 
-**Format v2** (#249, the baseline a sweep session compares against;
+**Format v2** (#249, the baseline a [[sweep-session]] compares against;
 owner ruling 2026-11-25: the baseline lives in this file, no database
 change). The first line is `# sloth-snapshot v2`; the header
 adds `# clients`, `# ble_devices`, and two counts-only lines,
@@ -154,6 +154,7 @@ does".
 
 ## Related pages
 
+- [[sweep-session]] — the sweep that compares a room against a snapshot v2 baseline.
 - [[wifi-sigint-guide]] — the same ground for a non-specialist, with the sources.
 - [[wifi-sigint]] — the v1.1 primitive set and correlation chain.
 - [[how-wifi-works]] · [[monitor-mode]] — the substrate.

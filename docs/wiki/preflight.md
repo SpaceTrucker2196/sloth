@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: issue #247 (from #241 item 10); FM 2-0 (2004) 4-9 to 4-11 and 8-18 (verify the equipment, the databases and the reporting channels before the mission); `src/preflight.h`, `src/preflight.c` (the checks, pure), `src/preflight_gather.c` (what is read); `src/platform/linux_wifi.c` (`linux_wifi_get_reg()`, `linux_wifi_phy_iftypes()`); `src/sys_status.c` (`sys_status_read()`, `sys_status_list()`, `sys_status_sample_host()`); `src/db.c` (`db_probe_version()`); `src/intel_pack.c` (`intel_pack_date()`); `src/secure_file.c` (`sfile_validate_stat()`, the rule the run holds an existing output path to); `src/capture/capture.c` (`capture_scope_verdict()`); `tests/test_preflight.c`, `tests/replay/preflight_cli.sh`.
 
-**Last updated**: 2026-11-24 (#251: `pcap-dir-at-rest` and `eapol-dir-at-rest` in `storage`, captures kept past 7 days on a disk with no dm-crypt, [[sensor-compromise]]), 2026-11-23 (#247 review: `--monitor-only` with no monitor radio fails; a radio left out is not a passive failure; a phy-sharing interface that is down is not a warning, and the active monitor flag is named as not checked; output paths the run refuses fail; a version row that holds no version fails; the netdev listing's cut is reported and named interfaces are looked up by their own path; the `gnss` row says what counts as up; the service-unit note, since `SuccessExitStatus=` does not cover `ExecStartPre=`), 2026-11-23 (#247: the page, with the eight checks).
+**Last updated**: 2026-11-25 (#249: `--sweep` runs the checks in process and stops on a `fail`, [[sweep-session]]), 2026-11-24 (#251: `pcap-dir-at-rest` and `eapol-dir-at-rest` in `storage`, captures kept past 7 days on a disk with no dm-crypt, [[sensor-compromise]]), 2026-11-23 (#247 review: `--monitor-only` with no monitor radio fails; a radio left out is not a passive failure; a phy-sharing interface that is down is not a warning, and the active monitor flag is named as not checked; output paths the run refuses fail; a version row that holds no version fails; the netdev listing's cut is reported and named interfaces are looked up by their own path; the `gnss` row says what counts as up; the service-unit note, since `SuccessExitStatus=` does not cover `ExecStartPre=`), 2026-11-23 (#247: the page, with the eight checks).
 
 ---
 
@@ -114,6 +114,7 @@ A service unit could run it before the daemon, `ExecStartPre=/usr/local/bin/slot
 
 - [[cli-reference]] — `--preflight`, `--json` and the exit codes.
 - [[coverage-assessment]] — the rule statuses the `rules` check derives, and the running daemon's measurement of them.
+- [[sweep-session]] — `--sweep` runs these checks in process first and does not start on a `fail`.
 - [[monitor-mode]] — preparing a radio, which the preflight checks and never does.
 - [[jsonl-schema]] — `sensor_health`, `source_status` and `sys_status`: what a running sensor reports about the same things.
 - [[capture-scope]] — the `--iface` scope an absent interface cannot enforce.

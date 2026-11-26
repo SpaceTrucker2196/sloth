@@ -193,6 +193,7 @@ sign-off document."
 
 - [[alerts]] — where the ATT&CK tag on each alert comes from.
 - [[jsonl-schema]] — the streaming event log the report summarises.
+- [[sweep-session]] — the sweep report: a room against its baseline, with its coverage and limits, beside the posture report.
 - [[coverage-assessment]] — the Collection coverage section.
 - [[exposure-report]] — the What this site reveals section.
 - [[record-integrity]] — the Record integrity section and `jsonl_chain`.

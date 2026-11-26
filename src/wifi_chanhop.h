@@ -121,6 +121,11 @@ typedef struct {
      * has run out, and chanhop_tick() then proposes nothing. */
     uint64_t sweep_ms;
     int      sweep_done;
+    /* The poll interval the dwells are serviced at (chanhop_sweep_quantum()):
+     * a dwell only ends at a poll, so a plan that is not a multiple of it
+     * runs long every time, and the pass outruns the time given. The
+     * equal dwell is rounded down to it. 0: not rounded. */
+    uint32_t sweep_quantum_ms;
 } chanhop_t;
 
 /* A sweep dwell is never shorter: ten beacon intervals at the 102.4 ms
@@ -175,6 +180,10 @@ int chanhop_init_default(chanhop_t *h);
  * swept. No 6 GHz: its 59 channels do not fit, and the report names the
  * band as not swept. Returns the channel count. */
 int chanhop_init_sweep(chanhop_t *h, unsigned minutes);
+
+/* Round the sweep dwell down to a multiple of `poll_ms`, the interval
+ * the scheduler is serviced at (above). */
+void chanhop_sweep_quantum(chanhop_t *h, uint32_t poll_ms);
 
 /* The dwell every slot of a sweep plan gets, ms; 0 when not a sweep. */
 uint32_t chanhop_sweep_dwell_ms(const chanhop_t *h);

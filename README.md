@@ -101,10 +101,13 @@ is kept out of the sensor ([ADR 0011](docs/wiki/adr/0011-sloth-va-transmits.md))
 - **Reports.** `--report` / `--report-json` (posture, collection
   coverage, and what the designated site reveals to an outside
   observer), `--preflight` before a session, `--handoff DIR` (the site
-  handoff packet) and `--interference-report`. See
-  [posture-report](docs/wiki/posture-report.md),
+  handoff packet), `--interference-report` and `--sweep LABEL
+  --sweep-minutes N` (a time-limited sweep of a room or site, every
+  emitter heard as new, known or missing against the label's baseline).
+  See [posture-report](docs/wiki/posture-report.md),
   [exposure-report](docs/wiki/exposure-report.md),
-  [preflight](docs/wiki/preflight.md), [handoff](docs/wiki/handoff.md).
+  [preflight](docs/wiki/preflight.md), [handoff](docs/wiki/handoff.md),
+  [sweep session](docs/wiki/sweep-session.md).
 - **Evidence.** Per-alert pcaps (`--pcap-dir`) with evidence
   manifests, and an optional hash chain over the `-o` file that
   `sloth --verify` checks ([record-integrity](docs/wiki/record-integrity.md)).

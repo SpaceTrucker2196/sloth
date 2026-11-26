@@ -167,6 +167,7 @@ CORE_BASE_SRCS = \
        src/sweep.c           \
        src/sweep_cov.c       \
        src/sweep_report.c    \
+       src/sweep_run.c       \
        src/wifi_assess.c     \
        src/wifi_baseline.c   \
        src/sensors.c         \

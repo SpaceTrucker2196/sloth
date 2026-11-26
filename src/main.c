@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/stat.h>
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "alert_lifecycle.h"
@@ -145,6 +146,7 @@
 #include "rf_moved.h"
 #include "cov_interval_capture.h"
 #include "handoff.h"
+#include "sweep_run.h"     /* --sweep (#249) */
 #include "interference.h"
 #include "jsonl_chain.h"
 #include "site_db.h"
@@ -389,6 +391,7 @@ static void print_usage(const char *argv0) {
             "       [--preflight [--json]] [--handoff DIR]\n"
             "       [--interference-report FILE [--from T] [--to T]]\n"
             "       [--jsonl-chain N] [--verify PATH]\n"
+            "       [--sweep LABEL --sweep-minutes N [--sweep-dir DIR]]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created 0600 if it doesn't\n"
             "                     exist; an existing FILE must already be\n"
@@ -832,6 +835,21 @@ static void print_usage(const char *argv0) {
             "                     only), README.txt. Files 0600; no user\n"
             "                     name or cookie sloth.db holds. Exit 0\n"
             "                     written, 2 not. See docs/wiki/handoff.md.\n"
+            "  --sweep LABEL      a time-limited sweep of a room or site (needs\n"
+            "                     --hop and --sweep-minutes): the preflight\n"
+            "                     first (a fail exits 2), then every 2.4 and\n"
+            "                     5 GHz channel once for an equal share of the\n"
+            "                     time, then a report of every emitter heard\n"
+            "                     (APs, clients, BLE) against the label's\n"
+            "                     accepted baseline: new, known, missing,\n"
+            "                     with what was not swept. Receive-only.\n"
+            "                     LABEL is [A-Za-z0-9._-], at most 48. Refuses\n"
+            "                     --cue and --replay. See\n"
+            "                     docs/wiki/sweep-session.md.\n"
+            "  --sweep-minutes N  the sweep's time, 1..1440 minutes.\n"
+            "  --sweep-dir DIR    where the label's baseline is read and the\n"
+            "                     sweep's inventory and reports are written\n"
+            "                     (0600); default the --db file's directory.\n"
             "  --interference-report FILE\n"
             "                     write one Markdown section per RF_DEGRADED,\n"
             "                     RTS_FLOOD or GNSS_JAMMING episode in --db\n"
@@ -1013,6 +1031,12 @@ int main(int argc, char **argv) {
     const char *ifr_from_arg = NULL;     /* --from T */
     const char *ifr_to_arg   = NULL;     /* --to T */
     const char *inventory_path = NULL;   /* --inventory FILE, for --handoff */
+    const char *sweep_label  = NULL;     /* --sweep LABEL (#249) */
+    const char *sweep_min_arg = NULL;    /* --sweep-minutes N */
+    const char *sweep_dir    = NULL;     /* --sweep-dir DIR */
+    unsigned    sweep_minutes = 0;
+    char        sweep_dir_buf[SWEEP_PATH_MAX];
+    char        sweep_session[SWEEP_LABEL_MAX + 8];
     time_t      session_start = sloth_wall();
     /* The wall stamp above is evidence (the DB session row, the posture
      * report header). The baseline settle delay below is a duration and
@@ -1286,6 +1310,12 @@ int main(int argc, char **argv) {
             handoff_dir = argv[++i];
         } else if (!strcmp(argv[i], "--verify") && i + 1 < argc) {
             verify_path = argv[++i];
+        } else if (!strcmp(argv[i], "--sweep") && i + 1 < argc) {
+            sweep_label = argv[++i];
+        } else if (!strcmp(argv[i], "--sweep-minutes") && i + 1 < argc) {
+            sweep_min_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--sweep-dir") && i + 1 < argc) {
+            sweep_dir = argv[++i];
         } else if (!strcmp(argv[i], "--jsonl-chain") && i + 1 < argc) {
             char cerr[96];
             if (jc_parse_block(argv[++i], &jsonl_chain, cerr, sizeof(cerr)) != 0) {
@@ -1395,6 +1425,71 @@ int main(int argc, char **argv) {
                         "--interference-report are separate commands: "
                         "give one\n");
         return 2;
+    }
+    /* --sweep (#249) is a capture run of its own shape: it runs the
+     * preflight itself, and every offline command starts nothing. */
+    if (sweep_label && (preflight || handoff_dir || ifr_out || verify_path)) {
+        fprintf(stderr, "sloth: --sweep runs a capture; --preflight, "
+                        "--handoff, --verify and --interference-report are "
+                        "separate commands\n");
+        return 2;
+    }
+    if ((sweep_min_arg || sweep_dir) && !sweep_label) {
+        fprintf(stderr, "sloth: --sweep-minutes and --sweep-dir qualify "
+                        "--sweep: there is no sweep\n");
+        return 2;
+    }
+    if (sweep_label) {
+        if (!sweep_label_ok(sweep_label)) {
+            fprintf(stderr, "sloth: --sweep LABEL: 1 to %d of A-Z a-z 0-9 . _ -, "
+                            "not starting with . or -\n", SWEEP_LABEL_MAX);
+            return 2;
+        }
+        if (!sweep_min_arg || sweep_minutes_parse(sweep_min_arg, &sweep_minutes) != 0) {
+            fprintf(stderr, "sloth: --sweep needs --sweep-minutes N, 1..%d\n",
+                    SWEEP_MINUTES_MAX);
+            return 2;
+        }
+        if (!g_hop_enabled) {
+            fprintf(stderr, "sloth: --sweep visits every channel: it needs --hop\n");
+            return 2;
+        }
+        /* Cueing lengthens a channel's dwell on a finding (#248); a
+         * sweep's coverage is equal by design, so the two cannot run
+         * together. */
+        if (g_cue_asked) {
+            fprintf(stderr, "sloth: --sweep refuses --cue: a sweep gives every "
+                            "channel the same time\n");
+            return 2;
+        }
+        if (replay_arg) {
+            fprintf(stderr, "sloth: --sweep listens to the room: --replay has "
+                            "no radio\n");
+            return 2;
+        }
+        if (!sweep_dir) {
+            if (!db_path) {
+                fprintf(stderr, "sloth: --sweep needs --sweep-dir DIR or --db "
+                                "FILE (its directory) for the baseline and the "
+                                "reports\n");
+                return 2;
+            }
+            const char *sl = strrchr(db_path, '/');
+            int dn = sl ? (int)(sl - db_path) : 0;
+            snprintf(sweep_dir_buf, sizeof(sweep_dir_buf), "%.*s",
+                     sl ? (dn ? dn : 1) : 1, sl ? db_path : ".");
+            sweep_dir = sweep_dir_buf;
+        }
+        struct stat sd;
+        if (stat(sweep_dir, &sd) != 0 || !S_ISDIR(sd.st_mode)) {
+            fprintf(stderr, "sloth: --sweep-dir %s: not a directory\n", sweep_dir);
+            return 2;
+        }
+        if (strlen(sweep_dir) > SWEEP_PATH_MAX - 96) {
+            fprintf(stderr, "sloth: --sweep-dir: path too long\n");
+            return 2;
+        }
+        snprintf(sweep_session, sizeof(sweep_session), "sweep:%s", sweep_label);
     }
     /* --verify (#251) reads the one path it names and writes nothing. */
     if (verify_path) return jc_verify_main(verify_path, stdout);
@@ -1675,7 +1770,17 @@ int main(int argc, char **argv) {
 #endif
     }
 
-    if (g_hop_enabled) chanhop_init_default(&g_chanhop);
+    static chanhop_t sweep_plan;            /* the whole list, before the deal */
+    if (g_hop_enabled) {
+        if (sweep_label) {
+            chanhop_init_sweep(&g_chanhop, sweep_minutes);
+            chanhop_sweep_quantum(&g_chanhop, refresh_ms > 0 ? (uint32_t)refresh_ms
+                                                             : POLL_MS);
+        } else {
+            chanhop_init_default(&g_chanhop);
+        }
+        sweep_plan = g_chanhop;
+    }
     /* The per-interval coverage record reads radio 0's dwell from this
      * scheduler (#242 item 2); without --hop the radio is not retuned. */
     cov_iv_capture_set_hop0(g_hop_enabled ? &g_chanhop : NULL);
@@ -1700,7 +1805,7 @@ int main(int argc, char **argv) {
      * opened, no thread exists and no sink is created. The preflight
      * reads what the run would use, prints one page and exits.
      * --handoff (#250) carries the same preflight in its packet. */
-    if (preflight || handoff_dir) {
+    if (preflight || handoff_dir || sweep_label) {
         static pf_config_t pf;
         memset(&pf, 0, sizeof(pf));
         for (int i = 0; i < allow_iface_count && i < PF_MAX_IFACE; i++)
@@ -1770,7 +1875,27 @@ int main(int argc, char **argv) {
             hc.now          = sloth_wall();
             return handoff_write(&hc, stderr);
         }
-        return preflight_main(&pf, preflight_json, stdout);
+        if (preflight) return preflight_main(&pf, preflight_json, stdout);
+        /* --sweep (#249): the same checks in process, before anything
+         * opens; the page goes to stderr and a fail stops the sweep
+         * before its session starts. */
+        static pf_facts_t pff;
+        static pf_result_t pfr;
+        memset(&pff, 0, sizeof(pff));
+        memset(&pfr, 0, sizeof(pfr));
+        preflight_gather(&pf, preflight_default_ops(), &pff);
+        pf_run_checks(&pf, &pff, &pfr);
+        pf_print_text(&pfr, stderr);
+        if (pf_exit_code(&pfr) == 2) {
+            fprintf(stderr, "sloth: --sweep %s not started: the preflight "
+                            "failed\n", sweep_label);
+            return 2;
+        }
+        fprintf(stderr, "sloth: --sweep %s: %u min over %d channels of 2.4 and "
+                        "5 GHz, %u ms each, one pass, then a report against the "
+                        "label's baseline in %s; receive-only, nothing "
+                        "transmitted\n", sweep_label, sweep_minutes,
+                g_chanhop.count, chanhop_sweep_dwell_ms(&g_chanhop), sweep_dir);
     }
 
     memset(&g_state, 0, sizeof(g_state));
@@ -2110,7 +2235,8 @@ int main(int argc, char **argv) {
     /* sys_status reports the filesystem its output lands on: the
      * database's, else the JSONL file's. */
     sys_status_set_disk_path(db_path ? db_path : jsonl_path, db_path ? "db" : "jsonl");
-    if (db_path && daemon_open_db(db_path, site_label, session_start) != 0)
+    if (db_path && daemon_open_db(db_path, sweep_label ? sweep_session : site_label,
+                                  session_start) != 0)
         return 1;
     if (data_socket) {
         if (daemon_open_data_socket(data_socket, ds_allow_remote,
@@ -2249,10 +2375,30 @@ int main(int argc, char **argv) {
     int report_prune = report_interval || report_history;
     if (report_prune) prune_report_records(report_md, report_json);
 
+    /* --sweep (#249): the clock starts with the loop. */
+    static sweep_run_t sweep;
+    if (sweep_label) {
+        char serr[256];
+        if (sweep_run_begin(&sweep, sweep_label, sweep_minutes, sweep_dir,
+                            &sweep_plan, sloth_mono_ms(), sloth_wall(),
+                            serr, sizeof(serr)) != 0) {
+            fprintf(stderr, "sloth: --sweep %s\n", serr);
+            g_quit = 1;
+            sweep_label = NULL;
+        } else {
+            fprintf(stderr, "sloth: --sweep %s: baseline %s\n", sweep_label,
+                    sweep.base ? sweep.baseline : "none accepted yet: every "
+                                                  "emitter will be new");
+        }
+    }
+
     int  first_poll = 1;
     long ticks_done = 0;
     while (!g_quit) {
         poll_data(&g_state);
+        if (sweep_label && sweep_run_tick(&sweep, &g_state, &g_chanhop,
+                                          sloth_mono_ms()))
+            break;
         if (first_poll) {
             first_poll = 0;
             /* #25: with a monitor radio present, hide the noise interfaces
@@ -2421,6 +2567,13 @@ int main(int argc, char **argv) {
             fprintf(stderr, "sloth: could not write snapshot %s\n",
                     wifi_snapshot_error());
     }
+
+    /* --sweep (#249): the inventory, the reports and the record, before
+     * the JSONL sink closes. */
+    if (sweep_label)
+        (void)sweep_run_finish(&sweep, &g_state, !sweep.done,
+                               bt_monitor || bt_capture != NULL, sloth_wall(),
+                               stderr);
 
     dns_cleanup();
     g_platform.cleanup();
