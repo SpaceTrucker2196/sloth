@@ -28,7 +28,11 @@
  * gets more time but can never starve the rest. Activity decays each visit,
  * making it a rolling window rather than an all-time count. */
 
-#define CHANHOP_MAX 32
+/* 48 since #249: a sweep visits every 20 MHz channel of 2.4 and 5 GHz
+ * (38). The default --hop list is 11. The per-slot masks a record
+ * carries (sensor_health chan_refused_mask, the scan bar) cover slots
+ * 0..31 as before. */
+#define CHANHOP_MAX 48
 
 typedef struct {
     int      channel;    /* 802.11 channel number */
@@ -109,7 +113,21 @@ typedef struct {
      * other radios' cues so the radios' shares together stay within
      * half of their time. Read by the cued-plan clamp only. */
     uint32_t cue_cap_pm;
+    /* Sweep plan (#249, chanhop_init_sweep()): the sweep's whole time in
+     * ms, 0 when this is not a sweep. Every channel's dwell is then
+     * sweep_ms / count (at least CHANHOP_SWEEP_FLOOR_MS), whatever its
+     * activity, and the rotation stops after one pass: sweep_done is 1
+     * once every slot has been visited or refused and the last dwell
+     * has run out, and chanhop_tick() then proposes nothing. */
+    uint64_t sweep_ms;
+    int      sweep_done;
 } chanhop_t;
+
+/* A sweep dwell is never shorter: ten beacon intervals at the 102.4 ms
+ * every AP's default is (IEEE 802.11-2020 §11.1.3.2, dot11BeaconPeriod
+ * 100 TU). With too many channels for the time given, the floor wins
+ * and the sweep reports the channels it did not reach. */
+#define CHANHOP_SWEEP_FLOOR_MS 1024u
 
 /* A cued channel's dwell is this many times its normal plan (owner
  * ruling on #248, 2026-11-23: "4x the normal dwell"). */
@@ -148,6 +166,18 @@ int chanhop_init_bands(chanhop_t *h, const chanhop_chan_t *chans, int n);
 
 /* Initialise with the built-in safe 2.4/5 GHz list (1,6,11 + common UNII). */
 int chanhop_init_default(chanhop_t *h);
+
+/* The sweep plan (#249): every 20 MHz channel of 2.4 GHz (1-13) and
+ * 5 GHz (36-64, 100-144, 149-165), each dwelt on once for an equal share
+ * of `minutes` (sweep_ms above). DFS channels included: the radio only
+ * listens (a monitor interface sends nothing, MISSION §2), and a driver
+ * that will not tune one refuses it, which the sweep reports as not
+ * swept. No 6 GHz: its 59 channels do not fit, and the report names the
+ * band as not swept. Returns the channel count. */
+int chanhop_init_sweep(chanhop_t *h, unsigned minutes);
+
+/* The dwell every slot of a sweep plan gets, ms; 0 when not a sweep. */
+uint32_t chanhop_sweep_dwell_ms(const chanhop_t *h);
 
 /* Record activity observed on the current channel during this poll.
  *

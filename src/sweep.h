@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <time.h>
 #include "sloth.h"
+#include "wifi_chanhop.h"
 
 /* ── Sweep inventory (#249) ──────────────────────────────────────────
  *
@@ -158,6 +159,59 @@ typedef struct {
  * accepted baseline for the label. */
 int  sweep_compare(const sw_inv_t *cur, const sw_inv_t *base, sw_cmp_t *out);
 void sweep_cmp_free(sw_cmp_t *c);
+
+/* ── Coverage (src/sweep_cov.c) ──
+ *
+ * What the sweep's radios actually did, channel by channel: time on the
+ * channel (the schedulers' own dwell accounting, chanhop_slot_time_ms(),
+ * differenced each poll per radio, so a re-deal that resets a scheduler
+ * loses nothing), frames attributed, visits, and retunes the driver
+ * refused. A channel is swept when time was spent on it; one in the
+ * plan with none is not swept, with its refusals if it had any. The
+ * plan is the full list as chanhop_init_sweep() built it, before the
+ * radios' deal. Pure over chanhop_t: a test drives it with a synthetic
+ * clock through the fake platform. */
+#define SW_COV_MAX CHANHOP_MAX
+
+typedef struct {
+    int      freq_mhz;
+    int      channel;
+    int      band;          /* wifi_band_t */
+    uint64_t ms;            /* time on the channel, all radios */
+    uint64_t frames;
+    uint32_t visits;
+    uint32_t refusals;
+} sw_cov_ch_t;
+
+#define SW_COV_RADIOS 8
+
+typedef struct {
+    int         n;
+    sw_cov_ch_t ch[SW_COV_MAX];
+    uint32_t    planned_dwell_ms;     /* the full list's equal dwell */
+    uint64_t    sweep_ms;             /* the time given */
+    uint64_t    start_ms, last_ms;    /* monotonic, first and last sample */
+    int         radios;               /* radios that held a share */
+    /* Per radio, the scheduler's slots as last read. */
+    struct {
+        int      n;
+        int      freq[CHANHOP_MAX];
+        uint64_t ms[CHANHOP_MAX];
+        uint64_t fr[CHANHOP_MAX];
+        uint32_t vis[CHANHOP_MAX];
+        uint32_t ref[CHANHOP_MAX];
+    } base[SW_COV_RADIOS];
+} sw_cov_t;
+
+/* Start from the plan (`full`, as chanhop_init_sweep() left it). */
+void sweep_cov_init(sw_cov_t *c, const chanhop_t *full, uint64_t now_ms);
+/* One radio's scheduler at now_ms (radio 0 is main.c's; k >= 1 the
+ * further --monitor-iface radios). A slot whose frequency moved or
+ * whose totals fell (a re-deal reset the scheduler) is differenced from
+ * zero. */
+void sweep_cov_sample(sw_cov_t *c, int radio, const chanhop_t *h, uint64_t now_ms);
+/* Channels swept (time > 0) and not swept. */
+int  sweep_cov_swept(const sw_cov_t *c);
 
 /* "ap", "client", "ble"; "public", "static"; "new", "known", "missing". */
 const char *sweep_kind_name(int kind);

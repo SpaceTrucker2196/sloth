@@ -12,6 +12,9 @@
 #include "beacon_snoop.h"
 #include "ble_hci.h"
 #include "reset_all.h"
+#include "fake_platform.h"
+#include "wifi_chanhop.h"
+#include <errno.h>
 
 /* The sweep session (#249). Addresses are locally administered or
  * documentation-like values chosen here; a camera vendor's block is read
@@ -457,6 +460,125 @@ out:
     sweep_inv_free(base);
 }
 
+/* ── the sweep plan and its coverage ── */
+
+static void test_sweep_plan_is_equal_dwell(void) {
+    chanhop_t h;
+    ASSERT_EQ(chanhop_init_sweep(&h, 10), 38);
+    int n24 = 0, n5 = 0;
+    for (int i = 0; i < h.count; i++) {
+        n24 += h.slots[i].band == WIFI_BAND_2GHZ;
+        n5  += h.slots[i].band == WIFI_BAND_5GHZ;
+    }
+    ASSERT_EQ(n24, 13);
+    ASSERT_EQ(n5, 25);
+    ASSERT_EQ(chanhop_sweep_dwell_ms(&h), 600000u / 38u);
+    /* Activity, and a cue, move nothing. */
+    h.slots[3].activity = 5000;
+    chanhop_set_cue(&h, 4, 999999, 0);
+    ASSERT_EQ(h.slots[4].cue_until_ms, 0);
+    for (int i = 0; i < h.count; i++)
+        ASSERT_EQ(chanhop_slot_plan_ms(&h, i), 600000u / 38u);
+    /* Too little time for the channels: the floor. A whole minute over
+     * 38 channels is above it, so the time is set by hand. */
+    ASSERT_EQ(chanhop_init_sweep(&h, 1), 38);
+    h.sweep_ms = 10000;
+    ASSERT_EQ(chanhop_sweep_dwell_ms(&h), CHANHOP_SWEEP_FLOOR_MS);
+    /* Zero minutes is not a sweep. */
+    chanhop_init_sweep(&h, 0);
+    ASSERT_EQ(chanhop_sweep_dwell_ms(&h), 0u);
+    /* A radio's share spreads the whole time over its own channels. */
+    chanhop_t full, part;
+    chanhop_init_sweep(&full, 10);
+    ASSERT_EQ(chanhop_split(&part, &full, 2, 1), 19);
+    ASSERT_EQ(chanhop_sweep_dwell_ms(&part), 600000u / 19u);
+    /* Not a sweep: the #22 plan, unchanged. */
+    chanhop_init_default(&h);
+    ASSERT_EQ(chanhop_sweep_dwell_ms(&h), 0u);
+}
+
+/* Drive one radio through the fake platform on a synthetic clock, a
+ * 50 ms poll, until `stop_ms` or the pass ends; sample the coverage
+ * each poll. */
+static uint64_t drive(chanhop_t *h, sw_cov_t *c, uint64_t stop_ms) {
+    uint64_t t = 0;
+    sweep_cov_init(c, h, 0);
+    for (; t <= stop_ms && !h->sweep_done; t += 50) {
+        int req = 0, err = 0;
+        (void)chanhop_step(h, "mon0", t, 2, &req, &err);
+        sweep_cov_sample(c, 0, h, t);
+    }
+    return t;
+}
+
+static const sw_cov_ch_t *cov_ch(const sw_cov_t *c, int mhz) {
+    for (int i = 0; i < c->n; i++)
+        if (c->ch[i].freq_mhz == mhz) return &c->ch[i];
+    return NULL;
+}
+
+/* One minute over 38 channels: each visited once, an equal time, then
+ * the pass ends; channel 6 refused is counted and is not swept. */
+static void test_sweep_one_pass_and_a_refusal(void) {
+    fake_net_reset();
+    g_fake_net.refuse_freq_mhz = 2437;
+    g_fake_net.refuse_rc = -EINVAL;
+    chanhop_t h;
+    chanhop_init_sweep(&h, 1);
+    static sw_cov_t c;
+    uint64_t end = drive(&h, &c, 10 * 60000);
+    ASSERT(h.sweep_done);
+    ASSERT(end < 65000);
+    uint32_t d = chanhop_sweep_dwell_ms(&h);
+    ASSERT_EQ(d, 60000u / 38u);
+    for (int i = 0; i < h.count; i++) {
+        const sw_cov_ch_t *e = cov_ch(&c, h.slots[i].freq_mhz);
+        ASSERT(e != NULL);
+        if (!e) continue;
+        if (h.slots[i].freq_mhz == 2437) {
+            ASSERT_EQ(e->visits, 0u);
+            ASSERT_EQ(e->refusals, 1u);
+            ASSERT_EQ(e->ms, 0u);
+            continue;
+        }
+        ASSERT_EQ(e->visits, 1u);
+        ASSERT_EQ(e->refusals, 0u);
+        /* Measured, start of dwell to start of next, on a 50 ms poll:
+         * the plan rounded up to the poll, and the refused retune's
+         * floor inside the dwell before it. */
+        ASSERT(e->ms >= d && e->ms <= d + 50 + h.min_dwell_ms + 50);
+    }
+    ASSERT_EQ(sweep_cov_swept(&c), 37);
+    ASSERT_EQ(c.n, 38);
+}
+
+/* Stopped at 40 % of the time: only the channels actually dwelt on are
+ * swept, with their measured times, and the rest are listed as not
+ * swept. */
+static void test_sweep_stopped_early(void) {
+    fake_net_reset();
+    chanhop_t h;
+    chanhop_init_sweep(&h, 10);
+    static sw_cov_t c;
+    uint64_t stop = 600000u * 4 / 10;
+    (void)drive(&h, &c, stop);
+    ASSERT(!h.sweep_done);
+    uint32_t d = chanhop_sweep_dwell_ms(&h);
+    int swept = sweep_cov_swept(&c);
+    /* 240 s at 15.789 s a channel: 15 closed dwells and the 16th open. */
+    ASSERT_EQ(swept, 16);
+    uint64_t total = 0;
+    for (int i = 0; i < c.n; i++) {
+        const sw_cov_ch_t *e = &c.ch[i];
+        total += e->ms;
+        if (i < 15) ASSERT(e->ms >= d && e->ms <= d + 50);
+        else if (i == 15) ASSERT(e->ms > 0 && e->ms < d);
+        else ASSERT(e->ms == 0 && e->visits == 0);
+    }
+    ASSERT_EQ(total, stop);
+    ASSERT_EQ(c.n - swept, 22);
+}
+
 void run_sweep_tests(void) {
     TEST_SUITE("sweep (#249): inventory");
     RUN_TEST(test_ble_kept_types);
@@ -470,4 +592,8 @@ void run_sweep_tests(void) {
     TEST_SUITE("sweep (#249): compare with the baseline");
     RUN_TEST(test_compare_sorts_and_marks);
     RUN_TEST(test_two_passes_of_one_room);
+    TEST_SUITE("sweep (#249): the plan and its coverage");
+    RUN_TEST(test_sweep_plan_is_equal_dwell);
+    RUN_TEST(test_sweep_one_pass_and_a_refusal);
+    RUN_TEST(test_sweep_stopped_early);
 }

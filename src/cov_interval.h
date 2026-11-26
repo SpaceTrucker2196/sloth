@@ -31,9 +31,11 @@
  * written. */
 #define COV_IV_MS       60000
 
-/* The channels one record holds: the most a --hop list has
- * (CHANHOP_MAX). Under --hop the radios' shares are disjoint, so this
- * is every channel; a re-deal after a radio is lost can put one channel
+/* The channels one record holds: the most a --hop list had before a
+ * sweep (#249) raised CHANHOP_MAX to 48. Under --hop the radios' shares
+ * are disjoint, so this is every channel of the default list; a sweep
+ * of a minute or two can dwell on more than 32 channels in one minute,
+ * and a re-deal after a radio is lost can put one channel
  * on two radios in one interval, and an entry beyond the bound is
  * counted in chan_overflow rather than written. Its time still counts
  * in band_ms and radio_ms, so the band shares cover the whole minute;

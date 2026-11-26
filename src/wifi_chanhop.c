@@ -25,7 +25,25 @@ int chanhop_freq(int channel) {
     return wifi_freq_mhz(wifi_freq_infer_band(channel), channel);
 }
 
+static const int SWEEP_24[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
+static const int SWEEP_5[]  = { 36, 40, 44, 48, 52, 56, 60, 64,
+                                100, 104, 108, 112, 116, 120, 124, 128,
+                                132, 136, 140, 144,
+                                149, 153, 157, 161, 165 };
+
+uint32_t chanhop_sweep_dwell_ms(const chanhop_t *h) {
+    if (!h || !h->sweep_ms || h->count == 0) return 0;
+    uint64_t d = h->sweep_ms / (uint64_t)h->count;
+    if (d < CHANHOP_SWEEP_FLOOR_MS) d = CHANHOP_SWEEP_FLOOR_MS;
+    if (d > UINT32_MAX) d = UINT32_MAX;
+    return (uint32_t)d;
+}
+
 static uint32_t dwell_for(const chanhop_t *h, uint32_t activity) {
+    /* A sweep gives every channel the same time (#249): activity would
+     * move it to where the traffic already is, which is what a sweep
+     * must not do. */
+    if (h->sweep_ms) return chanhop_sweep_dwell_ms(h);
     uint64_t d = (uint64_t)h->base_dwell_ms + (uint64_t)activity * h->ms_per_obs;
     if (d < h->min_dwell_ms) d = h->min_dwell_ms;
     if (d > h->max_dwell_ms) d = h->max_dwell_ms;
@@ -40,6 +58,7 @@ static uint32_t dwell_for(const chanhop_t *h, uint32_t activity) {
  * "cued plans <= 2 x cued normal plans + uncued plans". */
 static uint32_t cued_plan(const chanhop_t *h, int t, uint64_t now_ms) {
     uint64_t d = dwell_for(h, h->slots[t].activity);
+    if (h->sweep_ms) return (uint32_t)d;     /* a sweep's dwell is equal (#249) */
     uint64_t uncued = 0, other_n = 0;
     for (int j = 0; j < h->count; j++) {
         if (j == t) continue;
@@ -114,6 +133,17 @@ int chanhop_init_default(chanhop_t *h) {
                         (int)(sizeof(DEFAULT_CHANNELS) / sizeof(DEFAULT_CHANNELS[0])));
 }
 
+int chanhop_init_sweep(chanhop_t *h, unsigned minutes) {
+    if (!h) return 0;
+    chanhop_reset(h);
+    for (size_t i = 0; i < sizeof(SWEEP_24) / sizeof(SWEEP_24[0]); i++)
+        chanhop_add(h, WIFI_BAND_2GHZ, SWEEP_24[i]);
+    for (size_t i = 0; i < sizeof(SWEEP_5) / sizeof(SWEEP_5[0]); i++)
+        chanhop_add(h, WIFI_BAND_5GHZ, SWEEP_5[i]);
+    h->sweep_ms = (uint64_t)minutes * 60000u;
+    return h->count;
+}
+
 void chanhop_observe(chanhop_t *h, uint32_t observations) {
     /* Before the first acknowledged retune the radio is on whatever
      * channel it was left on, which need not be in the rotation at all;
@@ -140,6 +170,13 @@ int chanhop_tick(chanhop_t *h, uint64_t now_ms) {
     if (h->pending >= 0) return 1;
 
     if (now_ms < h->dwell_until_ms) return 0;   /* still dwelling */
+
+    /* One pass, then stop (#249): the slot after the last is the first
+     * again, and a sweep does not go round twice. */
+    if (h->sweep_ms && h->next == 0) {
+        h->sweep_done = 1;
+        return 0;
+    }
 
     h->pending = h->next;                       /* rotation → guaranteed revisit */
     return 1;
@@ -262,7 +299,9 @@ int chanhop_cue_fits_alone(const chanhop_t *h, int i) {
 }
 
 void chanhop_set_cue(chanhop_t *h, int i, uint64_t until_ms, uint64_t now_ms) {
-    if (!h || i < 0 || i >= h->count) return;
+    /* A sweep holds equal dwell (#249): main.c refuses --cue with
+     * --sweep, and a cue that reached a sweep plan anyway is not set. */
+    if (!h || i < 0 || i >= h->count || h->sweep_ms) return;
     h->slots[i].cue_until_ms = until_ms > now_ms ? until_ms : 0;
     /* The radio is on the channel now: the dwell under way becomes the
      * cued one, from when it began, instead of waiting a rotation. */
@@ -417,6 +456,9 @@ int chanhop_split(chanhop_t *h, const chanhop_t *full, int radios, int k) {
     if (!full || radios < 1 || k < 0 || k >= radios) return 0;
     for (int i = k; i < full->count && i < CHANHOP_MAX; i += radios)
         chanhop_add(h, full->slots[i].band, full->slots[i].channel);
+    /* A sweep's share keeps the sweep's time (#249): each radio spreads
+     * the whole time over its own share. */
+    h->sweep_ms = full->sweep_ms;
     return h->count;
 }
 
