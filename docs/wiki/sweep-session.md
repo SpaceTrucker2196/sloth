@@ -100,12 +100,12 @@ sloth and slothweb both run as `sloth` on the reference host today, but neither 
 groupadd --system sloth-sweep
 usermod -aG sloth-sweep sloth                       # the account the sweep runs as
 usermod -aG sloth-sweep <slothweb's account>        # when it is another one
-install -d -o sloth -g sloth-sweep -m 2770 /var/lib/sloth/sweep
+install -d -o sloth -g sloth-sweep -m 2770 /var/lib/sloth-sweep
 # or, for an existing directory:
-chgrp sloth-sweep /var/lib/sloth/sweep && chmod 2770 /var/lib/sloth/sweep
+chgrp sloth-sweep /var/lib/sloth-sweep && chmod 2770 /var/lib/sloth-sweep
 ```
 
-and in slothweb's unit (sloth-mesh's `packaging/systemd/slothweb.service`), `SupplementaryGroups=sloth-sweep` with `--sweep-dir /var/lib/sloth/sweep --sweep-group sloth-sweep` on its command line; a sweep run by hand as `sloth` (`sudo -u sloth`, which applies the account's groups) then passes `--sweep-dir /var/lib/sloth/sweep --sweep-group sloth-sweep`.
+A directory outside `/var/lib/sloth`, which slothweb's unit holds read-only on purpose. In slothweb's unit (a drop-in, `systemctl edit slothweb`), `SupplementaryGroups=sloth-sweep` and `ReadWritePaths=-/var/lib/sloth-sweep`, with `--sweep-dir /var/lib/sloth-sweep --sweep-group sloth-sweep` on its command line (sloth-mesh's README, "Sweep"); a sweep run by hand as `sloth` (`sudo -u sloth`, which applies the account's groups) then passes `--sweep-dir /var/lib/sloth-sweep --sweep-group sloth-sweep`.
 
 What sloth holds the directory to with `--sweep-group` (`src/sweep_run.h`, `sweep_dir_check()`): a real directory (a symlink is refused), owned by the account sloth runs as or root, in the group, mode exactly `2770` or `0770`. `2770` is the one to use: setgid makes every file created in it the group's without the creating account having to be a member. The inventory and the two reports are created `0640`, in the group (`fchown` when the directory did not give it, which needs membership), `O_EXCL` and `O_NOFOLLOW` against the directory's descriptor, which is checked again at the end. The baseline is read only if it is a regular file with one link and no bit for other, owned by sloth's account or in the group (slothweb's account writes it `0640`); a symlink is refused, not followed.
 
