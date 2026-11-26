@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>35 views — sloth</title>
+<title>Views — sloth</title>
 <meta name="description" content="Every sloth view: what it shows, what to watch for. 20 observation views, 4 synthesis views, 5 WiFi SIGINT views, tab-cycle or jump by keybind.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,7 +22,7 @@
     </a>
     <div class="nav-links">
       <a href="index.html#what">What it sees</a>
-      <a href="views.html">35 views</a>
+      <a href="views.html">Views</a>
       <a href="philosophy.html">Philosophy</a>
       <a href="streaming.html">Stream</a>
       <a href="quickstart.html">Quickstart</a>
@@ -36,12 +36,15 @@
   <div class="page-header-inner">
     <a class="back-link" href="index.html">← Home</a>
     <p class="page-eyebrow">The catalog</p>
-    <h1 class="page-title">Thirty-five views.</h1>
+    <h1 class="page-title">The views.</h1>
     <p class="page-lede">
       Each view is its own keybinding, its own ring buffer, its own
       protocol or synthesis. Press <kbd>Tab</kbd> to cycle. Press
       <kbd>o</kbd> for the composite dashboard, <kbd>l</kbd> for the
-      OSI grid. Press <kbd>/</kbd> in any list view to filter.
+      OSI grid. Press <kbd>/</kbd> in any list view to filter. These are
+      <code>sloth-wifi</code>'s views; ADS-B, APRS, rtl_433 and the SDR
+      sweep are read by the headless <code>sloth-rf</code> and the
+      helpers, and shown in the slothweb browser dashboard.
       Twenty observation views, nine synthesis views, five WiFi-SIGINT
       views and the help card &mdash; <code>VIEW_COUNT</code> in
       <code>include/sloth.h</code> is the source of truth.
@@ -192,7 +195,7 @@
       <h5>Navigate</h5>
       <ul>
         <li><a href="index.html">Home</a></li>
-        <li><a href="views.html">35 views</a></li>
+        <li><a href="views.html">Views</a></li>
         <li><a href="philosophy.html">Philosophy</a></li>
         <li><a href="streaming.html">Stream</a></li>
         <li><a href="quickstart.html">Quickstart</a></li>
@@ -202,18 +205,20 @@
     <div class="footer-col footer-about">
       <h5>About</h5>
       <p>
-        Passive, white-hat SIGINT for IP and 802.11. Thirty-five
-        live views, 61 passive alert rules, a WiFi-SIGINT toolkit, and a
-        JSONL stream you can pipe into any SIEM. Built in C99 for
-        Linux, with a small reference consumer + forwarder in
-        Python.
+        Citizen SIGINT: an open, receive-only tool for the radio
+        spectrum around you &mdash; Wi-Fi, Bluetooth and BLE, ADS-B,
+        APRS, GNSS, SDR sweeps and the host network. Live views, alert
+        rules with written assessments, and a JSONL stream you can pipe
+        into any SIEM. Radios, not people. Built in C99 for Linux.
       </p>
     </div>
   </div>
   <div class="footer-meta">
     <p>
       Run sloth only on networks you have explicit authority to
-      observe.
+      observe, and follow the law where you are.
+      <a href="https://github.com/SpaceTrucker2196/sloth/blob/main/MISSION.md">MISSION.md</a>
+      has the terms.
     </p>
   </div>
 </footer>
