@@ -16,7 +16,7 @@ It reports radios, not people (`MISSION.md` §2 rule 6).
 It never injects a frame onto a network it monitors — the one absolute
 in `MISSION.md` §2; every other network-using behaviour is opt-in and
 announced. It reads `/proc`, `/sys`, netlink (rtnetlink / nl80211 / INET_DIAG) and a
-pcap stream, then surfaces what it sees through <!-- count:views -->37<!-- /count --> ncurses views
+pcap stream, then surfaces what it sees through <!-- count:views -->38<!-- /count --> ncurses views
 (`VIEW_COUNT`; `sloth-wifi`'s, `sloth-rf` is headless), <!-- count:rules -->101<!-- /count --> alert rules (one per `ALERT_TYPE_*`;
 `sloth-wifi` raises <!-- count:rules-wifi -->96<!-- /count --> of the kinds, `sloth-rf` <!-- count:rules-rf -->6<!-- /count --> of them, `SENSOR_SOURCE_DOWN`
 both), an embedded
