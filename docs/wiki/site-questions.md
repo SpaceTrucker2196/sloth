@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: sloth raises about a hundred alert kinds and had no list of what the operator wants to know. A site question is one question in plain words, the decision it supports, a priority, and the alert kinds that are its indicators. sloth ships seven default questions; each alert kind is an indicator of one or more of them, or is marked "no question" with a reason. Receive-only: a question's answer is derived from findings and coverage figures sloth already holds.
 
-**Sources**: issue #244 (from #241 item 1) and its owner rulings of 2026-11-25; FM 2-0 (2004) figure 1-2 (priority question, specific questions, indicators, collection tasks), 1-34 (a priority question asks only one question and supports a decision) and 4-6 (clear requirements preclude being overwhelmed by too much information), as quoted in the issue; `include/sloth_questions.def` (the questions), `include/sloth_question_map.def` (the indicators); `src/questions.h`, `src/questions.c`; `tests/test_questions.c`.
+**Sources**: issue #244 (from #241 item 1) and its owner rulings of 2026-11-25; FM 2-0 (2004) figure 1-2 (priority question, specific questions, indicators, collection tasks), 1-34 (a priority question asks only one question and supports a decision) and 4-6 (clear requirements preclude being overwhelmed by too much information), as quoted in the issue; `include/sloth_questions.def` (the questions), `include/sloth_question_map.def` (the indicators); `src/questions.h`, `src/questions.c`; `tests/test_questions.c`; [[coverage-assessment]] (the status every answer carries).
 
-**Last updated**: 2026-11-25 (#244: the page)
+**Last updated**: 2026-11-25 (#244: the page, § 4 the status)
 
 ## 1. The default questions
 
@@ -148,6 +148,24 @@ The table is a judgement about what a finding answers, not a fact about the code
 - **Q6, denial and degradation**: floods of deauthentication, authentication, association, beacons, RTS, SA Query and BLE advertising, management frame fuzzing and malformed multi-link elements, forged Block Ack and Reconfiguration elements, unprotected robust action frames on an MFP-required BSS, RF degradation and the GNSS jamming and spoofing kinds.
 - **Q7, the sensor**: no monitor mode, a source down, collection suppressed, under-voltage.
 - **No question**: the kinds about a compromised host or a service on the LAN, weak protocols in use, attacks on one client's traffic (FragAttacks, Framing Frames' queue eviction), a routing session failing, an aircraft's emergency, a new transmitter on a DFS channel, and the host's own Bluetooth transmitting (a check on sloth's own receive-only promise). None of the seven defaults asks about them; an operator's own questions may.
+
+## 4. A question's status
+
+`q_derive()` (`src/questions.c`) gives each question one word from the alerts the daemon holds and the coverage status of the question's indicators ([[coverage-assessment]]):
+
+| Status | When |
+|---|---|
+| `finding` | an indicator has an open finding: preliminary, confirmed or lapsed ([[alerts]] § Finding lifecycle); a withdrawn or resolved one does not count |
+| `no_finding` | no finding, and every indicator is observable |
+| `no_finding_partly` | no finding, and some indicator is partly observable or blind |
+| `not_observable` | no finding, and every indicator is blind |
+| `not_assessed` | no finding, and there is no coverage status: before the first status sample, and in a `--replay` run, which reads files and has no radios to assess |
+
+A finding is reported whatever the coverage: a replayed evil twin gives Q1 `finding` beside coverage that was never assessed, and with no monitor radio and no IP capture Q1 reads `not_observable` (`tests/test_questions.c :: test_acceptance`, the issue's acceptance as the owner ruled it on 2026-11-25). The reason beside a status that is not `no_finding` is the first blind indicator's reason, else the first partly one's, in `sloth_alerts.def` order.
+
+Each daemon answers only for the kinds its rule table raises (`cov_daemon_raises()`). `sloth-rf` raises the GNSS and ADS-B kinds and `SENSOR_SOURCE_DOWN`, so it answers Q6 and Q7 of the defaults; a question none of whose indicators a daemon raises has no answer there and is not reported by it.
+
+The status is about the sensor and the findings it holds, never a claim about the site: `no_finding` is "looked and found nothing", not "nothing is there" ([[coverage-assessment]] § 5).
 
 ## Related pages
 

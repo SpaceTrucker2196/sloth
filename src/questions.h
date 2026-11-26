@@ -3,7 +3,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "sloth_alert.h"
+#include "sloth.h"
+#include "rule_coverage.h"
 
 /* ── Site questions (#244) ───────────────────────────────────────────
  *
@@ -65,5 +66,69 @@ typedef struct {
 
 /* The seven default questions with their indicators. */
 void q_set_defaults(q_set_t *set);
+
+/* ── A question's status ──────────────────────────────────────────────
+ *
+ *   finding            an indicator has an open finding (preliminary,
+ *                      confirmed or lapsed; not withdrawn, not resolved)
+ *   no_finding         none, and every indicator is observable
+ *   no_finding_partly  none, and some indicator is partly observable or
+ *                      blind
+ *   not_observable     none, and every indicator is blind
+ *   not_assessed       none, and there is no coverage status (before
+ *                      the first sample, or a --replay run)
+ * A finding is reported whatever the coverage: a replayed evil twin is a
+ * finding beside coverage that was never assessed. Appended only: the
+ * words are written to the stream and to sloth.db. */
+typedef enum {
+    Q_ST_FINDING = 0,
+    Q_ST_NO_FINDING,
+    Q_ST_NO_FINDING_PARTLY,
+    Q_ST_NOT_OBSERVABLE,
+    Q_ST_NOT_ASSESSED,
+    Q_ST_COUNT
+} q_status_t;
+const char *q_status_name(q_status_t st);
+
+/* What a daemon has of each kind's coverage: which kinds it raises
+ * (cov_daemon_raises()) and, when `assessed`, each one's status. */
+typedef struct {
+    int     assessed;
+    uint8_t raises[ALERT_TYPE_COUNT];
+    uint8_t st[ALERT_TYPE_COUNT];    /* cov_status_t */
+    uint8_t why[ALERT_TYPE_COUNT];   /* cov_reason_t */
+} q_cov_t;
+
+/* The coverage `d` has under `env` (cov_rule_status()); a NULL `env`
+ * leaves it not assessed. Pure: what tests build by hand. */
+void q_cov_from_env(q_cov_t *c, cov_daemon_t d, const cov_env_t *env);
+
+#define Q_IDS_MAX 8
+
+typedef struct {
+    q_status_t   st;
+    int          kinds;         /* indicators this daemon raises */
+    int          observable, partly, blind;   /* of them, when assessed */
+    cov_reason_t why;           /* first blind reason, else first partly
+                                 * one, in sloth_alerts.def order */
+    int          n_alerts;      /* open findings on the indicators */
+    int          nids;          /* their incident ids, newest first */
+    char         ids[Q_IDS_MAX][ALERT_INCIDENT_ID_LEN];
+    uint8_t      found[ALERT_TYPE_COUNT];     /* 1: a kind with a finding */
+} q_result_t;
+
+/* 1 when `a` is an open finding: not resolved, not withdrawn. */
+int q_alert_open(const alert_t *a);
+
+/* The status of `q` from the `n` alerts at `a` (a daemon's snapshot,
+ * newest first) and its coverage `c`. Returns 0, with `out` zeroed, when
+ * none of the question's indicators is raised by this daemon: such a
+ * question has no answer here and is not reported. */
+int q_derive(const q_question_t *q, const alert_t *a, int n, const q_cov_t *c,
+             q_result_t *out);
+
+/* Comma-joined kind names of `found` ("EVIL_TWIN,KARMA_AP"), "" for
+ * none; the length written, truncating at sz-1. */
+int q_found_str(const uint8_t found[ALERT_TYPE_COUNT], char *out, size_t sz);
 
 #endif /* SLOTH_QUESTIONS_H */

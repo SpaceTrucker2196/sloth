@@ -6,6 +6,7 @@
 #include "questions.h"
 #include "exposure.h"
 #include "rule_coverage_live.h"
+#include "alert_lifecycle.h"
 
 /*
  * Site questions (#244): the seven defaults
@@ -196,6 +197,195 @@ static void test_page_holds_the_tables(void) {
     free(page);
 }
 
+
+/* ── status ────────────────────────────────────────────────────────── */
+
+static alert_t g_al[16];
+
+static alert_t *al(int i, alert_type_t t, const char *id) {
+    alert_t *a = &g_al[i];
+    memset(a, 0, sizeof(*a));
+    a->type = t;
+    a->sev = ALERT_SEV_WARN;
+    snprintf(a->incident_id, sizeof(a->incident_id), "%s", id);
+    return a;
+}
+
+/* The sensor as the issue's second replay has it: no monitor radio and
+ * no IP capture; the status sampler runs. */
+static void env_no_radio(cov_env_t *e) {
+    memset(e, 0, sizeof(*e));
+    e->input[COV_IN_SYS] = COV_AV_UP;
+}
+
+/* A radio, the IP capture and the host tables, every designation. */
+static void env_site(cov_env_t *e, int radios, int channels) {
+    memset(e, 0, sizeof(*e));
+    e->input[COV_IN_SYS] = COV_AV_UP;
+    e->input[COV_IN_DOT11] = COV_AV_UP;
+    e->input[COV_IN_IP] = COV_AV_UP;
+    e->input[COV_IN_HOST] = COV_AV_UP;
+    e->bands = COV_B_ALL;
+    e->radios = radios;
+    e->channels = channels;
+    e->hopping = 1;
+    e->config = COV_N_ALL;
+}
+
+static void test_status_names(void) {
+    ASSERT_STR(q_status_name(Q_ST_FINDING), "finding");
+    ASSERT_STR(q_status_name(Q_ST_NO_FINDING), "no_finding");
+    ASSERT_STR(q_status_name(Q_ST_NO_FINDING_PARTLY), "no_finding_partly");
+    ASSERT_STR(q_status_name(Q_ST_NOT_OBSERVABLE), "not_observable");
+    ASSERT_STR(q_status_name(Q_ST_NOT_ASSESSED), "not_assessed");
+    ASSERT_STR(q_status_name(Q_ST_COUNT), "");
+}
+
+/* The issue's acceptance, as the owner ruled it (2026-11-25): with no
+ * monitor radio Q1 is not observable, and a replayed evil twin is a
+ * finding beside coverage that was never assessed. */
+static void test_acceptance(void) {
+    q_set_t set;
+    q_set_defaults(&set);
+    const q_question_t *q1 = &set.q[Q_ID_Q1];
+    cov_env_t e;
+    env_no_radio(&e);
+    q_cov_t c;
+    q_cov_from_env(&c, COV_DAEMON_WIFI, &e);
+    q_result_t r;
+    ASSERT(q_derive(q1, NULL, 0, &c, &r));
+    ASSERT_EQ((int)r.st, (int)Q_ST_NOT_OBSERVABLE);
+    ASSERT_EQ((int)r.why, (int)COV_R_NO_SOURCE);
+    ASSERT_EQ(r.blind, r.kinds);
+    ASSERT_EQ(r.n_alerts, 0);
+
+    /* A --replay run: coverage is not assessed (cov_live declines). */
+    q_cov_from_env(&c, COV_DAEMON_WIFI, NULL);
+    ASSERT(q_derive(q1, NULL, 0, &c, &r));
+    ASSERT_EQ((int)r.st, (int)Q_ST_NOT_ASSESSED);
+    ASSERT_EQ(r.observable + r.partly + r.blind, 0);
+    al(0, ALERT_TYPE_EVIL_TWIN, "00000000000000e1");
+    ASSERT(q_derive(q1, g_al, 1, &c, &r));
+    ASSERT_EQ((int)r.st, (int)Q_ST_FINDING);
+    ASSERT_EQ(r.n_alerts, 1);
+    ASSERT_EQ(r.nids, 1);
+    ASSERT_STR(r.ids[0], "00000000000000e1");
+    char k[256];
+    q_found_str(r.found, k, sizeof(k));
+    ASSERT_STR(k, "EVIL_TWIN");
+    /* The same finding with no radio: still a finding. */
+    q_cov_from_env(&c, COV_DAEMON_WIFI, &e);
+    ASSERT(q_derive(q1, g_al, 1, &c, &r));
+    ASSERT_EQ((int)r.st, (int)Q_ST_FINDING);
+    /* Another question's kind is not Q1's finding. */
+    al(0, ALERT_TYPE_DEAUTH_FLOOD, "00000000000000d1");
+    ASSERT(q_derive(q1, g_al, 1, &c, &r));
+    ASSERT_EQ((int)r.st, (int)Q_ST_NOT_OBSERVABLE);
+}
+
+static void test_partly_and_observable(void) {
+    q_set_t set;
+    q_set_defaults(&set);
+    const q_question_t *q1 = &set.q[Q_ID_Q1];
+    cov_env_t e;
+    q_cov_t c;
+    q_result_t r;
+    /* One radio hopping 3 channels: EVIL_TWIN (a beacon's content) is
+     * read in one visit, EVIL_TWIN_PROXIMITY (a rate) is not. */
+    env_site(&e, 1, 3);
+    q_cov_from_env(&c, COV_DAEMON_WIFI, &e);
+    ASSERT(q_derive(q1, NULL, 0, &c, &r));
+    ASSERT_EQ((int)r.st, (int)Q_ST_NO_FINDING_PARTLY);
+    ASSERT_EQ((int)r.why, (int)COV_R_HOP);
+    ASSERT_EQ(r.blind, 0);
+    ASSERT(r.partly > 0 && r.observable > 0);
+    ASSERT_EQ(c.st[ALERT_TYPE_EVIL_TWIN], (uint8_t)COV_OBSERVABLE);
+    /* One radio per channel: nothing is left. */
+    env_site(&e, 3, 3);
+    q_cov_from_env(&c, COV_DAEMON_WIFI, &e);
+    ASSERT(q_derive(q1, NULL, 0, &c, &r));
+    ASSERT_EQ((int)r.st, (int)Q_ST_NO_FINDING);
+    ASSERT_EQ(r.observable, r.kinds);
+    ASSERT_EQ((int)r.why, (int)COV_R_NONE);
+    /* The IP capture gone: its kinds blind, the rest observable, and
+     * the blind reason is the one named. */
+    e.input[COV_IN_IP] = COV_AV_NONE;
+    e.hopping = 1;
+    e.radios = 1;
+    q_cov_from_env(&c, COV_DAEMON_WIFI, &e);
+    ASSERT(q_derive(q1, NULL, 0, &c, &r));
+    ASSERT_EQ((int)r.st, (int)Q_ST_NO_FINDING_PARTLY);
+    ASSERT_EQ((int)r.why, (int)COV_R_NO_SOURCE);
+    ASSERT(r.blind > 0 && r.blind < r.kinds);
+}
+
+/* A withdrawn or resolved incident is not a finding. Seen red with
+ * q_alert_open() answering 1 for both. */
+static void test_closed_findings_do_not_count(void) {
+    q_set_t set;
+    q_set_defaults(&set);
+    cov_env_t e;
+    env_site(&e, 3, 3);
+    q_cov_t c;
+    q_cov_from_env(&c, COV_DAEMON_WIFI, &e);
+    q_result_t r;
+    al(0, ALERT_TYPE_EVIL_TWIN, "0000000000000001")->state = ALERT_STATE_WITHDRAWN;
+    al(1, ALERT_TYPE_KARMA_AP, "0000000000000002")->resolved = 1;
+    ASSERT(q_derive(&set.q[Q_ID_Q1], g_al, 2, &c, &r));
+    ASSERT_EQ((int)r.st, (int)Q_ST_NO_FINDING);
+    ASSERT_EQ(r.n_alerts, 0);
+    al(1, ALERT_TYPE_KARMA_AP, "0000000000000002")->state = ALERT_STATE_PRELIMINARY;
+    ASSERT(q_derive(&set.q[Q_ID_Q1], g_al, 2, &c, &r));
+    ASSERT_EQ((int)r.st, (int)Q_ST_FINDING);
+    ASSERT_STR(r.ids[0], "0000000000000002");
+}
+
+/* Every finding counts; the ids stop at Q_IDS_MAX, newest first. */
+static void test_ids_are_bounded(void) {
+    q_set_t set;
+    q_set_defaults(&set);
+    q_cov_t c;
+    q_cov_from_env(&c, COV_DAEMON_WIFI, NULL);
+    for (int i = 0; i < 12; i++) {
+        char id[ALERT_INCIDENT_ID_LEN];
+        snprintf(id, sizeof(id), "%016x", i + 1);
+        al(i, i % 2 ? ALERT_TYPE_PMKID_HARVEST : ALERT_TYPE_HANDSHAKE_HARVEST, id);
+    }
+    q_result_t r;
+    ASSERT(q_derive(&set.q[Q_ID_Q3], g_al, 12, &c, &r));
+    ASSERT_EQ(r.n_alerts, 12);
+    ASSERT_EQ(r.nids, Q_IDS_MAX);
+    ASSERT_STR(r.ids[0], "0000000000000001");
+    ASSERT_STR(r.ids[Q_IDS_MAX - 1], "0000000000000008");
+    char k[256];
+    q_found_str(r.found, k, sizeof(k));
+    ASSERT_STR(k, "PMKID_HARVEST,HANDSHAKE_HARVEST");
+}
+
+/* Each daemon answers for the kinds it raises: sloth-rf has Q6 (the
+ * GNSS kinds) and Q7 (SENSOR_SOURCE_DOWN) and no answer to Q1. A GNSS
+ * finding in sloth-wifi's snapshot cannot happen; if it did it would
+ * not be sloth-wifi's answer. */
+static void test_per_daemon(void) {
+    q_set_t set;
+    q_set_defaults(&set);
+    q_cov_t c;
+    q_result_t r;
+    q_cov_from_env(&c, COV_DAEMON_RF, NULL);
+    ASSERT_EQ(q_derive(&set.q[Q_ID_Q1], NULL, 0, &c, &r), 0);
+    ASSERT_EQ(r.kinds, 0);
+    ASSERT(q_derive(&set.q[Q_ID_Q6], NULL, 0, &c, &r));
+    ASSERT_EQ(r.kinds, 4);
+    ASSERT(q_derive(&set.q[Q_ID_Q7], NULL, 0, &c, &r));
+    ASSERT_EQ(r.kinds, 1);
+    q_cov_from_env(&c, COV_DAEMON_WIFI, NULL);
+    al(0, ALERT_TYPE_GNSS_JAMMING, "00000000000000aa");
+    ASSERT(q_derive(&set.q[Q_ID_Q6], g_al, 1, &c, &r));
+    ASSERT_EQ(r.n_alerts, 0);
+    for (int i = 0; i < Q_DEFAULT_COUNT; i++)
+        ASSERT(q_derive(&set.q[i], NULL, 0, &c, &r));
+}
+
 void run_questions_tests(void) {
     TEST_SUITE("site questions (#244)");
     RUN_TEST(test_map_matches_alert_list);
@@ -205,4 +395,10 @@ void run_questions_tests(void) {
     RUN_TEST(test_named_indicators);
     RUN_TEST(test_default_questions);
     RUN_TEST(test_page_holds_the_tables);
+    RUN_TEST(test_status_names);
+    RUN_TEST(test_acceptance);
+    RUN_TEST(test_partly_and_observable);
+    RUN_TEST(test_closed_findings_do_not_count);
+    RUN_TEST(test_ids_are_bounded);
+    RUN_TEST(test_per_daemon);
 }
