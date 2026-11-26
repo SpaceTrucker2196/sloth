@@ -15,6 +15,7 @@
 #include "fake_platform.h"
 #include "wifi_chanhop.h"
 #include <errno.h>
+#include "jsonl.h"
 
 /* The sweep session (#249). Addresses are locally administered or
  * documentation-like values chosen here; a camera vendor's block is read
@@ -579,6 +580,110 @@ static void test_sweep_stopped_early(void) {
     ASSERT_EQ(c.n - swept, 22);
 }
 
+/* ── the report ── */
+
+static char *slurp(const char *p) {
+    FILE *f = fopen(p, "r");
+    if (!f) return NULL;
+    static char buf[1 << 17];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+    return buf;
+}
+
+/* A sweep stopped at 40 %: the report names the channels dwelt on with
+ * their times and lists the rest as not swept, says which bands were
+ * not swept, puts the strong unknown first, and keeps an on-air tab out
+ * of the file raw. The JSONL record carries counts and channel numbers,
+ * never an address or a name. */
+static void test_report_of_a_stopped_sweep(void) {
+    fake_net_reset();
+    chanhop_t h;
+    chanhop_init_sweep(&h, 10);
+    static sw_cov_t c;
+    (void)drive(&h, &c, 600000u * 4 / 10);
+
+    memset(&g_s, 0, sizeof(g_s));
+    seed_ap(&g_s, AP1, "Lob|by\tX", "WPA2", 6, -30);
+    seed_ap(&g_s, AP2, "", "WPA2", 36, -70);
+    seed_ble(&g_s, BRPA, 1, NULL, -45);
+    sw_inv_t *inv = sweep_inv_new();
+    ASSERT(inv != NULL);
+    if (!inv) return;
+    sweep_inv_observe(inv, &g_s);
+    sw_cmp_t cmp;
+    ASSERT_EQ(sweep_compare(inv, NULL, &cmp), 0);
+    sw_report_t r;
+    memset(&r, 0, sizeof(r));
+    r.label = "board-room";
+    r.start = 1764000000;
+    r.end = r.start + 240;
+    r.minutes = 10;
+    r.end_why = SW_END_STOPPED;
+    r.cov = &c;
+    r.cmp = &cmp;
+    r.inv = inv;
+    r.mon_up = 1;
+    r.candidate_path = "/x/sweep-board-room.20251124T160000Z.tsv";
+
+    const char *p = tmpfile_path();
+    FILE *f = fopen(p, "w");
+    ASSERT(f != NULL);
+    if (f) { sweep_report_md(f, &r); fclose(f); }
+    char *t = slurp(p);
+    ASSERT(t != NULL);
+    if (t) {
+        ASSERT(strstr(t, "Channels in the plan: 38; swept: 16; not swept: 22.") != NULL);
+        ASSERT(strstr(t, "| 2.4 GHz | 1 | 2412 | 15.8") != NULL);
+        ASSERT(strstr(t, "| 5 GHz | 165 | 5825 | 0.000 | 0 | 0 | 0 | not swept: not reached |") != NULL);
+        ASSERT(strstr(t, "Bands not swept: 6 GHz") != NULL);
+        ASSERT(strstr(t, "sub-GHz") != NULL);
+        ASSERT(strstr(t, "Baseline: none accepted") != NULL);
+        ASSERT(strstr(t, "stopped before") != NULL);
+        ASSERT(strstr(t, "Lob\\|by\\tX") != NULL);
+        ASSERT(strstr(t, "\tX") == NULL);
+        ASSERT(strstr(t, "1 private BLE address.") != NULL);
+        ASSERT(strstr(t, "uses a wire") != NULL);
+        /* The strong unknown first in the New table. */
+        const char *n1 = strstr(t, "02:00:00:00:00:01"), *n2 = strstr(t, "02:00:00:00:00:02");
+        ASSERT(n1 && n2 && n1 < n2);
+        ASSERT(strstr(t, "| (hidden) | hidden name | new |") != NULL);
+        ASSERT(strstr(t, "radiation") == NULL);
+    }
+    f = fopen(p, "w");
+    if (f) { sweep_report_json(f, &r); fclose(f); }
+    t = slurp(p);
+    ASSERT(t != NULL);
+    if (t) {
+        ASSERT(strstr(t, "\"end_why\":\"stopped\"") != NULL);
+        ASSERT(strstr(t, "\"channels_planned\":38,\"channels_swept\":16") != NULL);
+        ASSERT(strstr(t, "\"bands_not_swept\":\"6ghz,sub_ghz\"") != NULL);
+        ASSERT(strstr(t, "\"ssid\":\"Lob|by\\u0009X\"") != NULL);
+        ASSERT(strstr(t, "\"ap\":{\"compared\":false,\"new\":2") != NULL);
+    }
+
+    unlink(p);
+    p = tmpfile_path();        /* mkstemp: 0600, as the JSONL sink wants */
+    ASSERT(jsonl_open(p));
+    sweep_report_emit(&r);
+    jsonl_close();
+    t = slurp(p);
+    ASSERT(t != NULL);
+    if (t) {
+        ASSERT(strstr(t, "\"type\":\"sweep_report\"") != NULL);
+        ASSERT(strstr(t, "\"channels_swept\":16") != NULL);
+        ASSERT(strstr(t, "\"not_swept\":\"5:48,5:52,") != NULL);
+        ASSERT(strstr(t, "\"ap_new\":2") != NULL);
+        ASSERT(strstr(t, "\"ble_private\":1") != NULL);
+        ASSERT(strstr(t, "02:00:00") == NULL);
+        ASSERT(strstr(t, "Lob") == NULL);
+    }
+    sweep_cmp_free(&cmp);
+    sweep_inv_free(inv);
+    unlink(p);
+}
+
 void run_sweep_tests(void) {
     TEST_SUITE("sweep (#249): inventory");
     RUN_TEST(test_ble_kept_types);
@@ -596,4 +701,6 @@ void run_sweep_tests(void) {
     RUN_TEST(test_sweep_plan_is_equal_dwell);
     RUN_TEST(test_sweep_one_pass_and_a_refusal);
     RUN_TEST(test_sweep_stopped_early);
+    TEST_SUITE("sweep (#249): the report");
+    RUN_TEST(test_report_of_a_stopped_sweep);
 }

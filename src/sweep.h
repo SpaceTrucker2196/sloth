@@ -213,6 +213,45 @@ void sweep_cov_sample(sw_cov_t *c, int radio, const chanhop_t *h, uint64_t now_m
 /* Channels swept (time > 0) and not swept. */
 int  sweep_cov_swept(const sw_cov_t *c);
 
+/* ── The report (src/sweep_report.c) ──
+ *
+ * Markdown and JSON, from the comparison, the coverage and the facts of
+ * the run, and one `sweep_report` JSONL record (counts, words and
+ * channel numbers; no address, SSID or name). Each says what was not
+ * swept and the fixed limits of a sweep. */
+typedef enum {
+    SW_END_TIME = 0,     /* the time given ran out */
+    SW_END_PASS,         /* every radio finished its one pass */
+    SW_END_STOPPED       /* stopped before either (a signal, q) */
+} sw_end_t;
+
+typedef struct {
+    const char     *label;
+    time_t          start, end;       /* wall */
+    unsigned        minutes;
+    int             end_why;          /* sw_end_t */
+    const sw_cov_t *cov;
+    const sw_cmp_t *cmp;
+    const sw_inv_t *inv;              /* the counts-only sets, dropped rows */
+    int             base_version;     /* 0 no baseline, 1, 2 */
+    const char     *baseline_path;
+    const char     *candidate_path;   /* this sweep's inventory, NULL if unwritten */
+    int             mon_up;           /* the monitor radio's worker at the end */
+    int             ble_configured;   /* --bt-monitor or --bt-capture */
+    int             ble_up;
+} sw_report_t;
+
+/* The sweep's end word: "time", "pass", "stopped". */
+const char *sweep_end_name(int end_why);
+/* The bands the sweep did not cover, comma-separated ("6ghz,sub_ghz",
+ * with "2.4ghz" / "5ghz" when no channel of it was swept). */
+void sweep_bands_not_swept(const sw_cov_t *c, char *out, size_t sz);
+
+void sweep_report_md(FILE *out, const sw_report_t *r);
+void sweep_report_json(FILE *out, const sw_report_t *r);
+/* The `sweep_report` record. A no-op with no JSONL sink open. */
+void sweep_report_emit(const sw_report_t *r);
+
 /* "ap", "client", "ble"; "public", "static"; "new", "known", "missing". */
 const char *sweep_kind_name(int kind);
 const char *sweep_ble_type_name(int t);
