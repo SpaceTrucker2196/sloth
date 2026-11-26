@@ -267,3 +267,63 @@ void sweep_inv_observe(sw_inv_t *inv, const sloth_state_t *s) {
     observe_clients(inv, s);
     observe_ble(inv, s);
 }
+
+/* ── compare ── */
+
+static int cmp_rows(const void *pa, const void *pb) {
+    const sw_emitter_t *a = pa, *b = pb;
+    if (a->status != b->status) return (int)a->status - (int)b->status;
+    if (a->status != SW_ST_MISSING) {
+        if (a->has_dbm != b->has_dbm) return a->has_dbm ? -1 : 1;
+        if (a->has_dbm && a->best_dbm != b->best_dbm)
+            return a->best_dbm > b->best_dbm ? -1 : 1;
+    }
+    if (a->kind != b->kind) return (int)a->kind - (int)b->kind;
+    int c = memcmp(a->addr, b->addr, 6);
+    if (c) return c;
+    return (int)a->ble_type - (int)b->ble_type;
+}
+
+int sweep_compare(const sw_inv_t *cur, const sw_inv_t *base, sw_cmp_t *out) {
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+    if (!cur) return -1;
+    int cap = cur->n + (base ? base->n : 0);
+    out->row = calloc(cap > 0 ? (size_t)cap : 1, sizeof(sw_emitter_t));
+    if (!out->row) return -1;
+    out->have_base = base != NULL;
+    for (int k = 0; k < SW_K_N; k++)
+        out->compared[k] = base && base->has_kind[k];
+    for (int i = 0; i < cur->n; i++) {
+        sw_emitter_t r = cur->e[i];
+        const sw_emitter_t *b = out->compared[r.kind]
+            ? sweep_inv_find(base, r.kind, r.addr, r.ble_type) : NULL;
+        r.status = b ? SW_ST_KNOWN : SW_ST_NEW;
+        r.base_channel = 0;
+        r.base_enc[0] = '\0';
+        if (b && r.kind == SW_K_AP) {
+            r.base_channel = b->channel;
+            snprintf(r.base_enc, sizeof(r.base_enc), "%s", b->enc);
+        }
+        out->row[out->n++] = r;
+        out->count[r.kind][r.status]++;
+    }
+    for (int i = 0; base && i < base->n; i++) {
+        const sw_emitter_t *b = &base->e[i];
+        if (!out->compared[b->kind]) continue;
+        if (sweep_inv_find(cur, b->kind, b->addr, b->ble_type)) continue;
+        sw_emitter_t r = *b;
+        r.status = SW_ST_MISSING;
+        r.has_dbm = 0;
+        out->row[out->n++] = r;
+        out->count[r.kind][SW_ST_MISSING]++;
+    }
+    qsort(out->row, (size_t)out->n, sizeof(sw_emitter_t), cmp_rows);
+    return 0;
+}
+
+void sweep_cmp_free(sw_cmp_t *c) {
+    if (!c) return;
+    free(c->row);
+    memset(c, 0, sizeof(*c));
+}

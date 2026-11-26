@@ -8,6 +8,10 @@
 #include <string.h>
 #include <unistd.h>
 #include "tmp_dir.h"
+#include "frame_build.h"
+#include "beacon_snoop.h"
+#include "ble_hci.h"
+#include "reset_all.h"
 
 /* The sweep session (#249). Addresses are locally administered or
  * documentation-like values chosen here; a camera vendor's block is read
@@ -281,6 +285,178 @@ static void test_snapshot_v2_hostile_rows(void) {
     unlink(p);
 }
 
+/* ── compare ── */
+
+static void test_compare_sorts_and_marks(void) {
+    sw_inv_t *cur = sweep_inv_new(), *base = sweep_inv_new();
+    ASSERT(cur && base);
+    if (!cur || !base) { sweep_inv_free(cur); sweep_inv_free(base); return; }
+    memset(&g_s, 0, sizeof(g_s));
+    seed_ap(&g_s, AP1, "Lobby", "WPA2", 6, -70);
+    seed_ble(&g_s, BSTA, 1, NULL, -65);
+    sweep_inv_observe(base, &g_s);
+    base->has_kind[SW_K_CLIENT] = 1;        /* as a v2 file read back */
+    memset(&g_s, 0, sizeof(g_s));
+    seed_ap(&g_s, AP1, "Lobby", "WPA3", 11, -40);
+    seed_ap(&g_s, AP2, "Other", "WPA2", 1, -80);
+    seed_probe(&g_s, CLI, 6, -30);
+    sweep_inv_observe(cur, &g_s);
+
+    sw_cmp_t c;
+    ASSERT_EQ(sweep_compare(cur, base, &c), 0);
+    ASSERT_EQ(c.n, 4);
+    /* NEW by signal: the client at -30, then AP2 at -80; KNOWN AP1;
+     * MISSING the static advertiser. */
+    if (c.n == 4) {
+        ASSERT(c.row[0].kind == SW_K_CLIENT && c.row[0].status == SW_ST_NEW);
+        ASSERT(c.row[1].kind == SW_K_AP && !memcmp(c.row[1].addr, AP2, 6) &&
+               c.row[1].status == SW_ST_NEW);
+        ASSERT(c.row[2].status == SW_ST_KNOWN && c.row[2].base_channel == 6 &&
+               !strcmp(c.row[2].base_enc, "WPA2") && c.row[2].channel == 11);
+        ASSERT(c.row[3].kind == SW_K_BLE && c.row[3].status == SW_ST_MISSING);
+    }
+    ASSERT_EQ(c.count[SW_K_AP][SW_ST_NEW], 1);
+    ASSERT_EQ(c.count[SW_K_AP][SW_ST_KNOWN], 1);
+    ASSERT_EQ(c.count[SW_K_BLE][SW_ST_MISSING], 1);
+    ASSERT(c.have_base && c.compared[SW_K_BLE]);
+    sweep_cmp_free(&c);
+
+    /* A baseline that holds no BLE (v1): nothing is MISSING there and
+     * the kind is reported as not compared. */
+    base->has_kind[SW_K_BLE] = 0;
+    ASSERT_EQ(sweep_compare(cur, base, &c), 0);
+    ASSERT_EQ(c.count[SW_K_BLE][SW_ST_MISSING], 0);
+    ASSERT(!c.compared[SW_K_BLE]);
+    sweep_cmp_free(&c);
+
+    /* No baseline: everything heard is NEW, nothing compared. */
+    ASSERT_EQ(sweep_compare(cur, NULL, &c), 0);
+    ASSERT_EQ(c.n, 3);
+    ASSERT(!c.have_base && !c.compared[SW_K_AP]);
+    ASSERT_EQ(c.count[SW_K_AP][SW_ST_NEW], 2);
+    sweep_cmp_free(&c);
+    sweep_inv_free(cur);
+    sweep_inv_free(base);
+}
+
+/* ── the acceptance test: two passes of one room ──
+ *
+ * Built by hand from the layouts the parsers read (no pcap fixture):
+ * a beacon per IEEE 802.11-2020 §9.3.3.3 (fixed fields, SSID element,
+ * DSSS Parameter Set element 3 for the channel, an RSNE), and an LE
+ * Advertising Report per Core v5.4 Vol 4 Part E §7.7.65.2 in a Linux
+ * HCI monitor record (opcode 3 EVENT, src/ble_hci.h). Each pass starts
+ * from cleared module tables and an empty state. */
+
+static void feed_beacon(const uint8_t bssid[6], const char *ssid, uint8_t ch,
+                        int8_t dbm) {
+    uint8_t f[128];
+    fb_t b;
+    fb_init(&b, f, sizeof(f));
+    static const uint8_t bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    fb_mgmt(&b, 8, 0, bcast, bssid, bssid, 0, 0);
+    fb_beacon_fixed(&b, 0, 100, 0x0011);         /* ESS, Privacy */
+    fb_ssid(&b, ssid);
+    fb_ie(&b, 3, &ch, 1);
+    fb_rsn(&b, 4, 4, 2, 0);                       /* CCMP / CCMP / PSK */
+    ASSERT(fb_ok(&b));
+    char s_out[33], enc[10];
+    uint8_t bss[6];
+    int chan = 0;
+    uint16_t bms = 0;
+    beacon_rsn_t rsn;
+    memset(&rsn, 0, sizeof(rsn));
+    ASSERT_EQ(beacon_parse(f, b.len, dbm, s_out, bss, &chan, enc, &bms, &rsn), 1);
+    ASSERT_EQ(chan, ch);
+    beacon_record(bss, s_out, dbm, chan, enc, bms, &rsn);
+}
+
+/* `addr` in display order; the report carries it least significant
+ * octet first. */
+static void feed_adv(const uint8_t addr[6], uint8_t addr_type, int8_t rssi) {
+    uint8_t r[64];
+    int n = 0;
+    r[n++] = 0; r[n++] = 0;                       /* adapter 0 */
+    r[n++] = 0; r[n++] = BT_MON_EVENT_PKT;
+    const uint8_t ad[3] = { 2, 0x01, 0x06 };      /* Flags */
+    r[n++] = 0x3E;                                /* LE Meta */
+    r[n++] = (uint8_t)(12 + sizeof(ad));
+    r[n++] = 0x02;                                /* Advertising Report */
+    r[n++] = 1;                                   /* Num_Reports */
+    r[n++] = 0x00;                                /* ADV_IND */
+    r[n++] = addr_type;
+    for (int i = 0; i < 6; i++) r[n++] = addr[5 - i];
+    r[n++] = (uint8_t)sizeof(ad);
+    memcpy(r + n, ad, sizeof(ad)); n += (int)sizeof(ad);
+    r[n++] = (uint8_t)rssi;
+    ASSERT_EQ((int)ble_mon_ingest(r, (size_t)n, (size_t)n, 1700000000, 0),
+              (int)BLE_REC_ADV);
+}
+
+static void pass_into(sw_inv_t *inv) {
+    memset(&g_s, 0, sizeof(g_s));
+    beacon_snapshot(&g_s);
+    ble_snapshot(&g_s);
+    sweep_inv_observe(inv, &g_s);
+}
+
+static void test_two_passes_of_one_room(void) {
+    static const uint8_t ap_a[6]  = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x01 };
+    static const uint8_t ap_b[6]  = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x02 };
+    static const uint8_t rpa_a[6] = { 0x4A, 0x01, 0x02, 0x03, 0x04, 0x05 };
+    static const uint8_t rpa_b[6] = { 0x5B, 0x06, 0x07, 0x08, 0x09, 0x0A };
+    sw_inv_t *a = sweep_inv_new(), *b = sweep_inv_new(), *base = sweep_inv_new();
+    ASSERT(a && b && base);
+    if (!a || !b || !base) goto out;
+
+    /* Pass A: one AP, one static-address advertiser, one phone on a
+     * resolvable private address. */
+    feed_beacon(ap_a, "Board", 6, -55);
+    feed_adv(BSTA, 1, -60);
+    feed_adv(rpa_a, 1, -50);
+    pass_into(a);
+    const char *p = tmpfile_path();
+    ASSERT_EQ(wifi_snapshot_write_inv(a, p, "boardroom", 1000), 0);
+
+    /* Pass B: the same, the phone's address rotated, plus one more AP
+     * and one more (public-address) advertiser. */
+    sloth_reset_all();
+    feed_beacon(ap_a, "Board", 6, -57);
+    feed_beacon(ap_b, "Planted", 11, -35);
+    feed_adv(BSTA, 1, -61);
+    feed_adv(rpa_b, 1, -48);
+    feed_adv(BPUB, 0, -40);
+    pass_into(b);
+
+    ASSERT_EQ(wifi_snapshot_read(p, base, NULL), 0);
+    sw_cmp_t c;
+    ASSERT_EQ(sweep_compare(b, base, &c), 0);
+    int news = 0, ap_b_new = 0, pub_new = 0;
+    for (int i = 0; i < c.n; i++) {
+        const sw_emitter_t *e = &c.row[i];
+        ASSERT(e->status != SW_ST_MISSING);
+        if (e->status != SW_ST_NEW) continue;
+        news++;
+        if (e->kind == SW_K_AP && !memcmp(e->addr, ap_b, 6)) ap_b_new = 1;
+        if (e->kind == SW_K_BLE && !memcmp(e->addr, BPUB, 6)) pub_new = 1;
+    }
+    ASSERT_EQ(news, 2);
+    ASSERT(ap_b_new && pub_new);
+    /* The rotated address is a count in both passes, never a row. */
+    ASSERT_EQ(c.count[SW_K_BLE][SW_ST_KNOWN], 1);
+    ASSERT_EQ(sweep_set_count(&a->ble_private), 1);
+    ASSERT_EQ(sweep_set_count(&b->ble_private), 1);
+    ASSERT_EQ(base->file_ble_private, 1);
+    /* The strongest NEW emitter comes first. */
+    if (c.n > 0) ASSERT(c.row[0].kind == SW_K_AP && !memcmp(c.row[0].addr, ap_b, 6));
+    sweep_cmp_free(&c);
+    unlink(p);
+out:
+    sweep_inv_free(a);
+    sweep_inv_free(b);
+    sweep_inv_free(base);
+}
+
 void run_sweep_tests(void) {
     TEST_SUITE("sweep (#249): inventory");
     RUN_TEST(test_ble_kept_types);
@@ -291,4 +467,7 @@ void run_sweep_tests(void) {
     RUN_TEST(test_snapshot_v2_round_trip);
     RUN_TEST(test_snapshot_v1_holds_aps_only);
     RUN_TEST(test_snapshot_v2_hostile_rows);
+    TEST_SUITE("sweep (#249): compare with the baseline");
+    RUN_TEST(test_compare_sorts_and_marks);
+    RUN_TEST(test_two_passes_of_one_room);
 }

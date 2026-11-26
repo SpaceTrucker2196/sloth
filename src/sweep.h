@@ -134,6 +134,31 @@ int  sweep_set_count(const sw_set_t *set);
  * (private, anonymous or the reserved sub-type). Pure. */
 int  sweep_ble_kept_type(uint8_t addr_type, const uint8_t addr[6]);
 
+/* ── Compare with the label's baseline ──
+ *
+ * Every emitter heard is NEW (not in the baseline) or KNOWN; every row
+ * of the baseline not heard is MISSING. A kind the baseline does not
+ * hold (a v1 file holds APs only, and a first sweep has no baseline at
+ * all) is compared against nothing: its rows are NEW and compared[kind]
+ * is 0, so the report can say so rather than call a site's every phone
+ * new. The rows are sorted: NEW first, then KNOWN, each strongest
+ * signal first (an unknown strong emitter is probably in the room) and
+ * a row with no measured signal last; MISSING last, by kind and
+ * address. A KNOWN AP whose channel or encryption moved keeps the
+ * baseline's in base_channel / base_enc. */
+typedef struct {
+    int           n;
+    sw_emitter_t *row;                      /* heap, n rows */
+    int           count[SW_K_N][3];         /* [kind][sw_status_t] */
+    int           compared[SW_K_N];         /* the baseline holds the kind */
+    int           have_base;
+} sw_cmp_t;
+
+/* 0, or -1 on allocation failure (out is then empty). `base` NULL: no
+ * accepted baseline for the label. */
+int  sweep_compare(const sw_inv_t *cur, const sw_inv_t *base, sw_cmp_t *out);
+void sweep_cmp_free(sw_cmp_t *c);
+
 /* "ap", "client", "ble"; "public", "static"; "new", "known", "missing". */
 const char *sweep_kind_name(int kind);
 const char *sweep_ble_type_name(int t);
