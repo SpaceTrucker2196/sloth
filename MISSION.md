@@ -19,22 +19,54 @@ per-view depth live in [`docs/views/`](docs/views/) and
 
 ## 1. Mission
 
-Sloth is a terminal-based **passive signals-intelligence (SIGINT)
-console** for IP, 802.11 and Bluetooth (Classic BR/EDR and Low Energy)
-networks. It turns what a host already sees — `/proc`, `/sys`, netlink,
-a libpcap stream, and a Bluetooth receiver (the host's HCI controller,
-or an Ubertooth for over-the-air capture) — into a live
-operator view: <!-- count:views -->37<!-- /count --> panels, <!-- count:rules -->101<!-- /count --> alert rules, an embedded (synthetic)
-threat-intel matcher, a WiFi-SIGINT toolkit, and an optional JSONL
-forensic log.
+Sloth is an open intelligence tool for RF signals intelligence:
+**Citizen Signals Intelligence (Citizen SIGINT)**. It is a
+receive-only tool that lets a private citizen see and understand the
+radio spectrum around them: Wi-Fi, Bluetooth and Bluetooth Low Energy,
+ADS-B, APRS, GNSS, wideband SDR sweeps, and the host network the
+sensor is attached to.
 
-The goal is not to *do* things on the network. The goal is to *see*
-what is happening on the network, surface what is anomalous, and hand
-the operator enough context to decide what to do next — out-of-band,
-through other tools, under their own authority.
+"Open" describes the method. Every alert rule, the sources it rests on
+and a written assessment of what it can and cannot show are in this
+repository, so an operator can check a finding instead of trusting it.
+The code is source-available under the
+[Sloth Source-Available License](LICENSE), which is not an open-source
+licence.
+
+Sloth has three aims:
+
+1. **Identify and characterise emitters.** Say what is transmitting
+   near the sensor, what kind of device it is, how it behaves on the
+   air, and where it is or how it moves relative to the sensor.
+2. **Detect hostile or anomalous activity aimed at the operator's own
+   networks.** Evil twins, deauthentication and association floods,
+   KARMA lures, rogue DHCP, ARP spoofing, GNSS jamming and spoofing,
+   attack-tool fingerprints, and other departures from what the site
+   normally hears.
+3. **Report in a disciplined intelligence style.** A finding is an
+   assessment, not a verdict. Each alert rule has a written assessment
+   with cited sources, a severity and a false-positive judgement. Each
+   finding carries its own quality: whether the evidence is complete,
+   how late it is, how many radios corroborate it, and the state of its
+   source. The Wi-Fi impersonation rules carry a confidence separate
+   from severity. Reports say what the sensor could not see as well as
+   what it saw.
+
+The means are <!-- count:views -->37<!-- /count --> live views, <!-- count:rules -->101<!-- /count --> alert rules, a JSONL stream,
+local SQLite stores and written reports (§3). The goal is not to *do*
+things to the spectrum or the network. The goal is to *see* what is
+there, surface what is hostile or anomalous, and hand the operator
+enough context to decide what to do next — out-of-band, through other
+tools, under their own authority.
 
 If a single sentence has to survive: **sloth is the eyes, not the
 hands.**
+
+*(Mission rewritten 2026-11-26 under the operator's explicit
+authorisation of that date — the charter is never the agent's to change
+on its own (agents/dark-factory.md §4.3). It replaces the "passive
+SIGINT console for IP, 802.11 and Bluetooth" mission. Rules 1–5 of §2 are
+unchanged; rule 6 and "Lawful and ethical use" are added.)*
 
 ---
 
@@ -146,6 +178,19 @@ issue.
    scope. The tool is honest about what it sees and silent about what
    to do.
 
+6. **Radios, not people.** Sloth reports that a device is present, how
+   it behaves technically, and where it is or how it moves relative to
+   the sensor. It never infers who uses a device, or that person's
+   activity, purpose or routine. A correlation across MAC rotations is a
+   hypothesis about a radio, never an identification of a person (#94);
+   a presence verdict says a device stayed or passed, not who carried
+   it. A feature whose output is a statement about a person is out of
+   scope, however it is phrased.
+
+   *(Principle set by the operator on 2026-11-25; recorded here under
+   the operator's explicit authorisation of 2026-11-26
+   (agents/dark-factory.md §4.3).)*
+
 If you are tempted to add an "active" feature because it would be
 useful — port scanning the LAN, sending a deauth to test detection,
 auto-cracking the captured handshake — stop. That feature belongs in a
@@ -153,34 +198,118 @@ different tool. Sloth's value is being trusted to be passive: an
 operator can run sloth on a sensitive segment without changing the
 segment. Lose that and the tool is just another aircrack fork.
 
+### Lawful and ethical use
+
+The rules above are how sloth is built. These are the terms it is
+built to be used on:
+
+- **Receive only.** The sensor transmits nothing onto what it watches
+  (rule 1). The one sloth-family program that transmits, `sloth-va`,
+  connects only to the operator's own listed Victron devices, is off
+  by default, and is kept out of the sensor
+  ([ADR 0011](docs/wiki/adr/0011-sloth-va-transmits.md)).
+- **No decryption and no content interception.** Sloth never decrypts
+  a frame it captured and never breaks the encryption of anyone's
+  traffic (rule 2). On the traffic the sensor host carries, its
+  decoders keep the protocol metadata a detection needs (names,
+  versions, fingerprints, HTTP request lines), not the messages
+  themselves; a credential seen in clear text is recorded as an
+  exposure with its user name and never its password. `sloth-va`
+  decrypts only the operator's own devices' readings, with the
+  operator's own keys.
+- **No key recovery.** Sloth runs no passphrase against anything
+  (rule 2). Exporting handshake material is opt-in and is for networks
+  the operator is authorised to test.
+- **Only what is broadcast in the clear.** Over the air, sloth reads
+  what transmitters send unencrypted: beacons, probes, advertisements,
+  aircraft and APRS position reports, satellite signals, spectrum
+  power. On the wire it reads what the sensor host itself carries.
+- **Minimise third-party identifiers in shared output.** Before a
+  report, a capture or a screenshot leaves the operator's hands,
+  remove the MAC addresses, network names and call signs of devices
+  that are not the operator's. Sloth's own sharing paths already hold
+  some back (ADR 0006, ADR 0009); the rest is the operator's job.
+- **The law where you are is your responsibility.** Receiving,
+  recording and sharing radio signals is regulated. In the U.S. that
+  includes, for example, FCC rules and the Electronic Communications
+  Privacy Act (ECPA); other countries have their own. This charter is
+  not legal advice.
+
 ---
 
 ## 3. Where the project is right now
 
-As of v1.8.2 (`SLOTH_VERSION` in `include/sloth.h` is the source of
-truth for this number; if the two disagree, the `#define` is right):
+As of v1.8.7 (`SLOTH_VERSION` in `include/sloth.h` is the source of
+truth for this number; if the two disagree, the `#define` is right).
+Everything below ships; anything only planned is in §4.
 
-- **<!-- count:views -->37<!-- /count --> views** (`VIEW_COUNT`), keyed `[1]…[0]`, `[a]…[z]`, `[?]` (help), `[*]` (BLE) and `[#]` (GNSS;
-  every letter and digit is taken), indexed in
-  the README and in [`docs/wiki/views-catalog.md`](docs/wiki/views-catalog.md).
-- **<!-- count:rules -->101<!-- /count --> alert rules** in `src/alerts/` (one file per domain since #118) — one per `ALERT_TYPE_*`, each
-  with a row in [`docs/views/alerts.md`](docs/views/alerts.md) and a
-  cited basis in `research/` (enforced by
-  `tests/test_research_corpus.c`).
-- **WiFi SIGINT layer**: PNL aggregation, RSN/AKM/MFP inventory,
-  EAPOL / PMKID / 4-way handshake capture with hashcat-22000 export,
-  hidden-SSID reveal, scored sequence-number correlation across
-  MAC rotations (a hypothesis about a radio, never an identification
-  of a person — #94), KARMA / evil-twin / Pineapple detection,
-  per-AP fingerprinting (PHY tier, vendor IEs, WPS state, 802.11k
-  neighbour reports, RNR for 6 GHz).
+**The sensor is two daemons from one tree** (ADR 0010), plus helpers.
+Every unit is in `packaging/systemd/`; `make install-service` installs
+them and enables none.
+
+| Program | Unit | What it receives |
+|---|---|---|
+| `sloth-wifi` (`sloth` is a symlink to it) | `sloth-sensor.service` | the 802.11 monitor radio (with `--hop`), the host's IP traffic through libpcap, `/proc`, netlink and nl80211, BLE advertisements through the HCI monitor channel or an Ubertooth capture, and a GNSS receiver for the sensor's own position. Owns the terminal views. |
+| `sloth-rf` | `sloth-rf.service` | headless; reads what decoders the operator already runs write: ADS-B from readsb (`aircraft.json`, SBS or Beast), APRS from Dire Wolf's packet log, rtl_433's event log, Victron readings from `sloth-va`, and GNSS through gpsd or a serial receiver. Opens no capture and no radio. |
+| `sloth-ble-scan` | `sloth-ble-scan.service` | holds a passive LE scan (no SCAN_REQ) so `sloth-wifi` can hear advertisements. |
+| `sloth-sdrsweep` | `sloth-sdrsweep.service`, `.path`, `-auto.timer` | a receive-only power sweep of a SoapySDR device (about a minute), for slothweb's Spectrum tab. Built only where SoapySDR is installed. |
+| `sloth-va` | `sloth-va.service` | the operator's own Victron devices. **It transmits** (LE connections and pairing with the listed devices only) and is kept out of the sensor (ADR 0011). |
+
+**Three repositories** (ADR 0001):
+
+- **sloth** (this one, public): both daemons and the helpers, the alert
+  rules, the research corpus (`research/`, `research.db`) and the alert
+  assessments, the JSONL stream, `sloth.db` and `sloth-rf.db`, and the
+  contract (`make contract`) the other two build against.
+- **sloth-mesh** (private): `slothweb`, the browser dashboard over both
+  daemons, its `slothweb.db` (triage, incidents, baselines, fleet), and
+  `slothweb-mcp`. Described here in
+  [`docs/wiki/slothweb.md`](docs/wiki/slothweb.md).
+- **sloth-comint** (private): the intelligence packs (OUI names,
+  attacker-tool OUIs, camera vendors, surveillance endpoints, tool
+  signatures, the BLE watchlist, vendor research) and `sloth-comintd`.
+  This tree builds from a pinned snapshot in `intel/`.
+
+**Detection and views:**
+
+- **<!-- count:views -->37<!-- /count --> views** (`VIEW_COUNT`, `sloth-wifi`'s; `sloth-rf` is headless), keyed
+  `[1]…[0]`, `[a]…[z]`, `[?]` (help), `[*]` (BLE) and `[#]` (GNSS), indexed in
+  [`docs/wiki/views-catalog.md`](docs/wiki/views-catalog.md).
+- **<!-- count:rules -->101<!-- /count --> alert rules** in `src/alerts/` — one per `ALERT_TYPE_*`;
+  `sloth-wifi` raises <!-- count:rules-wifi -->96<!-- /count --> of the kinds and `sloth-rf`
+  <!-- count:rules-rf -->6<!-- /count --> (the GNSS rules, `ADSB_EMERGENCY` and its own
+  `SENSOR_SOURCE_DOWN`). Each has a row in
+  [`docs/views/alerts.md`](docs/views/alerts.md), a cited basis in
+  `research/` (enforced by `tests/test_research_corpus.c`) and a written
+  assessment in
+  [`docs/wiki/alert-assessments/`](docs/wiki/alert-assessments/README.md).
+- **Wi-Fi SIGINT**: PNL aggregation, RSN/AKM/MFP inventory, EAPOL /
+  PMKID capture with opt-in hashcat-22000 export, hidden-SSID reveal,
+  scored sequence-number correlation across MAC rotations (a hypothesis
+  about a radio, never an identification of a person — #94), KARMA /
+  evil-twin / Pineapple detection, per-AP fingerprinting, presence
+  (passing versus staying), and passive cueing of the hop scheduler.
+- **Finding quality and coverage**: each rule's observable / partly /
+  blind status for the present configuration, and on each finding its
+  completeness, latency, corroboration and source state
+  ([`docs/wiki/coverage-assessment.md`](docs/wiki/coverage-assessment.md)).
 - **Threat intel** matcher in `src/threat_intel.c` against an embedded
   IOC list that is **synthetic demo data, not a feed** — so
   `THREAT_DOMAIN` / `THREAT_IP` detect nothing until an operator
   replaces it. Sloth ships no feed and cannot fetch one (§2).
-- **Forensic log** (`-o file.jsonl`) and per-alert pcap export
-  (`--pcap-dir DIR`).
-- **9304 test assertions**, `make test` green; `make` warning-clean.
+
+**Stores and outputs:** `sloth.db` and `sloth-rf.db` (SQLite, bounded,
+tiered retention), the JSONL stream (`-o`, and the read-only data
+socket each daemon serves; additive only), per-alert pcaps with
+evidence manifests, an optional hash chain over the `-o` file
+(`--jsonl-chain`, checked by `--verify`), and written
+products: the posture report (`--report`, `--report-json`) with its
+collection-coverage and exposure sections, `--preflight`, the site
+handoff packet (`--handoff`) and the interference report.
+
+**Testing:** `make test` is green and `make gate` runs the whole build
+matrix, the sanitizers, fuzzing and the contract checks. Quote an
+assertion count only when measured (agents/AGENTS.md).
 
 Platforms: primary target is Linux (rtnetlink, nl80211, INET_DIAG,
 `/proc`). Darwin builds the binary and the test suite cleanly via the
@@ -192,32 +321,49 @@ Windows and the generic POSIX stub exist as build-only placeholders.
 ## 4. Direction
 
 In rough priority order — not a sprint plan, a sense of where the
-gravity is:
+gravity is. Items are planned, not shipped; [`ROADMAP.md`](ROADMAP.md)
+and the open issues track them.
 
 1. **Detection breadth, not detection depth.** Add new alert rules and
-   new passive observables before you tune the existing ones. Coverage
-   beats precision until coverage exists. Every new rule needs a row
-   in `docs/views/alerts.md` and a seeded-state test in
-   `tests/test_alerts.c`.
+   new passive observables before you tune the existing ones, in every
+   signal domain, not only Wi-Fi. Coverage beats precision until
+   coverage exists. Every new rule needs a row in
+   `docs/views/alerts.md`, a seeded-state test in `tests/test_alerts.c`
+   and a written assessment.
 
-2. **Operator ergonomics.** The dashboard exists to answer "is anything
+2. **Intelligence discipline.** Make the collection method explicit
+   (#241, after FM 2-0 Chapter 1): site questions tied to the rules that
+   answer them (#244), a finding lifecycle with a preliminary state,
+   confirm or withdraw, and a value time limit (#245), and a
+   time-limited sweep of a room or site that reports each emitter
+   against the baseline (#249). Coverage assessment, passive cueing,
+   finding quality and the exposure report have shipped from the same
+   programme.
+
+3. **Operator ergonomics.** The dashboard exists to answer "is anything
    on fire?" in two seconds. Anything that helps that — better colour
    gradients on heat, sparkline density, alert-hot IP override across
    panels — is in scope. Anything that requires the operator to read a
    manual to use is not.
 
-3. **Forensic export.** JSONL is the contract sloth has with whatever
+4. **Forensic export.** JSONL is the contract sloth has with whatever
    pipeline consumes it (Splunk, Loki, a homemade SIEM, a notebook).
    Keep the schema stable; add fields, don't rename them; document the
-   shape in `docs/wiki/log.md`.
+   shape in `docs/wiki/jsonl-schema.md`.
 
-4. **WiFi SIGINT depth.** 802.11 is where most of the unique value
-   lives — every commodity tool can show you TCP connections. Keep
-   pushing on beacon-IE parsing, vendor fingerprints, association
-   tracking, 6 GHz / Wi-Fi 7 coverage, and protocol-level anomaly
-   detection that classic IDSes don't do.
+5. **RF depth.** Wi-Fi is still where most of the unique value lives:
+   keep pushing on beacon-IE parsing, vendor fingerprints, association
+   tracking, 6 GHz / Wi-Fi 7 coverage and protocol-level anomaly
+   detection. Beyond it: a passive Dire Wolf receive input for APRS
+   (#254), site epochs for a sensor that moves (#256), and pairing a
+   device's BLE and Wi-Fi identities (#156) or grouping its rotating
+   MACs (#229) — each a statement about a radio, under rule 6.
 
-5. **Test discipline.** No commit goes in red. Hand-craft protocol
+6. **Validation.** Prove the passive contract over the air and at the
+   host's egress (#147), and fill the fingerprint tables that need real
+   captures (#151, #201).
+
+7. **Test discipline.** No commit goes in red. Hand-craft protocol
    tests from RFC bytes — never a parser feeding its own output back.
    Bug fixes ship with a test that would have caught the bug.
 
@@ -228,6 +374,8 @@ What is **out of scope**, regardless of how interesting:
 - Frame injection of any kind.
 - Online cracking, dictionary attacks, password-spray, credential
   validation.
+- Decrypting anyone else's traffic.
+- Identifying, profiling or following a person (§2 rule 6).
 - Network configuration (DHCP server, DNS resolver, firewall rules).
 - Any "honeypot" mode that responds to inbound traffic.
 - **Remote-control** surfaces of any kind. No command channel, no
@@ -271,8 +419,9 @@ needed and not in-tree, that's a defect — fix it as part of your work.
 
 When you are unsure whether a feature is in scope, apply the test from
 §2: **does this change require sloth to write to the network, decrypt
-something, or do something the operator hasn't asked for?** If yes,
-it's out. If no, it's worth considering on the merits.
+something, say something about a person rather than a radio, or do
+something the operator hasn't asked for?** If yes, it's out. If no,
+it's worth considering on the merits.
 
 When you are unsure whether to decide or escalate, apply the autonomy
 rules in [`agents/dark-factory.md`](agents/dark-factory.md): code-level
@@ -284,8 +433,9 @@ repo is a stop-and-ask.
 
 ## 6. The one-line summary you can quote
 
-> Sloth is a passive, white-hat SIGINT console: it watches, it flags,
-> it never attacks.
+> Sloth is an open, receive-only Citizen SIGINT tool: it watches the
+> spectrum, it flags what is hostile, it reports radios, not people,
+> and it never attacks.
 
 Anything you build on top of this codebase must still be describable
 by that sentence. If it isn't, you've built a different tool — fork it
