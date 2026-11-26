@@ -39,11 +39,11 @@ references: the Dire Wolf User Guide ("Logging") and `src/log.c`
 (wb2osz/direwolf, release 1.7); the APRS Protocol Reference 1.0.1
 (APRS101.pdf) for the data type indicators (ch. 5), objects and items
 (ch. 11) and the symbol tables (ch. 20, appendix 2). § The sample-rate
-trap is from the W9FJC measurements recorded in #210 — no file in this
+trap is from the sensor A measurements recorded in #210 — no file in this
 repo runs, configures or describes `rx_fm`, so that section cites the
 issue and the host's own `aprs.service`, not the tree.
 
-**Last updated**: 2026-11-18 (#210: the sample-rate trap — `rx_fm` derives its fs/4 LO offset from the rate it requested and rotates by a quarter of the rate the device delivered, so an SDRplay host that ignores `-s` demodulates hundreds of kHz off the channel and the pipeline reports success all the way down; how to measure the stdout rate without a second radio, W9FJC's host-side workaround and why it is fragile, the open front-end choice. Also: the 144.894 MHz LO in § The channel is no longer presented as evidence of a working chain); 2026-11-15 (#216, the cutover: `--aprs`, `--aprs-freq` and `--aprs-silent-hours` are `sloth-rf`'s alone; `sloth-wifi` refuses them); 2026-11-13 (the positions panel as an ATC-style radar scope centred on the sensor); 2026-11-13 (#204: the APRS region and channel derived from the GNSS position, `--aprs-freq` and its mismatch, the silent decoder after `--aprs-silent-hours` (default 6), the `sensor_health` fields and the APRS tab's notices; the beta-site log sat at 0 bytes from 2026-11-11 with nothing saying so); 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
+**Last updated**: 2026-11-18 (#210: the sample-rate trap — `rx_fm` derives its fs/4 LO offset from the rate it requested and rotates by a quarter of the rate the device delivered, so an SDRplay host that ignores `-s` demodulates hundreds of kHz off the channel and the pipeline reports success all the way down; how to measure the stdout rate without a second radio, sensor A's host-side workaround and why it is fragile, the open front-end choice. Also: the 144.894 MHz LO in § The channel is no longer presented as evidence of a working chain); 2026-11-15 (#216, the cutover: `--aprs`, `--aprs-freq` and `--aprs-silent-hours` are `sloth-rf`'s alone; `sloth-wifi` refuses them); 2026-11-13 (the positions panel as an ATC-style radar scope centred on the sensor); 2026-11-13 (#204: the APRS region and channel derived from the GNSS position, `--aprs-freq` and its mismatch, the silent decoder after `--aprs-silent-hours` (default 6), the `sensor_health` fields and the APRS tab's notices; the sensor B log sat at 0 bytes from 2026-11-11 with nothing saying so); 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
 
 **Which daemon (since the cutover, #216).** The APRS decoder source is **`sloth-rf`'s**:
 `--aprs` (with `--aprs-freq` and `--aprs-silent-hours` is its flag, and the reader, the table, the `aprs_station` and `aprs_packet` records,
@@ -174,7 +174,7 @@ comparing it would flag a decoder whose configuration is right. But **an
 offset LO is not by itself evidence that the chain works**: #210 (below,
 § The sample-rate trap) found `rx_fm` deriving that offset from a rate
 the device never delivered and demodulating 246 kHz off the channel, and
-the 144.894 MHz reading named here is beta-site's, read at the time as a
+the 144.894 MHz reading named here is sensor B's, read at the time as a
 benign fs/4 offset on a chain that has decoded nothing since
 2026-11-11. The declared-frequency check is a check of the operator's
 *configuration*, not of the receive chain. When both are known and more than 6.25 kHz apart (half the
@@ -187,15 +187,15 @@ and ships no tool that does: receive-only, file-only, as before.
 A decoder on the right channel can still demodulate the wrong
 frequency, because the front end computed its tuning from a sample rate
 the device never gave it. This is written down here because it is
-invisible from everything sloth can see: it took W9FJC's APRS feed with
-no process reporting a fault, and it fits beta-site's silence since
+invisible from everything sloth can see: it took sensor A's APRS feed with
+no process reporting a fault, and it fits sensor B's silence since
 2026-11-11 as well.
 
 **Symptom.** `aprs_state` is `live`, the log is readable, and no packet
 ever arrives — then, six hours in, `aprs_silent` goes to 1 (§ Silent).
 Every process in the chain reports success: the SDR opens, `rx_fm`
 streams, Dire Wolf reads samples and writes nothing, and logrotate
-rotates a 0-byte file. On W9FJC (2026-11-14) `rx_fm -d driver=sdrplay …
+rotates a 0-byte file. On sensor A (2026-11-14) `rx_fm -d driver=sdrplay …
 -f 144.390M -s 22050 | direwolf -r 22050` on an SDRplay RSPdx-R2
 decoded nothing while a handheld beside the antenna read S8–S9 on
 144.390 MHz, and an NESDR into the same Dire Wolf decoded that same
@@ -251,7 +251,7 @@ Dire Wolf reports for one known local transmitter on each: a chain
 demodulating the wrong frequency reports no packet at all, not a weak
 one.
 
-**The workaround in place on W9FJC — host config, not in this repo.**
+**The workaround in place on sensor A — host config, not in this repo.**
 `aprs.service` since 2026-11-14 (sloth ships no tool that reads or
 edits it; § The channel):
 
@@ -283,7 +283,7 @@ operator's call and not this repo's
 outside the repo). sloth never opens, tunes or spawns the decoder —
 `grep -rnE 'execv|execl|popen|system\(|fork\(' src/main.c src/aprs.c
 src/capture/aprs_reader.c` is empty — it reads the log Dire Wolf
-writes, and documents what feeds it. beta-site's chain is still to be
+writes, and documents what feeds it. Sensor B's chain is still to be
 checked the same way.
 
 ## Silent

@@ -26,7 +26,7 @@ No alert rule reads either: this is a data point for an analyst.
 `src/capture/df_radio.c`, `src/capture/probe.c` (radio 0's note),
 `src/main.c` (`--df-iface`, `--df-origin`, the follow in
 `chanhop_drive()`), `src/jsonl.c` (`jsonl_emit_wifi_df()`),
-`tests/test_df.c`. Owner's request, 2026-11-16, for the beta-site row
+`tests/test_df.c`. Owner's request, 2026-11-16, for the sensor B row
 of Alfa adapters; 2026-11-17 for the same three in a triangle.
 
 **Last updated**: 2026-11-19 (the slothweb card inside the access points panel), 2026-11-17 (radios off the line: `NAME@X,Y` and the bearing, JSONL 2.4.0), 2026-11-17 (slothweb's card and `/api/df`), 2026-11-16 (several sensor radios: what this table holds then, [[multi-radio-sensing]]), 2026-11-16 (new).
@@ -104,7 +104,7 @@ on one line) are said so on stderr.
 ## Calibration: radios do not read alike
 
 Two radios do not report the same level for the same signal: receiver,
-antenna, cable and USB port differ. On the beta-site pair (one stock
+antenna, cable and USB port differ. On the sensor B pair (one stock
 antenna, one remote 9 dBi) the second radio read 7.5 dB under the first
 across 42 transmitters (2026-11-16). Left in, that difference is the
 whole margin and everything leans one way.
@@ -137,7 +137,7 @@ sloth-wifi --monitor-iface alfa0 --hop \
     --df-iface alfa1@1.0 --df-iface alfa2@2.0
 ```
 
-The beta-site triangle, sensor radio at the east corner:
+The sensor B triangle, sensor radio at the east corner:
 
 ```
 sloth-wifi --monitor-iface alfa0 --hop --df-origin 1.0,-0.58 \

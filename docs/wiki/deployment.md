@@ -245,7 +245,7 @@ ExecStart=/usr/local/bin/sloth-wifi \
   ```
   # /etc/default/sloth
   SLOTH_IFACE=alfa0
-  SLOTH_ARGS=--site-label beta-site --monitor-iface alfa1 --monitor-iface alfa2
+  SLOTH_ARGS=--site-label sensor-b --monitor-iface alfa1 --monitor-iface alfa2
   ```
 
   Up to three. `sloth-monitor-up` prepares `${SLOTH_IFACE}` and nothing
@@ -1515,7 +1515,7 @@ ControllerMode = le
 AutoEnable = false
 ```
 
-### 10.3 The owner's commands (reference host, hci0 = E8:EA:6A:BD:F1:06)
+### 10.3 The owner's commands (reference host, hci0 = 00:00:5E:00:53:04)
 
 ```
 make                                              # as yourself
@@ -1537,7 +1537,7 @@ sudo systemctl unmask bluetooth.service
 sudo systemctl restart bluetooth
 bluetoothctl list                                 # note the controller's address
 
-echo 'SLOTH_VA_ADAPTER=E8:EA:6A:BD:F1:06' | sudo tee /etc/default/sloth-va
+echo 'SLOTH_VA_ADAPTER=00:00:5E:00:53:04' | sudo tee /etc/default/sloth-va
 sudo systemctl enable --now sloth-va
 journalctl -u sloth-va -f                         # "advertisement monitor active", sessions
 tail -f /var/lib/sloth-va/victron.jsonl
@@ -1579,7 +1579,7 @@ the bond is kept in `/var/lib/bluetooth`.
 ```
 sudo systemctl disable --now sloth-va
 bluetoothctl devices Paired                       # then, per Victron device:
-bluetoothctl remove c7:fe:23:b1:1c:5f             # drops the bond
+bluetoothctl remove 00:00:5e:00:53:01             # drops the bond
 sudo cp -a /etc/bluetooth/main.conf.bak-YYYY-MM-DD /etc/bluetooth/main.conf
 sudo systemctl stop bluetooth && sudo systemctl mask bluetooth.service
 sudo systemctl enable --now sloth-ble-scan        # back to §7's passive scan on hci0
@@ -1627,7 +1627,7 @@ once at startup, and with no known SDR there it does not start a file
 on USB at startup …`), and their `source_status` rows read
 `not_installed` ("no SDR attached" on slothweb's health page), never
 down, so `SENSOR_SOURCE_DOWN` stays quiet. A GPS-only host such as
-W9FJC keeps `--gps`; `--adsb sbs://` / `beast://` and `--victron` are
+sensor A keeps `--gps`; `--adsb sbs://` / `beast://` and `--victron` are
 never trimmed. **A decoder file written recently is kept anyway**
 (owner, 2026-11-18): Dire Wolf on a sound-card TNC, readsb net-only
 writing `aircraft.json` from another machine's receiver, or rtl_433 fed
@@ -2044,8 +2044,8 @@ from:
    `sloth-migrate-sensor --with-slothweb` reads the unit from the
    checkout `SLOTH_MESH_SRC` names (§4.3).
 3. **sloth-comintd**, optional, from a sloth-comint checkout, only
-   with the owner's word on a live host (#236 leaves W9FJC and
-   beta-site as they are): `make && make db`, `sudo make install`, the
+   with the owner's word on a live host (#236 leaves sensor A and
+   sensor B as they are): `make && make db`, `sudo make install`, the
    database and pack into `/var/lib/sloth-comint` (its README,
    "Install"), `sudo systemd-sysusers && sudo systemctl enable --now
    sloth-comintd`. Then, to have the dashboard ask it, add `--comintd

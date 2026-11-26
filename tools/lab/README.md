@@ -1,7 +1,7 @@
 # tools/lab — the #199 bench helpers
 
-Two scripts for the bench in issue #199: w9fjc (dev, Kali) attacks the test
-AP we own, beta-site (production) is the sensor under test.
+Two scripts for the bench in issue #199: sensor A (dev, Kali) attacks the test
+AP we own, sensor B (production) is the sensor under test.
 
 ## Hard rules (#199, restated)
 
@@ -9,9 +9,9 @@ Transmit only at equipment we own: the test AP (`sloth-lab`) and our own
 clients, never a neighbour's SSID, BSSID or station. Lowest transmit power,
 60 s or less per flood or KARMA run, and no deauthentication or
 disassociation frames outside the RF shield bag. Before each session open a
-slothweb incident on beta-site filtered on the attacker adapter's MAC and the
+slothweb incident on sensor B filtered on the attacker adapter's MAC and the
 session window, and close it afterwards as `known`. The attacker adapter stays
-out of sloth's capture on w9fjc; check `iw dev` before each session.
+out of sloth's capture on sensor A; check `iw dev` before each session.
 Neither script transmits: `lab_capture.sh` only listens, `expect.sh` only reads.
 
 ## lab_capture.sh
@@ -52,7 +52,7 @@ When `ethtool -i` reports no firmware, take it from `dmesg` and pass `--firmware
   "schema": "sloth-lab-capture/1",
   "ruling": "plan #145 ruling 2",
   "test": "L2",
-  "host": "w9fjc",
+  "host": "sensor-a",
   "interface": {"name": "wlan2", "ifindex": 7, "mac": "00:c0:ca:..."},
   "hardware": {"model": "Alfa AWUS036ACM", "model_source": "operator",
                "chipset": "MT7612U", "chipset_source": "usb-id",
@@ -83,11 +83,11 @@ tools/lab/expect.sh http://192.0.2.10:8080 12 L3
 ```
 
 Reads `/api/alerts?incident=N` (every page) and `/api/frrs/incidents?id=N` on
-beta-site's slothweb, takes the alert types in either, and prints PASS/FAIL per
+sensor B's slothweb, takes the alert types in either, and prints PASS/FAIL per
 type the matrix row expects, then every type it did not expect. The address is
 a literal IP and port; `--from-loopback` binds curl to 127.0.0.1 when run on the
 sensor against its own address. Exit 0 PASS, 1 FAIL, 2 usage or fetch error,
-3 not judged by alerts (L7 is judged by w9fjc's listener, L8's rotation hints
+3 not judged by alerts (L7 is judged by sensor A's listener, L8's rotation hints
 are estimates).
 
 | Test | Expected (from #199) |

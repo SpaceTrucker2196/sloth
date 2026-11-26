@@ -98,7 +98,7 @@ counter, ring, parser or detector sees it.
 
 ### The window
 
-Measured on beta-site, 2026-11-16: three RTL8821AU adapters
+Measured on sensor B, 2026-11-16: three RTL8821AU adapters
 (`rtw88_8821au`) on one hub, 8 s of capture on each at once, 657 frames
 that two of the radios both delivered. The capture timestamps of the two
 copies differed by at most 78 µs (median 4 to 27 µs by pair). The
@@ -148,7 +148,7 @@ What stays radio 0's, on purpose:
 What is shared: every table. An AP or station row does not record which
 radio heard it. A signal level in a row is the level of the newest frame
 from whichever radio delivered it, and two radios do not read alike (the
-beta-site pair sat 7.5 dB apart). Under `--hop` each channel belongs to
+sensor B pair sat 7.5 dB apart). Under `--hop` each channel belongs to
 one radio, so an AP's beacons come from one radio; a station that probes
 on every channel is heard by all of them, and its RSSI history mixes
 their readings.

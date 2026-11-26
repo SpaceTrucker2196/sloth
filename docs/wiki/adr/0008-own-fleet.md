@@ -15,7 +15,7 @@ client MAC, because one operator's sightings would otherwise become
 another operator's location history of strangers.
 
 Issue #192 is a different case. One operator runs several sensors (in
-2026-11: W9FJC with GPS and Wi-Fi, beta-site with ADS-B), and the inferences that
+2026-11: sensor A with GPS and Wi-Fi, sensor B with ADS-B), and the inferences that
 justify a second location need exactly the fields ADR 0006 removes:
 
 - a client MAC heard at both sites (a device that follows the operator);

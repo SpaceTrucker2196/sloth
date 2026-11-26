@@ -67,7 +67,7 @@ The dwell is measured where it always was: `coverage_interval`'s per-channel `ms
 
 **The floor, per radio.** A sum alone would let one radio give nearly all its time to cues while the others give none, and that radio's other channels would fall toward zero. So each radio also keeps its rotation with cues at most twice as long as without: Σ 4 × plan(cued) + Σ plan(uncued) ≤ 2 × Σ plan(all), which is 2 × Σ plan(cued) ≤ Σ plan(uncued) (`chanhop_cue_floor_ok()`). An uncued channel's own dwell is unchanged, so **every uncued channel keeps at least half of the share it would have with no cue** - never zero.
 
-**One radio** is the case Beta-Site runs. There the cap is "cued plans ≤ uncued plans", the rule first built, and it is stricter than the floor, so nothing changed for it: with the default 11 channels at equal plans two cues fit (8 ≤ 9) and a third does not (12 > 8).
+**One radio** is the case sensor B runs. There the cap is "cued plans ≤ uncued plans", the rule first built, and it is stricter than the floor, so nothing changed for it: with the default 11 channels at equal plans two cues fit (8 ≤ 9) and a third does not (12 > 8).
 
 **Three radios on the default list** (shares of 4, 4 and 3): one cue fits on each radio by its floor (2 ≤ 3, 2 ≤ 2), at 4/7, 4/7 and 4/6 of their radios. Two together are 1.14 of the 1.5 the three radios allow; the third would make 1.81 and is refused `share_cap`. A second cue on one radio breaks its floor. So two cues run at once, about 38 % of the three radios' time. A radio of two channels or fewer cannot take a cue under its floor even alone: `share_small`, the layout's refusal and not load's, checked before the caps.
 

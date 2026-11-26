@@ -147,7 +147,7 @@ needs to see goes into the contract, additively.
   has libpcap 1.10, SQLite 3.45 and shellcheck 0.9; the reference host
   had libpcap 1.11 (which marks `pcap_set_*` and `pcap_setfilter`
   `warn_unused_result`, so `(void)` does not silence them, 9a5c52c),
-  SQLite 3.53 and shellcheck 0.11 (W9FJC has no shellcheck at all as of
+  SQLite 3.53 and shellcheck 0.11 (sensor A has no shellcheck at all as of
   2026-11-16, so CI's is the first lint of a shell edit made there). A warning that appears only on one
   side is still real on that side; the car box will be the newer one.
 

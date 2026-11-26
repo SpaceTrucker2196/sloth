@@ -507,7 +507,7 @@ value, so a pair the scorer had already declined still went CRIT at
 
 ### A weak label read off one beacon (#232, 2026-11-20)
 
-Three CRIT rows at 85 % in a day on the Beta-Site sensor, both pairs
+Three CRIT rows at 85 % in a day on sensor B, both pairs
 dual-band car hotspots: locally administered BSSIDs differing only in
 the last octet, one SSID, opposite bands. Each `WEP` side was a single
 far beacon — ch149, -86 dBm, `frame_count 1` — with the Privacy bit set

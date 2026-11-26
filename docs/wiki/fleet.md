@@ -7,7 +7,7 @@ type: reference
 # Fleet: the owner's sensors, pulled over the tailnet
 
 **Summary**: one operator running several sloth sensors (in 2026-11
-W9FJC with GPS and Wi-Fi, beta-site with ADS-B) can let their
+sensor A with GPS and Wi-Fi, sensor B with ADS-B) can let their
 slothwebs share what each has seen, under [ADR 0008](adr/0008-own-fleet.md)
 as narrowed by [ADR 0009](adr/0009-fleet-monitor-only.md) (the owner's
 hard rule of 2026-11-12): everything the radios heard in monitor mode
@@ -410,7 +410,7 @@ the next pull, not again in the same one.
 
 Alerts need one more step. The reader takes its keys from the newest
 20,000 rows of the range (`WEB_SDB_ALERT_SCAN`), and on a busy sensor
-one finding's incidents fill that long before the cap: on W9FJC
+one finding's incidents fill that long before the cap: on sensor A
 (2026-11-11) the newest 20,000 of 364,191 incidents were 955 of 17,988
 keys, so the first answer looked whole at 955. When the scan does not
 reach the range's floor, the export now marks `alert` cut and its
@@ -519,7 +519,7 @@ names a channel (sloth's choice; across 2.4 GHz the term moves 0.2 dB).
 
 **The band.** One sigma, in quadrature: shadow fading, 6 dB for the
 assumed power, and 6 dB more for a receiver that is not calibrated (its
-antenna and receive chain unknown: W9FJC's 9 dBi panel is such a
+antenna and receive chain unknown: sensor A's 9 dBi panel is such a
 term). At 2.4 GHz that is 11.7 dB uncalibrated, a factor of 2.6 in
 distance each way, and 10 dB calibrated, 2.3. A "17 m" range is 7-38 m.
 
@@ -586,7 +586,7 @@ A site with no other within 2 km shares no emitter and is not paired
 (`too_far`). Metres are quantised as sloth quantises a third party's
 proximity (0.5 m below 10 m, 1 m below 100 m, 10 m above).
 
-**What it is worth.** At W9FJC and beta-site, 16.8 m apart, a band of
+**What it is worth.** At sensor A and sensor B, 16.8 m apart, a band of
 +/-15 to 30 m is wider than the baseline, and the row says `coarse`:
 the candidates are not a position, only a side. What two sensors that
 close can say honestly is which one an emitter is nearer, when the
@@ -595,13 +595,13 @@ far; a point needs more sites, a longer
 baseline, or both. Three sites give a least-squares fix whose residual
 shows how far the ranges disagree.
 
-The live link (measured 2026-11-11): W9FJC's monitor hears beta-site's
+The live link (measured 2026-11-11): sensor A's monitor hears sensor B's
 managed card at -52 dBm on probe requests, an offset of -7 dB (about its
-9 dBi antenna); beta-site hears W9FJC's card at -84 to -92 dBm, about
-+29 dB, past the bound, so beta-site stays uncalibrated. Path loss is
+9 dBi antenna); sensor B hears sensor A's card at -84 to -92 dBm, about
++29 dB, past the bound, so sensor B stays uncalibrated. Path loss is
 reciprocal, so a 36 dB asymmetry between the two directions is the two
-cards' powers and the two receivers' gains, not the path; beta-site
-reads APs both sites hear about 20 dB weaker than W9FJC does.
+cards' powers and the two receivers' gains, not the path; sensor B
+reads APs both sites hear about 20 dB weaker than sensor A does.
 
 **`GET /api/fleet/locate?kind=wifi|ap|ble&limit=N`** (50, 1..200; GET
 only): the newest 5,000 peer rows of the kind with a reading, grouped by
@@ -630,7 +630,7 @@ sensor's own managed card, whose `devices` row comes from ARP, has a
 signal at the other site. In the export the probe's reading travels
 only when it is within 120 s of the row's `last_seen` and not on 5 or
 6 GHz: the importer takes a row's `rssi` as of its `last_seen` and,
-with no channel, at 2.4 GHz. On W9FJC (2026-11-11) every one of the 24
+with no channel, at 2.4 GHz. On sensor A (2026-11-11) every one of the 24
 client rows this applied to had an ARP-moved `last_seen` newer than its
 probe by more than 120 s (7 by a day), and 10 of the probes were on
 5 GHz. Locally the probe's own time and channel are used: a reading on
@@ -866,14 +866,14 @@ time can put the peer's `generated` anywhere within it, so a slow pull
 `generated`'s whole second. A step in the offset with the skew still is
 the receiver; a skew that moved is a host clock, but the skew is a
 difference and does not say whose: this site's or the peer's. Where a
-host is disciplined from its own receiver (W9FJC), that receiver's time
+host is disciplined from its own receiver (sensor A), that receiver's time
 stepping moves the host after it, so its offset may step only until
 the host has followed, and the step stays as every peer's skew moving;
 the `time` verdict may then name no site, and the skews are the
 evidence. Sub-second steps are
 not seen: in-band GNSS time over USB without PPS is good to "not much
 better than 1 second" (the HOWTO), and `generated` is whole seconds. A
-patient pull of a GNSS-disciplined clock (W9FJC's is, through ntpsec)
+patient pull of a GNSS-disciplined clock (sensor A's is, through ntpsec)
 moves the skew slowly and the offset not at all; the skew's median is
 an hour, so a drag slower than that is not caught here either, as the
 time research says of any jump test.
@@ -906,17 +906,17 @@ indicator, whether its incidents are offered), a gauge per pair of sites
 distance now, drawn in the warning colour outside it) and the events
 with their verdicts and the other sites, each row's basis on hover.
 
-**At W9FJC and beta-site** (measured 2026-11-11, before this build ran
+**At sensor A and sensor B** (measured 2026-11-11, before this build ran
 there): both u-blox 7 through gpsd, static, the fixes 13.9 m apart at
 eph 6.1 and 5.4 m (a bound of 34 m), the headers' positions 14.8 m. In
-the week W9FJC's `sloth.db` holds one GNSS_JAMMING incident (07:58 to
-08:05 MST on 11-11) and one GNSS_TIME_JUMP (11-05); beta-site's alert
+the week sensor A's `sloth.db` holds one GNSS_JAMMING incident (07:58 to
+08:05 MST on 11-11) and one GNSS_TIME_JUMP (11-05); sensor B's alert
 page shows eight GNSS_JAMMING incidents from 11-07 to 23:03 MST on
-11-10. None of beta's comes within 120 s of W9FJC's, so on the raw times
+11-10. None of sensor B's comes within 120 s of sensor A's, so on the raw times
 each is single-site; with no coverage recorded before the build, the
 route reads them undetermined until the samples cover a new one.
-W9FJC's clock is disciplined from its receiver (ntpsec, SHM preferred);
-beta-site's is ntpsec over the network pool only (its selected source a
+Sensor A's clock is disciplined from its receiver (ntpsec, SHM preferred);
+sensor B's is ntpsec over the network pool only (its selected source a
 stratum-1 PPS server, no refclock), so the two clocks are independent
 and the skew compares a GNSS-steered clock with a network one.
 
@@ -985,7 +985,7 @@ gone before the cut is never fetched. A cut answer makes its site
 undetermined (`cut`) for the times up to it plus the heartbeat, which
 the two-hour list leaves behind on its own, and never `unconfirmed`, so
 the I7 rule that an incomplete read never yields a silence holds without
-a backfill. At beta-site's measured rate (1,047 aircraft in 24 h) even
+a backfill. At sensor B's measured rate (1,047 aircraft in 24 h) even
 the first pull's six hours (about 260 at that rate) is well under the
 1,000 cap; a cut is a busier site or a read out of `sloth.db`'s budget.
 
@@ -1049,7 +1049,7 @@ seen to reach; 10 positions a sector over 24 h keeps one lucky decode
 from defining a sector, and the median of hourly reaches keeps one
 stray decode or a ducting evening from stretching it; two other
 aircraft is the least evidence B was receiving; 30-degree sectors are
-coarse enough to fill in a day at beta-site's rate; no antenna height
+coarse enough to fill in a day at sensor B's rate; no antenna height
 because sloth knows none and a credited one only lengthens the horizon.
 Altitude is barometric (pressure altitude), which a deep low can put
 some hundreds of feet above the true height; the 0.8 on the horizon
@@ -1089,13 +1089,13 @@ basis on hover) and each other receiver's state. With one receiver the
 note says every aircraft is undetermined until a second site decodes
 ADS-B.
 
-**At W9FJC and beta-site** (measured 2026-11-11 from beta-site's own
+**At sensor A and sensor B** (measured 2026-11-11 from sensor B's own
 `/api/adsb/seen` and `/api/adsb/aircraft`, before this build ran there):
-beta-site's readsb heard 1,047 aircraft in 24 h, 867 of them with a
+Sensor B's readsb heard 1,047 aircraft in 24 h, 867 of them with a
 position, 8,327 positions in all; the farthest 80.6 km (bearing
 240-270), the sectors from north clockwise 37.2, 43.1, 45.5, 68.5, 78.4,
 58.2, 49.7, 64.5, 80.6, 60.3, 32.2 and 22.2 km, every sector above 190
-positions. W9FJC has no ADS-B receiver (owner ruling: GPS, Wi-Fi and BLE
+positions. Sensor A has no ADS-B receiver (owner ruling: GPS, Wi-Fi and BLE
 only), so the fleet has one receiver and every aircraft reads
 `undetermined` (`single_receiver`): the cross-check is built and tested
 on synthetic two-receiver data and is honestly inert until a second
@@ -1131,12 +1131,12 @@ finding per peer and check, not applicable with `reason`
 are not in `sloth.db` or the stream, so slothweb takes the same two
 flags (repeatable, at most 16 of
 each; an SSID 1 to 32 octets with no control character, a BSSID six hex
-octets) and names them on stderr. On 2026-11-11 W9FJC's sloth runs with
-`--my-ssid CeilingCatHD --my-bssid 28:25:5f:19:0e:1c` and beta-site's
+octets) and names them on stderr. On 2026-11-11 sensor A's sloth runs with
+`--my-ssid ExampleNet --my-bssid 00:00:5e:00:53:1c` and sensor B's
 names none; neither slothweb is given them yet, so the route answers
 `configure` with how to, and every class that needs them is empty until
-they are. List every BSSID of the network (each band and VAP): W9FJC
-hears CeilingCatHD from `..:0e:14`, `..:0e:18` and `..:0e:1c`, and the
+they are. List every BSSID of the network (each band and VAP): sensor A
+hears ExampleNet from `..:53:14`, `..:53:18` and `..:53:1c`, and the
 two unnamed are reported as the owner's own AP heard elsewhere ("not
 named by --my-bssid") rather than as a foreign one.
 
@@ -1268,7 +1268,7 @@ deauth taint, an attacker-tool OUI), and slothweb keeps that in memory
 only (`web_chain.h`: 64 pairs, since slothweb started), so after a
 restart, or for a pair sloth never attributed, both halves are
 `TWIN_UNATTRIBUTED` and neither counts toward I4. `KARMA_AP` fires on
-legitimate APs as well (W9FJC's own `..:0e:1c` among them on
+legitimate APs as well (sensor A's own `..:53:1c` among them on
 2026-11-11): only `--my-bssid` on slothweb (and a triage verdict of
 known, false or noise at any site) keeps an own AP out of I4, so name
 every own BSSID. The both-sites rule and the distance judgement do the
@@ -1278,17 +1278,17 @@ holds the 512 most recently beaconing BSSIDs since slothweb started
 none. Stations carry no fingerprint member: sloth holds no attack alert
 keyed by a client at a field the reader can match.
 
-**On the live fleet** (2026-11-11, this build over copies of W9FJC's
-sloth.db and slothweb.db, given W9FJC's own network): beta-site (an I7
-build, so `offered` false) held 467 probe rows for CeilingCatHD, 452 of
-them randomised; the other 15 were I2 findings at beta-site, one
+**On the live fleet** (2026-11-11, this build over copies of sensor A's
+sloth.db and slothweb.db, given sensor A's own network): sensor B (an I7
+build, so `offered` false) held 467 probe rows for ExampleNet, 452 of
+them randomised; the other 15 were I2 findings at sensor B, one
 exonerated (triaged known), and under the review's rule (derived, not
 re-measured) the 14 others are not applicable, `co_located`, since the
-sites are 16.8 m apart; `..:0e:1c`, `..:0e:14` and `..:0e:18` heard
-at beta-site are three I3 `own_bssid_elsewhere`, not applicable (16.8 m
-apart); no I4 (beta-site sends no fingerprint until it runs this build)
+sites are 16.8 m apart; `..:53:1c`, `..:53:14` and `..:53:18` heard
+at sensor B are three I3 `own_bssid_elsewhere`, not applicable (16.8 m
+apart); no I4 (sensor B sends no fingerprint until it runs this build)
 and no I8 (no address triaged known at one site and incident at the
-other). W9FJC's export with `ident=1` sent 2 `own_net` lines and 1,000
+other). Sensor A's export with `ident=1` sent 2 `own_net` lines and 1,000
 ap lines, 246 of them with `attacks` (190 `EVIL_TWIN`, 25 `KARMA_AP`, 31
 both) before the review split `EVIL_TWIN` by attribution; over copies,
 with no stream and so no `twin_episode`, every one of those 221
@@ -1319,7 +1319,7 @@ sloth-mesh's `README.md`).
   site asks with `fleet=0`, which is the route's answer exactly as it
   was before.
 - Clicking a grey row opens the drawer with what each host reported and
-  the hosts that saw it by name ("seen at beta-site"), none of this
+  the hosts that saw it by name ("seen at sensor B"), none of this
   site's fields.
 - Hybrid only: a peer's row carries no capture path, so under Monitor or
   Local nothing is merged.
