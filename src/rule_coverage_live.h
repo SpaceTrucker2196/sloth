@@ -101,6 +101,8 @@ int cov_live_get(alert_type_t t, cov_status_t *st, cov_reason_t *why);
  * first derivation. Any pointer may be NULL. */
 void cov_live_counts(int *observable, int *partly, int *blind);
 const cov_env_t *cov_live_env(void);
+/* Which daemon this is (cov_live_set_side()). */
+cov_daemon_t cov_live_daemon(void);
 
 /* The environment the source rows give, for tests: every input the
  * rows of `sn` answer for. */

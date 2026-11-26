@@ -18,12 +18,12 @@ type: reference
 
 | FM 2-0 function | Meaning in the manual | In sloth |
 |---|---|---|
-| Plan | identify requirements and the means to satisfy them (4-4) | site questions (#244), designated networks, roster, hop plan |
+| Plan | identify requirements and the means to satisfy them (4-4) | site questions (today, #244: [[site-questions]], the seven defaults or `--questions`), designated networks, roster, hop plan |
 | Prepare | verify that procedures and equipment are in place, rehearse (4-8 to 4-11) | `--preflight` (#247), installation record (sloth-mesh #19) |
 | Collect | collect and report in response to tasking; report without delay (4-18, 4-25) | capture, decode once, preliminary findings (#245), passive cueing (#248) |
 | Process | convert data into a form for analysis; correlate (4-28) | parsers, state tables, JSONL, `sloth.db` |
 | Produce | evaluate and combine into products that are timely, relevant, accurate, predictive, usable (4-31, 4-32) | alert engine, quality fields (#246), reports (#243, #249, #250) |
-| Analyze | find what pertains to the questions (4-35 to 4-38) | baseline and drift (#23), question status (#244), the alert rules |
+| Analyze | find what pertains to the questions (4-35 to 4-38) | baseline and drift (#23), question status (today, #244: `question_status`), the alert rules |
 | Disseminate | right information, right person, right time; more than one means (4-39 to 4-47, 8-32) | data socket, dashboard, four delivery lanes (sloth-mesh #18) |
 | Assess | continuous; are the questions answered, is collection effective, is there deception and denial (4-48 to 4-51, 8-34, 8-35) | coverage assessment and `SENSOR_SUPPRESSED` (#242), reader feedback (sloth-mesh #17) |
 
@@ -63,7 +63,7 @@ Rule: a report is not held to make it better. FM 2-0 4-25: "must not delay repor
 |---|---|
 | Coverage record: time on each channel and band, frames by type, sources up or down | #242 |
 | Rule status: `observable`, `partly`, `blind`, with a reason | #242 |
-| Question status: `finding`, `no finding`, `not observable` | #244 |
+| Question status: `finding`, `no_finding`, `no_finding_partly`, `not_observable`, `not_assessed` | today (#244: `question_status` on change, every tick's evaluation; [[site-questions]] § 4) |
 | `SENSOR_SUPPRESSED` check | #242 |
 | `sensor_health` record (change-only) | today |
 | Dashboard minute pass; refresh of the serving table | today (minute pass); serving table in sloth-mesh #13 |
@@ -114,7 +114,7 @@ Rule: a quiet site and a blind sensor must never look the same. Each "no finding
 
 | Step | Status |
 |---|---|
-| Each new alert type has a cited source, a question, declared inputs and a value period | research corpus test today; question, inputs and value period #242, #244, #245 |
+| Each new alert type has a cited source, a question, declared inputs and a value period | research corpus test today; a question or a stated reason today (#244, `tests/test_questions.c`); inputs and value period #242, #245 |
 | Replay goldens unchanged, or the diff explained | today (`make replay-golden`) |
 | Reader feedback and withdrawal rates reviewed for each changed rule | sloth-mesh #17, #245 |
 | Intel pack pinned and named in `sensor_health` | today (#184 Stage 2, #231: `jsonl_intel_pack()` on every `sensor_health` record) |

@@ -15,6 +15,7 @@
 #include "sensor_health.h"
 #include "sys_status.h"
 #include "rule_coverage_live.h"
+#include "questions_live.h"
 #include "libver.h"
 #include "db.h"
 
@@ -767,5 +768,6 @@ void jsonl_emit_state_rf(sloth_state_t *s) {
     jsonl_emit_victron(s);
     sys_status_emit(s);
     cov_live_emit();
+    q_emit(s);
     jsonl_emit_sensor_health_rf(s);
 }

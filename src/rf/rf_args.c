@@ -10,6 +10,7 @@
 #include "observe.h"
 #include "tune.h"
 #include "alert_lifecycle.h"
+#include "questions_live.h"
 #include "jsonl_chain.h"
 
 /* src/rf/rf_args.h. */
@@ -25,6 +26,7 @@ void rf_usage(FILE *fp, const char *argv0) {
             "       [--data-socket [SPEC]] [--data-socket-allow-remote]\n"
             "       [--strict] [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-preliminary] [--value-period KIND=SECS ...]\n"
+            "       [--questions PATH]\n"
             "       [--user NAME] [--no-privdrop] [--ticks N]\n"
             "       [--help] [--version] [--print-schema]\n"
             "\n"
@@ -131,6 +133,11 @@ void rf_usage(FILE *fp, const char *argv0) {
             "                     at which it lapses (1..2592000; default 300\n"
             "                     for every kind). Repeatable. An unknown KIND\n"
             "                     exits 2.\n"
+            "  --questions PATH   the operator's site questions (#244), one\n"
+            "                     per line: id|priority|question|decision|\n"
+            "                     KIND,KIND. Replaces the seven defaults. An\n"
+            "                     unknown kind or a duplicate id exits 2\n"
+            "                     naming the line.\n"
             "  --tune-list        print every knob, then exit.\n"
             "  --user NAME        account a root run drops to once a serial\n"
             "                     --gps is open (default: sloth, when that\n"
@@ -219,6 +226,9 @@ int rf_args_parse(int argc, char **argv, rf_args_t *a) {
         } else if (!strcmp(argv[i], "--value-period")) {
             if (daemon_flag_value_period(has ? argv[i + 1] : NULL) != 0)
                 return 2;
+            i++;
+        } else if (!strcmp(argv[i], "--questions")) {
+            if (q_live_flag(has ? argv[i + 1] : NULL) != 0) return 2;
             i++;
         } else if (!strcmp(argv[i], "--tune-list")) {
             tune_print_list(stdout);

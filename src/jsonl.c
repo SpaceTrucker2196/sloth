@@ -9,6 +9,7 @@
 #include "jsonl.h"
 #include "jsonl_internal.h"
 #include "exposure.h"
+#include "questions_live.h"
 #include "gps.h"
 #include "position_track.h"
 #include "sloth_clock.h"
@@ -2890,6 +2891,9 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* What the site reveals, by group (#243, JSONL 2.11.0): one row per
      * group on change, kinds and counts only. */
     exp_emit                     (s);
+    /* The site questions' answers (#244, JSONL 2.17.0): one row per
+     * question on change. */
+    q_emit                       (s);
     /* The operator's designated networks: change-only, a heartbeat. */
     jsonl_emit_ownership         ();
     /* The KARMA and key-harvest evidence tables (JSONL 1.3.0). */

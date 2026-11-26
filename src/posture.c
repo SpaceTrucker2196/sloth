@@ -26,6 +26,7 @@
 #include "wifi_snapshot.h"
 #include "alerts/twin_field.h"
 #include "exposure.h"
+#include "questions_live.h"
 #include "jsonl.h"
 
 /* An IP-only camera device record (#106 round 2) has an all-zero MAC;
@@ -138,6 +139,9 @@ static int render_md(FILE *out, const sloth_state_t *s,
     /* What the designated site reveals, grouped by what an observer
      * learns (#243), each group with its rules' coverage beside it. */
     exp_report_md(out, s);
+    /* The site questions and their answers (#244), after the
+     * coverage and the exposure groups they are read against. */
+    q_report_md(out, s);
 
     /* Cleartext credential exposures */
     if (s->cleartext_cred_count > 0) {
@@ -598,6 +602,8 @@ static int render_json(FILE *out, const sloth_state_t *s,
     /* #243: appended after the members that existed before it, and
      * before `findings` and `coverage`, which stays the last member. */
     exp_report_json(out, s);
+    /* #244: after `exposure`, before `findings` and `coverage`. */
+    q_report_json(out, s);
     /* #246: before `coverage`, which stays the last member. */
     posture_findings_json(out, s);
     posture_coverage_json(out, s);

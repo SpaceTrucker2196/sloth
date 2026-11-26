@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: issue #243 (from #241 item 6); FM 2-0 (2004) 1-30 (a commander lists the information to protect) and 1-111 (counterintelligence finds how an observer could collect it); `include/sloth_exposure.def` (the table); `src/exposure.c`; `docs/wiki/alert-remediation.md` (each line's fix); `tests/test_exposure.c`.
 
-**Last updated**: 2026-11-24 (#243 review: § 2 and § 6, a twin beaconing a designated SSID is not the site once BSSIDs are designated, a raw SSID is matched only where `SAE_PSK_REGRESSION` writes it, a camera is tied by its alert's `match_ip`; § 3's example is the test's sensor, not sensor B; § 4, the evidence fallback), 2026-11-24 (#243: first version)
+**Last updated**: 2026-11-25 (#244: § 1, the grouped kinds are site question Q5's indicators), 2026-11-24 (#243 review: § 2 and § 6, a twin beaconing a designated SSID is not the site once BSSIDs are designated, a raw SSID is matched only where `SAE_PSK_REGRESSION` writes it, a camera is tied by its alert's `match_ip`; § 3's example is the test's sensor, not sensor B; § 4, the evidence fallback), 2026-11-24 (#243: first version)
 
 ## 1. The groups
 
@@ -25,7 +25,7 @@ type: reference
 | 5 | Weak encryption lanes a device can be moved to (`weak_lanes`) | `WPA_DOWNGRADE`, `SAE_PSK_SPLIT`, `SAE_PSK_REGRESSION`, `SSID_CONFUSION`, `MLE_CROSS_LINK_CIPHER_DOWNGRADE` | a designated network offering, beside its primary posture, a weaker one (PSK beside SAE, MFP optional, TKIP, a weaker link of a Wi-Fi 7 MLD): the lane an attacker would move a client to |
 | 6 | Devices in setup mode (`setup_mode`) | `OPEN_SETUP_AP`, `CAM_SETUP_SSID`, `CAM_SETUP_OUI` | an unconfigured device's open setup network, by name or by a camera vendor's address block |
 
-`tests/test_exposure.c :: test_named_groups` writes this list out and holds the table to it, so a change here and there go together.
+`tests/test_exposure.c :: test_named_groups` writes this list out and holds the table to it, so a change here and there go together. The same kinds, no more and no fewer, are the indicators of the default site question Q5, "Is my site revealing information?" ([[site-questions]]); `tests/test_questions.c :: test_q5_is_the_exposure_set` holds the two tables equal.
 
 ## 2. Scope: the operator's own site
 

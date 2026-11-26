@@ -9,6 +9,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "alert_lifecycle.h"
+#include "questions_live.h"
 #include "tui.h"
 #include "wifi_chanhop.h"
 #include "chancue.h"       /* --cue (#248): the limits it announces */
@@ -374,6 +375,7 @@ static void print_usage(const char *argv0) {
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-preliminary] [--value-period KIND=SECS ...]\n"
+            "       [--questions PATH]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
             "       [--wps-pin-brute-cycles N] [--wps-lockout-cycles N]\n"
             "       [--wps-pbc-concurrent N]\n"
@@ -558,6 +560,11 @@ static void print_usage(const char *argv0) {
             "                     for every kind). Repeatable. An unknown KIND\n"
             "                     or a standing condition (it never lapses)\n"
             "                     exits 2.\n"
+            "  --questions PATH   the operator's site questions (#244), one\n"
+            "                     per line: id|priority|question|decision|\n"
+            "                     KIND,KIND. Replaces the seven defaults. An\n"
+            "                     unknown kind or a duplicate id exits 2\n"
+            "                     naming the line.\n"
             "  --tune-list        print every knob with default, current\n"
             "                     value and unit, then exit.\n"
             "  --allow-active     opt in to the two active behaviours sloth has:\n"
@@ -920,13 +927,15 @@ static void print_usage(const char *argv0) {
             "                     coverage (which rules could fire, and why\n"
             "                     not), the quality of each finding, what\n"
             "                     the designated site reveals (by group,\n"
-            "                     with each group's rule coverage),\n"
-            "                     cleartext credential exposures, and\n"
+            "                     with each group's rule coverage), the\n"
+            "                     site questions' answers, cleartext\n"
+            "                     credential exposures, and\n"
             "                     high-risk devices.\n"
             "  --report-json FILE.json\n"
             "                     same rollup as --report, structured for\n"
             "                     machine consumption / SIEM diff; the\n"
             "                     site's exposure is \"exposure\", the\n"
+            "                     questions' answers \"questions\", the\n"
             "                     finding quality is \"findings\" and the\n"
             "                     coverage its last member, \"coverage\".\n"
             "  --report-interval SECS\n"
@@ -1197,6 +1206,9 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--value-period")) {
             if (daemon_flag_value_period(i + 1 < argc ? argv[i + 1] : NULL) != 0)
                 return 2;
+            i++;
+        } else if (!strcmp(argv[i], "--questions")) {
+            if (q_live_flag(i + 1 < argc ? argv[i + 1] : NULL) != 0) return 2;
             i++;
         } else if (!strcmp(argv[i], "--tune-list")) {
             tune_print_list(stdout);

@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: sloth raises about a hundred alert kinds and had no list of what the operator wants to know. A site question is one question in plain words, the decision it supports, a priority, and the alert kinds that are its indicators. sloth ships seven default questions; each alert kind is an indicator of one or more of them, or is marked "no question" with a reason. Receive-only: a question's answer is derived from findings and coverage figures sloth already holds.
 
-**Sources**: issue #244 (from #241 item 1) and its owner rulings of 2026-11-25; FM 2-0 (2004) figure 1-2 (priority question, specific questions, indicators, collection tasks), 1-34 (a priority question asks only one question and supports a decision) and 4-6 (clear requirements preclude being overwhelmed by too much information), as quoted in the issue; `include/sloth_questions.def` (the questions), `include/sloth_question_map.def` (the indicators); `src/questions.h`, `src/questions.c`; `tests/test_questions.c`; [[coverage-assessment]] (the status every answer carries).
+**Sources**: issue #244 (from #241 item 1) and its owner rulings of 2026-11-25; FM 2-0 (2004) figure 1-2 (priority question, specific questions, indicators, collection tasks), 1-34 (a priority question asks only one question and supports a decision) and 4-6 (clear requirements preclude being overwhelmed by too much information), as quoted in the issue; `include/sloth_questions.def` (the questions), `include/sloth_question_map.def` (the indicators); `src/questions.h`, `src/questions.c` (the tables, the file, the status), `src/questions_live.h`, `src/questions_live.c` (the record and the report section); `tests/test_questions.c`; [[coverage-assessment]] (the status every answer carries).
 
-**Last updated**: 2026-11-25 (#244: the page, § 4 the status, § 5 the file format)
+**Last updated**: 2026-11-25 (#244: the page, § 4 the status, § 5 the file format, § 6 the record and the report section)
 
 ## 1. The default questions
 
@@ -182,9 +182,20 @@ EYES|1|Can the sensor see?|Fix the sensor first.|NO_MONITOR_MODE,SENSOR_SOURCE_D
 - `id`: 1 to 15 of `A-Z a-z 0-9 _ -`, unique in the file.
 - `priority`: 1 (most urgent) to 9.
 - `question`, `decision`: non-empty, under 160 bytes each. Ask one question (FM 2-0 1-34).
-- the kinds: `include/sloth_alerts.def` names, comma-separated, at least one. A kind named twice counts once.
+- the kinds: `include/sloth_alerts.def` names (with or without `ALERT_TYPE_`, as `--value-period` takes them), comma-separated, at least one. A kind named twice counts once.
 
 The file is refused, and sloth exits 2 naming the line, for an unknown kind, a duplicate id, a field missing or out of range, more than 32 questions, no question at all, a line of 2048 bytes or more, a file over 64 KiB or one that is not text (`q_set_load()`, `q_set_parse()`; `tests/test_questions.c :: test_parse_refusals`).
+
+## 6. Where the answers go
+
+`src/questions_live.c` reads the daemon's alert snapshot and the coverage status it keeps ([[coverage-assessment]] § 4) each time it is asked:
+
+- **The `question_status` record** (JSONL 2.17.0, both daemons, [[jsonl-schema]]): one row per question the daemon answers, change-only with the 300 s heartbeat, keyed by the question's id. More observations of a finding already counted write nothing; a new finding, a changed status, reason or coverage count does.
+- **`--report` and `--report-json`** ([[posture-report]]): a "Site questions" section after "What this site reveals", the questions most urgent first (priority 1 first, then the set's order), each with its status, reason, indicator counts and decision, then the two limits of [[coverage-assessment]] § 5; `questions` in the JSON, after `exposure`.
+
+Both carry kinds, counts, status words and incident ids beside the operator's own question and decision text: never an address, a name, an SSID or an alert key, whichever capture a finding came from. sloth-mesh's fleet export writes only its own fixed line types, so neither travels ([ADR 0009](adr/0009-fleet-monitor-only.md)).
+
+The answer is derived each time from what the daemon holds now: a finding counts while its incident is open (300 s after its last evaluation it resolves), so `finding` turns back into a `no_finding` word when the incident closes.
 
 ## Related pages
 
@@ -192,3 +203,5 @@ The file is refused, and sloth exits 2 naming the line, for an unknown kind, a d
 - [[coverage-assessment]] — the observable / partly / blind status every answer carries
 - [[exposure-report]] — the groups Q5 is made of
 - [[alerts]] — the kinds
+- [[posture-report]] — the Site questions section
+- [[jsonl-schema]] — the `question_status` record

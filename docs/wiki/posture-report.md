@@ -100,6 +100,16 @@ announced as written.
   nothing designated it names `--my-ssid`, `--my-bssid`, `--known-mac`
   and `--known-macs` instead of listing the neighbourhood.
   [[exposure-report]].
+- **Site questions** (#244), after What this site reveals: each site
+  question (the seven defaults, or the operator's `--questions` file)
+  most urgent first, with its answer (`**Finding**: 1 open finding
+  (EVIL_TWIN); incident ...`, `**No finding**; indicators observable.`,
+  `**No finding**; indicators partly observable: hop.`, `**Not
+  observable**: no_source.`, or coverage not assessed), its indicators'
+  coverage counts and the decision it supports; a question none of
+  whose kinds this daemon raises is named as unanswered; then the two
+  limits of [[coverage-assessment]] § 5. Kinds and incident ids only.
+  [[site-questions]].
 - **Record integrity** (#251), the last section before the footer, only
   with `--jsonl-chain N` and `-o`: the `-o` file's chain head, `seq` and
   the SHA-256 of that chain record's line. Asking for it seals the
@@ -124,6 +134,15 @@ After `risky_devices` (and after `jsonl_chain` when the chain is on), before `fi
 "evidence","first_seen","last_seen","remedy"}]}]}`, the six groups in
 order. [[exposure-report]] § 4.
 
+### The JSON report's `questions` member
+
+After `exposure`, before `findings` (#244): `{"source","assessed",
+"items":[{"qid","priority","question","decision","status","why",
+"kinds"[,"observable","partly","blind"],"n_alerts","found","ids"}]}`,
+`source` `defaults` or the `--questions` path, the items most urgent
+first, the coverage counts only when `assessed`. The fields are the
+`question_status` record's ([[jsonl-schema]]). [[site-questions]] § 6.
+
 ### The JSON report's `findings` member
 
 Before `coverage` (#246): `[{"incident_id","title","sev"[,"complete"]
@@ -134,7 +153,7 @@ alerts.
 
 ### The JSON report's `coverage` member
 
-The last member of the object, after `risky_devices`, `jsonl_chain` (chain on only), `exposure` and `findings`;
+The last member of the object, after `risky_devices`, `jsonl_chain` (chain on only), `exposure`, `questions` and `findings`;
 every earlier key keeps its place.
 
 | Key | Content |
@@ -196,6 +215,7 @@ sign-off document."
 - [[sweep-session]] — the sweep report: a room against its baseline, with its coverage and limits, beside the posture report.
 - [[coverage-assessment]] — the Collection coverage section.
 - [[exposure-report]] — the What this site reveals section.
+- [[site-questions]] — the Site questions section.
 - [[record-integrity]] — the Record integrity section and `jsonl_chain`.
 - [`cleartext_cred` in the JSONL schema](jsonl-schema.md#cleartext_cred) —
   the "no password field, ever" rule.

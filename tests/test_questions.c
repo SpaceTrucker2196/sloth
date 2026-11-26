@@ -9,6 +9,14 @@
 #include "exposure.h"
 #include "rule_coverage_live.h"
 #include "alert_lifecycle.h"
+#include "questions_live.h"
+#include "sloth_clock.h"
+#include "fake_platform.h"
+#include "sys_status.h"
+#include "capture_side.h"
+#include "ownership.h"
+#include "jsonl.h"
+#include "posture.h"
 
 /*
  * Site questions (#244): the seven defaults
@@ -417,7 +425,8 @@ static void test_parse_good(void) {
     ASSERT_STR(set.q[2].id, "eyes");
     ASSERT_EQ(set.q[2].nkinds, 1);
     ASSERT_EQ(q_kind_by_name("SENSOR_SUPPRESSED"), (int)ALERT_TYPE_SENSOR_SUPPRESSED);
-    ASSERT_EQ(q_kind_by_name("ALERT_TYPE_EVIL_TWIN"), -1);
+    ASSERT_EQ(q_kind_by_name("ALERT_TYPE_EVIL_TWIN"), (int)ALERT_TYPE_EVIL_TWIN);
+    ASSERT_EQ(q_kind_by_name("ALERT_TYPE_"), -1);
     ASSERT_EQ(q_kind_by_name("evil_twin"), -1);
 }
 
@@ -467,7 +476,7 @@ static void test_parse_refusals(void) {
 }
 
 static void test_load_file(void) {
-    char path[512];
+    char path[512] = "";
     int fd = mkstemp(test_tmp_tpl(path, sizeof(path), "sloth_q_XXXXXX"));
     ASSERT(fd >= 0);
     if (fd < 0) return;
@@ -490,6 +499,258 @@ static void test_load_file(void) {
     ASSERT(contains(err, "cannot open: "));
 }
 
+
+/* ── the running half: report and record ───────────────────────────── */
+
+TEST_STATE(g_s);
+static uint64_t g_mono;
+static time_t   g_wall;
+static uint64_t pin_mono(void) { return g_mono; }
+static time_t   pin_wall(void) { return g_wall; }
+static char     g_buf[1 << 17];
+static char     g_path[512];
+
+static void begin(void) {
+    capture_side_install();
+    g_mono = 5000000;
+    g_wall = (time_t)1800000000;
+    sloth_clock_test_set(pin_mono, pin_wall);
+    fake_net_reset();
+    sys_status_reset();
+    cov_live_reset();
+    q_live_reset();
+    ownership_clear();
+    memset(&g_s, 0, sizeof(g_s));
+}
+
+static void end(void) {
+    jsonl_close();
+    fake_net_reset();
+    sys_status_reset();
+    cov_live_reset();
+    q_live_reset();
+    ownership_clear();
+    capture_side_install();
+    sloth_clock_test_set(NULL, NULL);
+}
+
+static void tick(void) {
+    g_mono += 1000;
+    g_wall += 1;
+    sys_status_poll(&g_s, g_wall, g_mono);
+    cov_live_poll(&g_s);
+}
+
+static void one_hopping_radio(void) {
+    static const int ch[] = { 1, 6, 11, 36, 40, 44, 48, 149, 153, 157, 161 };
+    snprintf(g_s.probe_iface, sizeof(g_s.probe_iface), "mon0");
+    g_s.mon_health.open = 1;
+    g_s.mon_health.running = 1;
+    g_s.mon_health.stale_secs = 0;
+    g_s.scan_chan_count = (int)(sizeof(ch) / sizeof(*ch));
+    for (int i = 0; i < g_s.scan_chan_count; i++) g_s.scan_chans[i] = ch[i];
+}
+
+static alert_t *seed(alert_type_t t, const char *id) {
+    alert_t *a = &g_s.alerts[g_s.alert_count++];
+    memset(a, 0, sizeof(*a));
+    a->type = t;
+    a->sev = ALERT_SEV_WARN;
+    snprintf(a->key, sizeof(a->key), "twin:02:11:22:33:44:55");
+    snprintf(a->title, sizeof(a->title), "HomeNet");
+    snprintf(a->incident_id, sizeof(a->incident_id), "%s", id);
+    return a;
+}
+
+static const char *md(void) {
+    FILE *fp = fmemopen(g_buf, sizeof(g_buf), "w");
+    if (!fp) { g_buf[0] = '\0'; return g_buf; }
+    posture_render_md(fp, &g_s, 1800000000, NULL);
+    fclose(fp);
+    return g_buf;
+}
+
+static const char *json(void) {
+    FILE *fp = fmemopen(g_buf, sizeof(g_buf), "w");
+    if (!fp) { g_buf[0] = '\0'; return g_buf; }
+    posture_render_json(fp, &g_s, 1800000000);
+    fclose(fp);
+    return g_buf;
+}
+
+static int count_of(const char *hay, const char *needle) {
+    int n = 0;
+    for (const char *p = hay; (p = strstr(p, needle)) != NULL; p += strlen(needle)) n++;
+    return n;
+}
+
+/* The section of the report, from its heading to the next "## ". */
+static char g_sec[1 << 15];
+static const char *qsection(const char *text) {
+    g_sec[0] = '\0';
+    const char *p = strstr(text, "## Site questions\n");
+    if (!p) return g_sec;
+    const char *e = strstr(p + 1, "\n## ");
+    size_t n = e ? (size_t)(e - p) : strlen(p);
+    if (n >= sizeof(g_sec)) n = sizeof(g_sec) - 1;
+    memcpy(g_sec, p, n);
+    g_sec[n] = '\0';
+    return g_sec;
+}
+
+static void test_report_not_assessed_with_a_finding(void) {
+    begin();
+    seed(ALERT_TYPE_EVIL_TWIN, "00000000000000e1");
+    const char *m = qsection(md());
+    ASSERT(contains(m, "The seven default questions, most urgent first."));
+    ASSERT(contains(m, "### Q1 (priority 1): Is a device impersonating one of my networks?\n\n"
+                       "**Finding**: 1 open finding (EVIL_TWIN); incident 00000000000000e1. "
+                       "Indicators: 16, not assessed. Decision: Warn users off the network "
+                       "and find the transmitter.\n"));
+    ASSERT(contains(m, "### Q3 (priority 1): Is a device collecting key material near my site?\n\n"
+                       "**No finding**; coverage not assessed: no status sample has been "
+                       "taken yet."));
+    /* Priority order: the four priority-1 questions in set order, then
+     * 2, then 3. */
+    const char *q1 = strstr(m, "### Q1 "), *q7 = strstr(m, "### Q7 "),
+               *q4 = strstr(m, "### Q4 "), *q6 = strstr(m, "### Q6 "),
+               *q5 = strstr(m, "### Q5 ");
+    ASSERT(q1 && q7 && q4 && q6 && q5);
+    if (q1 && q7 && q4 && q6 && q5) ASSERT(q1 < q7 && q7 < q4 && q4 < q6 && q6 < q5);
+    for (int i = 0; i < COV_LIMIT_COUNT; i++) ASSERT(contains(m, cov_limits[i]));
+    /* Nothing from the finding but its kind and incident id. */
+    ASSERT(!contains(m, "02:11:22"));
+    ASSERT(!contains(m, "HomeNet"));
+    const char *j = json();
+    ASSERT(contains(j, "  \"questions\": {\"source\":\"defaults\",\"assessed\":false,"
+                       "\"items\":[{\"qid\":\"Q1\",\"priority\":1,"));
+    ASSERT(contains(j, "\"status\":\"finding\",\"why\":\"\",\"kinds\":16,\"n_alerts\":1,"
+                       "\"found\":\"EVIL_TWIN\",\"ids\":\"00000000000000e1\"}"));
+    ASSERT(!contains(j, "\"observable\":0"));
+    end();
+}
+
+static void test_report_assessed(void) {
+    begin();
+    /* One hopping radio and no IP capture: Q1's IP and host kinds are
+     * blind, its rate kinds partly. */
+    one_hopping_radio();
+    tick();
+    const char *m = qsection(md());
+    ASSERT(contains(m, "### Q1 (priority 1): Is a device impersonating one of my networks?\n\n"
+                       "**No finding**; indicators partly observable: no_source."));
+    ASSERT(contains(m, "### Q2 (priority 1): Is a device that I do not know on my network?\n\n"
+                       "**No finding**; indicators partly observable: no_own_net. Indicators: 3; "
+                       "observable 0, partly 1, blind 2."));
+    ASSERT(!contains(m, "not assessed"));
+    const char *j = json();
+    ASSERT(contains(j, "\"questions\": {\"source\":\"defaults\",\"assessed\":true,"));
+    ASSERT(contains(j, "\"qid\":\"Q2\",\"priority\":1,"));
+    ASSERT(contains(j, "\"status\":\"no_finding_partly\",\"why\":\"no_own_net\",\"kinds\":3,"
+                       "\"observable\":0,\"partly\":1,\"blind\":2,"));
+    end();
+}
+
+static void sink_open(void) {
+    g_path[0] = '\0';
+    int fd = mkstemp(test_tmp_tpl(g_path, sizeof(g_path), "sloth_q_XXXXXX"));
+    if (fd >= 0) close(fd);
+    jsonl_close();
+    unlink(g_path);
+    ASSERT(jsonl_open(g_path));
+}
+
+static const char *sink_read(void) {
+    jsonl_close();
+    g_buf[0] = '\0';
+    FILE *fp = fopen(g_path, "r");
+    if (fp) {
+        size_t n = fread(g_buf, 1, sizeof(g_buf) - 1, fp);
+        g_buf[n] = '\0';
+        fclose(fp);
+    }
+    unlink(g_path);
+    return g_buf;
+}
+
+static void test_record(void) {
+    begin();
+    one_hopping_radio();
+    tick();
+    sink_open();
+    q_emit(&g_s);
+    const char *out = sink_read();
+    ASSERT_EQ(count_of(out, "\"type\":\"question_status\""), Q_DEFAULT_COUNT);
+    ASSERT(contains(out, "\"qid\":\"Q2\",\"priority\":1,\"question\":\"Is a device that I do "
+                         "not know on my network?\",\"decision\":\"Remove the device and change "
+                         "the network key.\",\"source\":\"defaults\",\"status\":\"no_finding_partly\","
+                         "\"why\":\"no_own_net\",\"kinds\":3,\"assessed\":1,\"observable\":0,"
+                         "\"partly\":1,\"blind\":2,\"n_alerts\":0,\"found\":\"\",\"ids\":\"\"}"));
+
+    /* Change-only: the same answers write nothing; a finding on Q1
+     * writes Q1's row and no other. Seen red with the jsonl_changed()
+     * test dropped (seven rows on the second emit). */
+    sink_open();
+    q_emit(&g_s);
+    q_emit(&g_s);
+    alert_t *a = seed(ALERT_TYPE_KARMA_AP, "00000000000000k1");
+    a->observations = 3;
+    q_emit(&g_s);
+    a->observations = 9;    /* more of the same finding: no row */
+    q_emit(&g_s);
+    out = sink_read();
+    ASSERT_EQ(count_of(out, "\"type\":\"question_status\""), Q_DEFAULT_COUNT + 1);
+    ASSERT_EQ(count_of(out, "\"qid\":\"Q1\""), 2);
+    ASSERT(contains(out, "\"status\":\"finding\",\"why\":\"no_source\","));
+    ASSERT(contains(out, "\"n_alerts\":1,\"found\":\"KARMA_AP\",\"ids\":\"00000000000000k1\"}"));
+    ASSERT(!contains(out, "02:11:22"));
+    ASSERT(!contains(out, "HomeNet"));
+    end();
+}
+
+/* The operator's file replaces the defaults in the report and the
+ * record; a question no kind of which this daemon raises is named as
+ * unanswered. */
+static void test_operator_file(void) {
+    begin();
+    char path[512] = "";
+    int fd = mkstemp(test_tmp_tpl(path, sizeof(path), "sloth_qf_XXXXXX"));
+    ASSERT(fd >= 0);
+    if (fd < 0) { end(); return; }
+    static const char k_file[] =
+        "TWIN|2|Is someone copying HomeNet?|Tell the household.|EVIL_TWIN\n"
+        "SKY|1|Is the GPS jammed?|Use the wired clock.|GNSS_JAMMING\n";
+    ASSERT_EQ((size_t)write(fd, k_file, strlen(k_file)), strlen(k_file));
+    close(fd);
+    ASSERT_EQ(q_live_flag(path), 0);
+    ASSERT_STR(q_live_path(), path);
+    ASSERT_EQ(q_live_questions()->n, 2);
+    seed(ALERT_TYPE_EVIL_TWIN, "00000000000000e1");
+    const char *m = qsection(md());
+    ASSERT(contains(m, "The operator's questions (`--questions "));
+    ASSERT(contains(m, "### TWIN (priority 2): Is someone copying HomeNet?\n\n**Finding**"));
+    ASSERT(contains(m, "_SKY is not answered by this daemon: none of its alert kinds is "
+                       "raised here._"));
+    ASSERT(!contains(m, "### Q1 "));
+    sink_open();
+    q_emit(&g_s);
+    const char *out = sink_read();
+    ASSERT_EQ(count_of(out, "\"type\":\"question_status\""), 1);
+    ASSERT(contains(out, "\"qid\":\"TWIN\",\"priority\":2,"));
+    ASSERT(contains(out, "\"source\":\"file\",\"status\":\"finding\""));
+    /* A refused file exits 2 and keeps the set it had. */
+    FILE *f = fopen(path, "w");
+    if (f) { fputs("A|1|Q?|D.|NOT_A_KIND\n", f); fclose(f); }
+    ASSERT_EQ(q_live_flag(path), 2);
+    ASSERT_EQ(q_live_questions()->n, 2);
+    ASSERT_EQ(q_live_flag(NULL), 2);
+    unlink(path);
+    q_live_reset();
+    ASSERT_STR(q_live_path(), "");
+    ASSERT_EQ(q_live_questions()->n, Q_DEFAULT_COUNT);
+    end();
+}
+
 void run_questions_tests(void) {
     TEST_SUITE("site questions (#244)");
     RUN_TEST(test_map_matches_alert_list);
@@ -508,4 +769,8 @@ void run_questions_tests(void) {
     RUN_TEST(test_parse_good);
     RUN_TEST(test_parse_refusals);
     RUN_TEST(test_load_file);
+    RUN_TEST(test_report_not_assessed_with_a_finding);
+    RUN_TEST(test_report_assessed);
+    RUN_TEST(test_record);
+    RUN_TEST(test_operator_file);
 }

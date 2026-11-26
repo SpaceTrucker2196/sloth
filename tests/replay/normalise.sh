@@ -10,7 +10,9 @@
 #     gen_replay.c anchors at "now"): a non-zero value becomes "T", so
 #     "was stamped" is still distinguishable from 0 ("never") and -1
 #     ("not measured");
-#   - incident and event IDs, which are minted per run: "ID";
+#   - incident and event IDs, which are minted per run: "ID"; and
+#     question_status's `ids`, a list of incident IDs, when not empty
+#     (#244);
 #   - process and library facts from sensor_health (#121, #142): RSS,
 #     malloc and sqlite heap, open descriptors, the loaded library
 #     versions, and the seconds-since-last-frame counters: "X";
@@ -46,5 +48,6 @@ STR='"([^"\\]|\\.)*"'
 LC_ALL=C sed -E \
     -e "s/\"($TIME_KEYS)\":[1-9][0-9]*/\"\\1\":\"T\"/g" \
     -e "s/\"($ID_KEYS)\":$STR/\"\\1\":\"ID\"/g" \
+    -e 's/"ids":"[0-9a-f,]+"/"ids":"ID"/g' \
     -e "s/\"($HOST_KEYS)\":($STR|-?[0-9]+)/\"\\1\":\"X\"/g" \
   | LC_ALL=C sort

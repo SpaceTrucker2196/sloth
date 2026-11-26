@@ -141,7 +141,8 @@ int q_found_str(const uint8_t found[ALERT_TYPE_COUNT], char *out, size_t sz);
  * `#` starts a comment line; blank lines are skipped; spaces around a
  * field are dropped. id is 1..15 of [A-Za-z0-9_-]; priority 1..9; the
  * question and the decision are non-empty and under Q_TEXT_LEN bytes;
- * the kinds are sloth_alerts.def names (EVIL_TWIN), at least one.
+ * the kinds are sloth_alerts.def names (EVIL_TWIN; ALERT_TYPE_EVIL_TWIN
+ * too), at least one.
  * Refused, with the line number: an unknown kind, a duplicate id, a
  * field missing or out of range, more than Q_MAX questions, none at
  * all. A refused file leaves `set` as it was.
@@ -151,7 +152,8 @@ int q_set_parse(q_set_t *set, const char *text, char *err, size_t errsz);
 /* The same from a file of at most 64 KiB. */
 int q_set_load(q_set_t *set, const char *path, char *err, size_t errsz);
 
-/* The kind named `name` (sloth_alerts.def spelling); -1 for none. */
+/* The kind named `name` (sloth_alerts.def spelling, with or without
+ * ALERT_TYPE_, as --value-period takes it); -1 for none. */
 int q_kind_by_name(const char *name);
 
 #endif /* SLOTH_QUESTIONS_H */

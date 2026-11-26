@@ -169,7 +169,10 @@ int q_found_str(const uint8_t found[ALERT_TYPE_COUNT], char *out, size_t sz) {
 /* ── The operator's file ──────────────────────────────────────────── */
 
 int q_kind_by_name(const char *name) {
-    if (!name || !name[0]) return -1;
+    if (!name) return -1;
+    /* As --value-period: with or without the prefix. */
+    if (strncmp(name, "ALERT_TYPE_", 11) == 0) name += 11;
+    if (!name[0]) return -1;
     for (int t = 0; t < ALERT_TYPE_COUNT; t++)
         if (strcmp(cov_kind_name((alert_type_t)t), name) == 0) return t;
     return -1;

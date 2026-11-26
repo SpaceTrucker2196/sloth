@@ -12,6 +12,7 @@
 #include "alerts.h"
 #include "alert_lifecycle.h"
 #include "rule_coverage_live.h"
+#include "questions_live.h"
 #include "cue_live.h"
 #include "cov_interval.h"
 #include "cov_interval_capture.h"

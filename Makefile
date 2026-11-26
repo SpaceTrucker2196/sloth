@@ -270,7 +270,7 @@ CORE_BASE_SRCS += src/rule_coverage_capture.c
 CORE_BASE_SRCS += src/exposure.c
 # Site questions (#244): the default questions, the kind-to-question
 # map and the status of each question; reads alerts and coverage.
-CORE_BASE_SRCS += src/questions.c
+CORE_BASE_SRCS += src/questions.c src/questions_live.c
 # The per-interval coverage record (#242 item 2): the record and its
 # writers (cov_interval.c, which db.c reads and which names no capture
 # module) and the capture side's sampler (named by poll.c's wifi table
@@ -1272,15 +1272,19 @@ replay-check: replay-run $(RF_TARGET)
 	@# #245: with --no-preliminary the stream is the one before the
 	@# finding lifecycle: the golden with `state` and `value_period_s`
 	@# taken out (and no alert.preliminary or alert_lifecycle record),
-	@# line for line.
+	@# line for line. question_status (#244) is left out of both sides:
+	@# it came after #245, and a preliminary finding is an open finding
+	@# of its question, so the record differs under the flag by design.
 	@rm -f $(REPLAY_RUN)/off.jsonl $(REPLAY_RUN)/off.db
 	@./$(TARGET) --headless \
 	    --replay $(REPLAY_RUN)/wired.pcap,$(REPLAY_RUN)/monitor.pcap,$(REPLAY_RUN)/bt.pcap \
 	    -o $(REPLAY_RUN)/off.jsonl --db $(REPLAY_RUN)/off.db --no-preliminary \
 	    --ticks $(REPLAY_TICKS) --refresh-ms 100 >/dev/null 2>&1 || \
 	  { echo "replay-check: the --no-preliminary replay failed" >&2; exit 1; }
-	@sh tests/replay/normalise.sh < $(REPLAY_RUN)/off.jsonl > $(REPLAY_RUN)/off_norm.jsonl
-	@grep -v -e '^{"type":"alert\.preliminary",' -e '^{"type":"alert_lifecycle",' $(REPLAY_GOLDEN) | \
+	@sh tests/replay/normalise.sh < $(REPLAY_RUN)/off.jsonl | \
+	  grep -v '^{"type":"question_status",' > $(REPLAY_RUN)/off_norm.jsonl
+	@grep -v -e '^{"type":"alert\.preliminary",' -e '^{"type":"alert_lifecycle",' \
+	    -e '^{"type":"question_status",' $(REPLAY_GOLDEN) | \
 	  LC_ALL=C sed -E 's/,"state":"[a-z]+","value_period_s":[0-9]+//' > $(REPLAY_RUN)/off_want.jsonl
 	@diff -u $(REPLAY_RUN)/off_want.jsonl $(REPLAY_RUN)/off_norm.jsonl || \
 	  { echo "replay-check: --no-preliminary is not the stream before #245" >&2; exit 1; }

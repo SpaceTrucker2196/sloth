@@ -198,6 +198,7 @@ void cov_live_counts(int *observable, int *partly, int *blind) {
 }
 
 const cov_env_t *cov_live_env(void) { return &g.env; }
+cov_daemon_t cov_live_daemon(void) { return g.daemon; }
 
 /* ── Emit ────────────────────────────────────────────────────────── */
 
