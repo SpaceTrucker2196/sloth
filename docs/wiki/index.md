@@ -82,6 +82,7 @@ below):
 - [[record-integrity]] — what sloth hashes (step 0 of #251), `--jsonl-chain N`: a hash chain over the `-o` JSONL file with `pcap_sha256` on alert records, `sloth --verify PATH` naming the first break in a chained file or an evidence directory, and the head in `--report` (#251).
 - [[sensor-compromise]] — a lost or stolen sensor: what it holds and what a finder reads, the steps (tailnet, allow-lists, the distrust time, passphrases), holding less, and the `--preflight` warning for captures kept on a disk with no dm-crypt (#251).
 - [[exposure-report]] — what the operator's designated site reveals to an outside observer, grouped by what it learns, each group with its rules' coverage status; a `--report` / `--report-json` section and the `exposure_summary` record (JSONL 2.11.0, #243).
+- [[site-questions]] — the operator's site questions: seven defaults, each alert kind tied to the questions it answers or a reason it answers none (#244).
 - [[coverage-assessment]] — which alert rules can fire in the present configuration: the per-rule input declaration and the observable / partly / blind status (#242; in the stream as `rule_status` and `coverage` since JSONL 2.8.0, and what the radios did each minute as `coverage_interval` and the `coverage_intervals` table since JSONL 2.9.0 / schema v18; each finding's quality fields, complete, latency, corroboration and source state, since JSONL 2.10.0 / schema v19, § 9).
 - [[inventory]] — the approved-inventory trust anchor (#89): the only
   evil-twin trust input that does not arrive over the air, its JSON

@@ -1,0 +1,31 @@
+/* The site questions sloth answers when no --questions file is given
+ * (#244). Not a header: no include guard, on purpose. Every includer
+ * defines X(QID, PRIORITY, TEXT, DECISION) first and gets one expansion
+ * per row.
+ *
+ *   QID       Q1 .. Q7: the question's id, as the question_status record
+ *             and the question_status table write it.
+ *   PRIORITY  1 is the most urgent; --notify-priority N notifies on the
+ *             questions of priority N and lower numbers.
+ *   TEXT      one question in plain words (FM 2-0 (2004) 1-34: a
+ *             priority question asks only one question).
+ *   DECISION  the operator's decision the answer supports (1-34: it
+ *             supports a decision).
+ *
+ * Which alert kinds are each question's indicators is
+ * include/sloth_question_map.def; docs/wiki/site-questions.md has the
+ * judgement behind both. Change them there and here together. */
+X(Q1, 1, "Is a device impersonating one of my networks?",
+         "Warn users off the network and find the transmitter.")
+X(Q2, 1, "Is a device that I do not know on my network?",
+         "Remove the device and change the network key.")
+X(Q3, 1, "Is a device collecting key material near my site?",
+         "Change the network key or the credentials now.")
+X(Q4, 2, "Is a device or a person surveying my site again and again?",
+         "Raise the watch on the site and keep the evidence.")
+X(Q5, 3, "Is my site revealing information?",
+         "Change the settings or devices that disclose the site.")
+X(Q6, 2, "Is the radio environment being denied or degraded?",
+         "Move channel or band, or find the source.")
+X(Q7, 1, "Is the sensor able to see what it must see?",
+         "Trust the other answers, or fix the sensor first.")

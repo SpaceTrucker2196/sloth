@@ -1,0 +1,130 @@
+/* Which default site question each alert kind is an indicator of (#244).
+ * Not a header: no include guard, on purpose. Every includer defines
+ * X(ID, QMASK, REASON) first and gets one expansion per row.
+ *
+ * A sibling of sloth_alerts.def, like sloth_exposure.def and
+ * sloth_alert_inputs.def and for the same reason: that file is in the
+ * contract with a two-argument X. tests/test_questions.c holds this list
+ * to that one, row for row, in the same order, and holds the table of
+ * docs/wiki/site-questions.md § 2 to this one.
+ *
+ *   ID      the kind, as in sloth_alerts.def.
+ *   QMASK   the questions of include/sloth_questions.def the kind is an
+ *           indicator of, QM(Qn) or-ed (src/questions.h); 0 for none.
+ *           QM(Q5) is set exactly on the kinds sloth_exposure.def puts
+ *           in a group, and the test holds the two to each other.
+ *   REASON  "" when QMASK names a question; otherwise why no default
+ *           question asks about the kind. An operator's --questions file
+ *           may still name it.
+ *
+ * The mapping is a judgement about what a finding answers, written out
+ * in docs/wiki/site-questions.md; change it there and here together. */
+#define Q_LAN_HOST "a host on the LAN behaving like a compromised one: no default question is about the site's own hosts"
+#define Q_LAN_SVC  "an attack on a LAN service from inside the LAN: no default question is about the site's own services"
+#define Q_HYGIENE  "a weak protocol or setting in use on the LAN, not something an observer near the site learns"
+#define Q_FRAG     "an attack on one client's traffic in flight (FragAttacks, Framing Frames): no default question is about traffic"
+X(PORT_SCAN,                        QM(Q4),           "")
+X(DEAUTH_FLOOD,                     QM(Q6),           "")
+X(NXDOMAIN_BURST,                   0,                Q_LAN_HOST)
+X(THREAT_DOMAIN,                    0,                Q_LAN_HOST)
+X(THREAT_IP,                        0,                Q_LAN_HOST)
+X(BEACONING,                        0,                Q_LAN_HOST)
+X(DGA_DOMAIN,                       0,                Q_LAN_HOST)
+X(ARP_SPOOF,                        QM(Q1),           "")
+X(ROGUE_DHCP,                       QM(Q1),           "")
+X(ROGUE_RA,                         QM(Q1),           "")
+X(SMB1_USE,                         0,                Q_HYGIENE)
+X(KERB_PREAUTH_BURST,               QM(Q3),           "")
+X(LDAP_SEARCH_FLOOD,                QM(Q4),           "")
+X(BGP_NOTIFICATION_BURST,           0,                "a routing session failing: about the site's upstream, not an observer near it")
+X(SSH_BRUTE_FORCE,                  0,                Q_LAN_SVC)
+X(RDP_BRUTE_FORCE,                  0,                Q_LAN_SVC)
+X(SNMP_COMMUNITY_BRUTE,             0,                Q_LAN_SVC)
+X(MQTT_BROKER_BRUTE,                0,                Q_LAN_SVC)
+X(EVIL_TWIN,                        QM(Q1),           "")
+X(EVIL_TWIN_PROXIMITY,              QM(Q1),           "")
+X(KARMA_AP,                         QM(Q1),           "")
+X(DNS_TUNNEL,                       0,                Q_LAN_HOST)
+X(PROBE_FLOOD,                      QM(Q4),           "")
+X(ATTACK_TOOL_UA,                   QM(Q4),           "")
+X(ATTACK_PATH,                      0,                Q_LAN_SVC)
+X(WEAK_TLS,                         0,                Q_HYGIENE)
+X(NO_MONITOR_MODE,                  QM(Q7),           "")
+X(CLEARTEXT_CRED,                   QM(Q3) | QM(Q5),  "")
+X(BEACON_FLOOD,                     QM(Q6),           "")
+X(AUTH_FLOOD,                       QM(Q6),           "")
+X(SSID_CONFUSION,                   QM(Q1) | QM(Q5),  "")
+X(MGMT_FUZZ,                        QM(Q6),           "")
+X(ROGUE_RADIUS,                     QM(Q1) | QM(Q3),  "")
+X(ICMP_TUNNEL,                      0,                Q_LAN_HOST)
+X(MY_NETWORK_RECON,                 QM(Q4) | QM(Q5),  "")
+X(RECURRING_TRANSIT,                QM(Q4) | QM(Q5),  "")
+X(UNKNOWN_DEVICE,                   QM(Q2),           "")
+X(RF_DEGRADED,                      QM(Q6),           "")
+X(ASSOC_FLOOD,                      QM(Q6),           "")
+X(BTM_ABUSE,                        QM(Q1),           "")
+X(WPA_DOWNGRADE,                    QM(Q1) | QM(Q5),  "")
+X(PEAP_NO_SERVER_CERT,              QM(Q3) | QM(Q5),  "")
+X(CSA_ABUSE,                        QM(Q1) | QM(Q6),  "")
+X(RRM_SURVEY_ABUSE,                 QM(Q4),           "")
+X(RTS_FLOOD,                        QM(Q6),           "")
+X(CAPTIVE_PORTAL,                   QM(Q1),           "")
+X(BLOCKACK_ATTACK,                  QM(Q6),           "")
+X(FRAG_PLAINTEXT,                   0,                Q_FRAG)
+X(FRAG_BCAST,                       0,                Q_FRAG)
+X(FRAG_CACHE,                       0,                Q_FRAG)
+X(FRAG_MIXED,                       0,                Q_FRAG)
+X(SAE_PSK_SPLIT,                    QM(Q5),           "")
+X(SAE_PSK_REGRESSION,               QM(Q5),           "")
+X(FRAG_AMSDU,                       0,                Q_FRAG)
+X(FRAG_AMSDU_EAPOL,                 0,                Q_FRAG)
+X(FRAG_MIXKEY,                      0,                Q_FRAG)
+X(FRAG_PN_GAP,                      0,                Q_FRAG)
+X(FRAG_EAPOL_RELAY,                 0,                Q_FRAG)
+X(SA_QUERY_FLOOD,                   QM(Q6),           "")
+X(MFP_UNPROTECTED,                  QM(Q6),           "")
+X(OPEN_SETUP_AP,                    QM(Q5),           "")
+X(WPS_PIN_BRUTE,                    QM(Q3),           "")
+X(WPS_LOCKOUT_CYCLING,              QM(Q3),           "")
+X(WPS_PBC_RACE,                     QM(Q2),           "")
+X(MLE_INVALID_LINK_ID,              QM(Q6),           "")
+X(MLE_COMMON_INFO_LEN_BAD,          QM(Q6),           "")
+X(MLE_SUBELEM_OVERRUN,              QM(Q6),           "")
+X(MLD_MAC_COLLISION,                QM(Q1),           "")
+X(MLE_CROSS_LINK_CIPHER_DOWNGRADE,  QM(Q5),           "")
+X(CAM_WS_DISCOVERY,                 QM(Q5),           "")
+X(PM_FORGE,                         QM(Q1),           "")
+X(SURV_CLOUD_SNI,                   QM(Q5),           "")
+X(TPC_ABSENT_HIGH_BAND,             QM(Q5),           "")
+X(CAM_SETUP_SSID,                   QM(Q5),           "")
+X(QUEUE_EVICT,                      0,                Q_FRAG)
+X(MLE_RECONFIG_NO_MLO,              QM(Q6),           "")
+X(MLE_PR_BEACON_DIFF,               QM(Q1),           "")
+X(SURV_DNS,                         QM(Q5),           "")
+X(WPS_PIXIE_PROBE,                  QM(Q3),           "")
+X(WPS_PIXIE_LIKELY_SUCCESS,         QM(Q3),           "")
+X(COUNTRY_ABSENT,                   QM(Q5),           "")
+X(DFS_MASKING,                      0,                "a new transmitter first heard on a DFS channel: its purpose is unknown, and no default question is about transmitters in general")
+X(CAM_MDNS_SERVICE,                 QM(Q5),           "")
+X(CAM_SSDP_DEVICE,                  QM(Q5),           "")
+X(CAM_SETUP_OUI,                    QM(Q5),           "")
+X(CAM_RTSP_UNAUTH,                  QM(Q5),           "")
+X(BT_OWN_TRANSMIT,                  0,                "the host's own Bluetooth controller transmitting: a check on sloth's receive-only promise, not on what the sensor can see")
+X(BLE_ADV_FLOOD,                    QM(Q6),           "")
+X(BLE_HID_UNEXPECTED,               QM(Q2),           "")
+X(BLE_WATCHLIST,                    QM(Q4),           "")
+X(GNSS_JAMMING,                     QM(Q6),           "")
+X(GNSS_SPOOF_SUSPECT,               QM(Q6),           "")
+X(GNSS_TIME_JUMP,                   QM(Q6),           "")
+X(GNSS_POSITION_JUMP,               QM(Q6),           "")
+X(ADSB_EMERGENCY,                   0,                "an aircraft's emergency squawk: about the aircraft, not the site")
+X(KARMA_PROBE_FORGE,                QM(Q1),           "")
+X(PMKID_HARVEST,                    QM(Q3),           "")
+X(HANDSHAKE_HARVEST,                QM(Q3),           "")
+X(SENSOR_UNDERVOLT,                 QM(Q7),           "")
+X(SENSOR_SOURCE_DOWN,               QM(Q7),           "")
+X(SENSOR_SUPPRESSED,                QM(Q7),           "")
+#undef Q_LAN_HOST
+#undef Q_LAN_SVC
+#undef Q_HYGIENE
+#undef Q_FRAG
