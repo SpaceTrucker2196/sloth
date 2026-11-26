@@ -134,14 +134,32 @@ int q_derive(const q_question_t *q, const alert_t *a, int n, const q_cov_t *c,
     if (!out->kinds) return 0;
     out->why = first_blind != COV_R_NONE ? first_blind : first_partly;
 
+    /* The ids are the incidents newest opened first (first_seen, then
+     * the id), not the snapshot's order: the snapshot is sorted by
+     * last_seen, so a new observation of an older finding would reorder
+     * them and change the answer's signature with nothing new to say. */
+    time_t fs[Q_IDS_MAX];
     for (int i = 0; a && i < n; i++) {
         const alert_t *al = &a[i];
         if ((int)al->type < 0 || al->type >= ALERT_TYPE_COUNT) continue;
         if (!q->kind[al->type] || !c->raises[al->type] || !q_alert_open(al)) continue;
         out->n_alerts++;
         out->found[al->type] = 1;
-        if (out->nids < Q_IDS_MAX && al->incident_id[0])
-            snprintf(out->ids[out->nids++], ALERT_INCIDENT_ID_LEN, "%s", al->incident_id);
+        if (!al->incident_id[0]) continue;
+        int pos = 0;
+        while (pos < out->nids &&
+               (fs[pos] > al->first_seen ||
+                (fs[pos] == al->first_seen && strcmp(out->ids[pos], al->incident_id) > 0)))
+            pos++;
+        if (pos >= Q_IDS_MAX) continue;
+        int last = out->nids < Q_IDS_MAX ? out->nids : Q_IDS_MAX - 1;
+        for (int k = last; k > pos; k--) {
+            fs[k] = fs[k - 1];
+            memcpy(out->ids[k], out->ids[k - 1], ALERT_INCIDENT_ID_LEN);
+        }
+        fs[pos] = al->first_seen;
+        snprintf(out->ids[pos], ALERT_INCIDENT_ID_LEN, "%s", al->incident_id);
+        if (out->nids < Q_IDS_MAX) out->nids++;
     }
 
     if (out->n_alerts)                    out->st = Q_ST_FINDING;

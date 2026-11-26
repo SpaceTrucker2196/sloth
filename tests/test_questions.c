@@ -350,23 +350,45 @@ static void test_closed_findings_do_not_count(void) {
     ASSERT_STR(r.ids[0], "0000000000000002");
 }
 
-/* Every finding counts; the ids stop at Q_IDS_MAX, newest first. */
+/* Every finding counts; the ids stop at Q_IDS_MAX, the incidents
+ * newest opened first whatever the snapshot's order, ties by id. */
 static void test_ids_are_bounded(void) {
     q_set_t set;
     q_set_defaults(&set);
     q_cov_t c;
     q_cov_from_env(&c, COV_DAEMON_WIFI, NULL);
+    /* Snapshot order (last_seen) is not the order opened: alert i
+     * opened at 2000 - i except the last, the newest. */
     for (int i = 0; i < 12; i++) {
         char id[ALERT_INCIDENT_ID_LEN];
         snprintf(id, sizeof(id), "%016x", i + 1);
-        al(i, i % 2 ? ALERT_TYPE_PMKID_HARVEST : ALERT_TYPE_HANDSHAKE_HARVEST, id);
+        al(i, i % 2 ? ALERT_TYPE_PMKID_HARVEST : ALERT_TYPE_HANDSHAKE_HARVEST, id)
+            ->first_seen = i == 11 ? 3000 : 2000 - i;
     }
     q_result_t r;
     ASSERT(q_derive(&set.q[Q_ID_Q3], g_al, 12, &c, &r));
     ASSERT_EQ(r.n_alerts, 12);
     ASSERT_EQ(r.nids, Q_IDS_MAX);
-    ASSERT_STR(r.ids[0], "0000000000000001");
-    ASSERT_STR(r.ids[Q_IDS_MAX - 1], "0000000000000008");
+    ASSERT_STR(r.ids[0], "000000000000000c");
+    ASSERT_STR(r.ids[1], "0000000000000001");
+    ASSERT_STR(r.ids[Q_IDS_MAX - 1], "0000000000000007");
+    /* Opened in the same second: the larger id first, either order. */
+    al(0, ALERT_TYPE_PMKID_HARVEST, "00000000000000a1")->first_seen = 5000;
+    al(1, ALERT_TYPE_PMKID_HARVEST, "00000000000000a2")->first_seen = 5000;
+    ASSERT(q_derive(&set.q[Q_ID_Q3], g_al, 2, &c, &r));
+    ASSERT_STR(r.ids[0], "00000000000000a2");
+    ASSERT_STR(r.ids[1], "00000000000000a1");
+    al(0, ALERT_TYPE_PMKID_HARVEST, "00000000000000a2")->first_seen = 5000;
+    al(1, ALERT_TYPE_PMKID_HARVEST, "00000000000000a1")->first_seen = 5000;
+    ASSERT(q_derive(&set.q[Q_ID_Q3], g_al, 2, &c, &r));
+    ASSERT_STR(r.ids[0], "00000000000000a2");
+    ASSERT_STR(r.ids[1], "00000000000000a1");
+    for (int i = 0; i < 12; i++) {
+        char id[ALERT_INCIDENT_ID_LEN];
+        snprintf(id, sizeof(id), "%016x", i + 1);
+        al(i, i % 2 ? ALERT_TYPE_PMKID_HARVEST : ALERT_TYPE_HANDSHAKE_HARVEST, id);
+    }
+    ASSERT(q_derive(&set.q[Q_ID_Q3], g_al, 12, &c, &r));
     char k[256];
     q_found_str(r.found, k, sizeof(k));
     ASSERT_STR(k, "PMKID_HARVEST,HANDSHAKE_HARVEST");
@@ -708,6 +730,36 @@ static void test_record(void) {
     end();
 }
 
+/* The snapshot is sorted by last_seen, so a new observation of an
+ * older finding moves it to the front. That is not a new answer: the
+ * ids are the incidents newest opened first, and the record stays
+ * quiet. Seen red with q_derive() taking the ids in snapshot order (a
+ * second Q1 row on the reorder). */
+static void test_record_quiet_on_reobservation(void) {
+    begin();
+    one_hopping_radio();
+    tick();
+    alert_t *a = seed(ALERT_TYPE_EVIL_TWIN, "00000000000000e1");
+    a->first_seen = 1800000000;
+    alert_t *b = seed(ALERT_TYPE_KARMA_AP, "00000000000000k1");
+    b->first_seen = 1800000005;
+    /* The snapshot as the engine leaves it: KARMA_AP heard last. */
+    alert_t t = g_s.alerts[0];
+    g_s.alerts[0] = g_s.alerts[1];
+    g_s.alerts[1] = t;
+    sink_open();
+    q_emit(&g_s);
+    /* EVIL_TWIN heard again: it leads the snapshot now. */
+    t = g_s.alerts[0];
+    g_s.alerts[0] = g_s.alerts[1];
+    g_s.alerts[1] = t;
+    q_emit(&g_s);
+    const char *out = sink_read();
+    ASSERT_EQ(count_of(out, "\"qid\":\"Q1\""), 1);
+    ASSERT(contains(out, "\"ids\":\"00000000000000k1,00000000000000e1\""));
+    end();
+}
+
 /* The operator's file replaces the defaults in the report and the
  * record; a question no kind of which this daemon raises is named as
  * unanswered. */
@@ -827,6 +879,7 @@ void run_questions_tests(void) {
     RUN_TEST(test_report_not_assessed_with_a_finding);
     RUN_TEST(test_report_assessed);
     RUN_TEST(test_record);
+    RUN_TEST(test_record_quiet_on_reobservation);
     RUN_TEST(test_operator_file);
     RUN_TEST(test_notify);
 }

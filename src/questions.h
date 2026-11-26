@@ -112,7 +112,8 @@ typedef struct {
     cov_reason_t why;           /* first blind reason, else first partly
                                  * one, in sloth_alerts.def order */
     int          n_alerts;      /* open findings on the indicators */
-    int          nids;          /* their incident ids, newest first */
+    int          nids;          /* their incident ids, newest opened
+                                 * first (first_seen, then the id) */
     char         ids[Q_IDS_MAX][ALERT_INCIDENT_ID_LEN];
     uint8_t      found[ALERT_TYPE_COUNT];     /* 1: a kind with a finding */
 } q_result_t;
