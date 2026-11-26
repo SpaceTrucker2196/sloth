@@ -80,6 +80,48 @@
     "CREATE INDEX IF NOT EXISTS idx_coverage_intervals_last_seen" \
     "  ON coverage_intervals(last_seen);\n"
 
+/* twin_evidence_snapshots (#228 step 5, owner ruling 2026-11-25, schema
+ * v20). One row per EVIL_TWIN candidate pair, overwritten with the
+ * latest evaluation every poll — unlike every other table in this file,
+ * deliberately not latched to a high-water mark (include/sloth.h's
+ * twin_evidence_snap_t comment has the reason: a label store needs the
+ * feature vector as most recently observed, not the loudest it ever
+ * got). On the finding tier (src/db.c TIER_FINDING), same as
+ * karma_candidates and rogue_radius: evidence outlives nothing less
+ * than the alert it justifies. Never exported to JSONL, never shared
+ * with the fleet (local-only per the ruling). Shared by the
+ * unconditional schema and the v19 -> v20 step. */
+#define TWIN_EVIDENCE_SNAPSHOTS_DDL \
+    "CREATE TABLE IF NOT EXISTS twin_evidence_snapshots (" \
+    "  ssid           TEXT NOT NULL," \
+    "  real_bssid     TEXT NOT NULL," \
+    "  twin_bssid     TEXT NOT NULL," \
+    "  confidence     INTEGER NOT NULL DEFAULT 0," \
+    "  diff_oui       INTEGER NOT NULL DEFAULT 0," \
+    "  same_oui       INTEGER NOT NULL DEFAULT 0," \
+    "  hashes_differ  INTEGER NOT NULL DEFAULT 0," \
+    "  late_arrival   INTEGER NOT NULL DEFAULT 0," \
+    "  attacker_oui   INTEGER NOT NULL DEFAULT 0," \
+    "  steered        INTEGER NOT NULL DEFAULT 0," \
+    "  self_steer     INTEGER NOT NULL DEFAULT 0," \
+    "  sibling        INTEGER NOT NULL DEFAULT 0," \
+    "  nbr_claim      INTEGER NOT NULL DEFAULT 0," \
+    "  carrier_ssid   INTEGER NOT NULL DEFAULT 0," \
+    "  mesh_vap       INTEGER NOT NULL DEFAULT 0," \
+    "  faint          INTEGER NOT NULL DEFAULT 0," \
+    "  inv_mismatch   INTEGER NOT NULL DEFAULT 0," \
+    "  inv_approved   INTEGER NOT NULL DEFAULT 0," \
+    "  inv_consulted  INTEGER NOT NULL DEFAULT 0," \
+    "  positive       INTEGER NOT NULL DEFAULT 0," \
+    "  context        INTEGER NOT NULL DEFAULT 0," \
+    "  hard           INTEGER NOT NULL DEFAULT 0," \
+    "  first_seen     INTEGER NOT NULL," \
+    "  last_seen      INTEGER NOT NULL," \
+    "  PRIMARY KEY (ssid, real_bssid, twin_bssid)" \
+    ");\n" \
+    "CREATE INDEX IF NOT EXISTS idx_twin_evidence_snapshots_last_seen" \
+    "  ON twin_evidence_snapshots(last_seen);\n"
+
 static const char SCHEMA_SQL[] =
     /* ── meta ────────────────────────────────────────────── */
     "CREATE TABLE IF NOT EXISTS meta ("
@@ -772,6 +814,8 @@ static const char SCHEMA_SQL[] =
     "  PRIMARY KEY (ssid, real_bssid, twin_bssid)"
     ");\n"
 
+    TWIN_EVIDENCE_SNAPSHOTS_DDL
+
     /* Flagged entries only (#41): an unflagged scan_entry is one host
      * touching a couple of ports, which is ordinary traffic, and
      * persisting it would put the CDN false positives #41 removed
@@ -1302,6 +1346,12 @@ static const char MIGRATE_V18_SQL[] =
     "ALTER TABLE alert_incidents ADD COLUMN corroboration INTEGER;\n"
     "ALTER TABLE alert_incidents ADD COLUMN src_state TEXT;\n";
 
+/* v19 -> v20 (#228 step 5, 2026-11-26): twin_evidence_snapshots, the
+ * per-pair evidence vector a future training pass reads. Created here,
+ * with its index, so the table and the stamp land in the step's one
+ * transaction. Nothing is backfilled: no earlier build recorded one. */
+static const char MIGRATE_V19_SQL[] = TWIN_EVIDENCE_SNAPSHOTS_DDL;
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -1323,6 +1373,7 @@ const char *db_schema_migrate_v15_sql(void) { return MIGRATE_V15_SQL; }
 const char *db_schema_migrate_v16_sql(void) { return MIGRATE_V16_SQL; }
 const char *db_schema_migrate_v17_sql(void) { return MIGRATE_V17_SQL; }
 const char *db_schema_migrate_v18_sql(void) { return MIGRATE_V18_SQL; }
+const char *db_schema_migrate_v19_sql(void) { return MIGRATE_V19_SQL; }
 
 /* --print-schema (#185 item 4). The statements a new file gets, in the
  * order db_open() applies them, then the version row check_version()

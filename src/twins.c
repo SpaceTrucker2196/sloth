@@ -40,6 +40,7 @@ static int already_recorded(const sloth_state_t *s,
 
 void twins_snapshot(sloth_state_t *s) {
     s->twin_episode_count = 0;
+    s->twin_evidence_snap_count = 0;
     time_t now = sloth_wall();
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -106,6 +107,35 @@ void twins_snapshot(sloth_state_t *s) {
                 ? (uint8_t)wired_attach_lookup(twin->bssid)
                 : (uint8_t)WIRED_ATTACH_UNKNOWN;
             e->last_seen = now;
+
+            /* #228 step 5: the full evidence vector behind the
+             * confidence above, one entry per episode, same index. */
+            twin_evidence_snap_t *v =
+                &s->twin_evidence_snaps[s->twin_evidence_snap_count++];
+            memset(v, 0, sizeof(*v));
+            snprintf(v->ssid, sizeof(v->ssid), "%s", a->ssid);
+            memcpy(v->real_bssid, real->bssid, 6);
+            memcpy(v->twin_bssid, twin->bssid, 6);
+            v->confidence    = (uint8_t)ev.confidence;
+            v->diff_oui      = ev.diff_oui      ? 1 : 0;
+            v->same_oui      = ev.same_oui      ? 1 : 0;
+            v->hashes_differ = ev.hashes_differ ? 1 : 0;
+            v->late_arrival  = ev.late_arrival  ? 1 : 0;
+            v->attacker_oui  = ev.attacker_oui  ? 1 : 0;
+            v->steered       = ev.steered       ? 1 : 0;
+            v->self_steer    = ev.self_steer    ? 1 : 0;
+            v->sibling       = ev.sibling       ? 1 : 0;
+            v->nbr_claim     = ev.nbr_claim     ? 1 : 0;
+            v->carrier_ssid  = ev.carrier_ssid  ? 1 : 0;
+            v->mesh_vap      = ev.mesh_vap      ? 1 : 0;
+            v->faint         = ev.faint         ? 1 : 0;
+            v->inv_mismatch  = ev.inv_mismatch  ? 1 : 0;
+            v->inv_approved  = ev.inv_approved  ? 1 : 0;
+            v->inv_consulted = ev.inv_consulted ? 1 : 0;
+            v->positive      = (uint8_t)ev.positive;
+            v->context       = (uint8_t)ev.context;
+            v->hard          = ev.hard          ? 1 : 0;
+            v->last_seen     = now;
         }
     }
     if (s->twin_episode_sel >= s->twin_episode_count)

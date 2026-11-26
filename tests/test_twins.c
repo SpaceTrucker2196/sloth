@@ -182,6 +182,63 @@ static void test_twins_hash_mismatch_flag(void) {
     ASSERT_EQ(s.twin_episodes[0].hash_mismatch, 1);
 }
 
+/* #228 step 5: the evidence snapshot array is a parallel of the episode
+ * array, same count, same index, carrying the full vector the episode's
+ * confidence was built from. Seen red with the write in twins_snapshot()
+ * removed (count stayed 0, confidence and hashes_differ both 0). */
+static void test_twins_evidence_snapshot_mirrors_the_episode(void) {
+    alerts_clear();
+    sloth_state_t s; seed(&s);
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
+    add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
+    s.beacon_aps[0].fp.vendor_ies_hash = 0xdeadbeefu;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0xcafef00du;
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
+    ASSERT_EQ(s.twin_evidence_snap_count, 1);
+    ASSERT(strcmp(s.twin_evidence_snaps[0].ssid, "Cafe-Net") == 0);
+    ASSERT_EQ((int)s.twin_evidence_snaps[0].confidence,
+              (int)s.twin_episodes[0].confidence);
+    ASSERT_EQ(s.twin_evidence_snaps[0].hashes_differ, 1);
+    ASSERT_EQ(s.twin_evidence_snaps[0].diff_oui, 1);
+    ASSERT_EQ((int)s.twin_evidence_snaps[0].positive,
+              TWIN_W_DIFF_OUI + TWIN_W_IE_HASH);
+}
+
+/* The snapshot is overwritten every poll, not accumulated: a pair that
+ * stops showing a signal loses it from the vector on the very next
+ * snapshot, unlike twin_episode_t's latched flags. Seen red with the
+ * memset in twins_snapshot() dropped (the stale attacker_oui from the
+ * first poll survived into the second, read-back array). */
+static void test_twins_evidence_snapshot_reflects_latest_poll_only(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed(&s);
+    uint8_t legit[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t pin[6]   = {0x00,0x13,0x37,0x44,0x55,0x66};  /* Hak5 OUI */
+    add_beacon(&s, "Cafe-Net", legit, "WPA2", -70);
+    add_beacon(&s, "Cafe-Net", pin,   "WPA2", -50);
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_evidence_snap_count, 1);
+    ASSERT_EQ(s.twin_evidence_snaps[0].attacker_oui, 1);
+
+    /* The attacker's BSSID leaves earshot; a same-SSID, same-cipher,
+     * diff-OUI pair with no Hak5/Espressif OUI remains. 0x11 is
+     * globally administered (bit 0x02 clear), same as the "second
+     * vendor" bssid other tests in this file use — a locally
+     * administered replacement would make neither OUI comparable
+     * (twin_evidence_score) and drop the episode entirely instead of
+     * exercising the overwrite this test is for. */
+    memcpy(s.beacon_aps[1].bssid, (uint8_t[]){0x11,0x22,0x33,0x44,0x55,0x66}, 6);
+    s.beacon_aps[1].fp.oui[0] = 0x11;
+    s.beacon_aps[1].fp.oui[1] = 0x22;
+    s.beacon_aps[1].fp.oui[2] = 0x33;
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_evidence_snap_count, 1);
+    ASSERT_EQ(s.twin_evidence_snaps[0].attacker_oui, 0);
+}
+
 /* Late-arrival flag (#188, ruling 3b): the episode carries what the
  * scorer counted, so the view's `>` and the JSONL field cannot say
  * something the alert's "+late-arrival" does not. A copy on a locally
@@ -1165,6 +1222,8 @@ void run_twins_tests(void) {
     RUN_TEST(test_twins_rssi_does_not_decide_sides);
     RUN_TEST(test_twins_episode_carries_confidence);
     RUN_TEST(test_twins_hash_mismatch_flag);
+    RUN_TEST(test_twins_evidence_snapshot_mirrors_the_episode);
+    RUN_TEST(test_twins_evidence_snapshot_reflects_latest_poll_only);
     RUN_TEST(test_twins_late_arrival_flag);
     RUN_TEST(test_twins_attacker_oui_attributes_the_impostor);
     RUN_TEST(test_twins_rssi_swing_from_twin_side);

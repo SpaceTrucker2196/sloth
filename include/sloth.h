@@ -1931,6 +1931,45 @@ typedef struct {
     time_t   last_seen;
 } twin_episode_t;
 
+/* Evil-twin evidence snapshot (#228 step 5, owner ruling 2026-11-25):
+ * the full twin_evidence_t vector (src/alerts.h) behind an episode's
+ * confidence, kept in its own table rather than folded into
+ * twin_episode_t above.
+ *
+ * It has to be a separate table because twin_episodes is latched to a
+ * high-water mark on purpose (#228's own analysis: "a twin that was
+ * caught mid-attack once was caught mid-attack"), which is exactly
+ * wrong for a label store — training on it would pair a label with
+ * evidence that arrived later than the episode the operator actually
+ * triaged. This table is overwritten with the latest evaluation every
+ * poll instead, so a read of it is "the feature vector as most
+ * recently observed for this pair", never a historical peak. */
+typedef struct {
+    char     ssid[33];
+    uint8_t  real_bssid[6];
+    uint8_t  twin_bssid[6];
+    uint8_t  confidence;        /* percent, matches the episode's */
+    uint8_t  diff_oui;
+    uint8_t  same_oui;
+    uint8_t  hashes_differ;
+    uint8_t  late_arrival;
+    uint8_t  attacker_oui;
+    uint8_t  steered;
+    uint8_t  self_steer;
+    uint8_t  sibling;
+    uint8_t  nbr_claim;
+    uint8_t  carrier_ssid;
+    uint8_t  mesh_vap;
+    uint8_t  faint;
+    uint8_t  inv_mismatch;
+    uint8_t  inv_approved;
+    uint8_t  inv_consulted;
+    uint8_t  positive;          /* summed impersonation evidence */
+    uint8_t  context;           /* summed benign explanation */
+    uint8_t  hard;
+    time_t   last_seen;
+} twin_evidence_snap_t;
+
 /* ── KARMA / PineAP candidates (#30) ─────────────────────────
  * One row per BSSID that beacons an abnormal number of distinct SSIDs
  * — the PineAP / mdk4 / airbase-ng "answer every probed network" lure.
@@ -4200,6 +4239,13 @@ typedef struct {
     twin_episode_t twin_episodes[MAX_TWIN_EPISODES];
     int            twin_episode_count;
     int            twin_episode_sel;
+
+    /* Evidence snapshots (#228 step 5), one per episode above, kept
+     * as a parallel array rather than folded into twin_episode_t for
+     * the latching reason given on twin_evidence_snap_t. Refreshed by
+     * the same twins_snapshot() pass, same count, same index. */
+    twin_evidence_snap_t twin_evidence_snaps[MAX_TWIN_EPISODES];
+    int                  twin_evidence_snap_count;
 
     karma_ap_t     karma_aps[MAX_KARMA_APS];   /* KARMA/PineAP candidates (#30) */
     int            karma_count;

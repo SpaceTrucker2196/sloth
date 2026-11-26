@@ -281,18 +281,23 @@ void test_history_multiple_interfaces(void) {
 
 #include "views/iface.h"
 
-static sloth_state_t make_state_with_ifaces(int n) {
-    sloth_state_t s;
-    memset(&s, 0, sizeof(s));
+/* Fills `*s` rather than returning sloth_state_t by value (#228 review):
+ * at -O0 a by-value return is a real stack copy, not just an ABI
+ * formality, and this helper is three frames deep under
+ * make_healthy_sensor_state() at some call sites — three live copies of
+ * a 2.7+ MB struct is most of an 8 MB default stack already, and it is
+ * what segfaulted test_health_strip_healthy_is_quiet the first time
+ * sloth_state_t grew past that margin. */
+static void make_state_with_ifaces(sloth_state_t *s, int n) {
+    memset(s, 0, sizeof(*s));
     static const char *names[] = { "eth0", "wlan0", "lo", "tun0" };
-    s.iface_count = n < 4 ? n : 4;
-    for (int i = 0; i < s.iface_count; i++)
-        memcpy(s.ifaces[i].name, names[i], strlen(names[i]) + 1);
-    return s;
+    s->iface_count = n < 4 ? n : 4;
+    for (int i = 0; i < s->iface_count; i++)
+        memcpy(s->ifaces[i].name, names[i], strlen(names[i]) + 1);
 }
 
 void test_toggle_hide(void) {
-    sloth_state_t s = make_state_with_ifaces(2);
+    sloth_state_t s; make_state_with_ifaces(&s, 2);
     s.iface_sel = 0;   /* eth0 selected */
     view_iface_key(&s, 't');
     ASSERT_EQ(s.iface_hidden_count, 1);
@@ -300,7 +305,7 @@ void test_toggle_hide(void) {
 }
 
 void test_toggle_unhide(void) {
-    sloth_state_t s = make_state_with_ifaces(2);
+    sloth_state_t s; make_state_with_ifaces(&s, 2);
     s.iface_sel = 0;
     view_iface_key(&s, 't');   /* hide eth0 */
     view_iface_key(&s, 't');   /* unhide eth0 */
@@ -308,7 +313,7 @@ void test_toggle_unhide(void) {
 }
 
 void test_toggle_navigation(void) {
-    sloth_state_t s = make_state_with_ifaces(3);
+    sloth_state_t s; make_state_with_ifaces(&s, 3);
     ASSERT_EQ(s.iface_sel, 0);
     view_iface_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.iface_sel, 1);
@@ -325,7 +330,7 @@ void test_toggle_navigation(void) {
 }
 
 void test_toggle_hides_selected(void) {
-    sloth_state_t s = make_state_with_ifaces(3);
+    sloth_state_t s; make_state_with_ifaces(&s, 3);
     view_iface_key(&s, SLOTH_KEY_DOWN);   /* sel = 1 (wlan0) */
     view_iface_key(&s, 't');
     ASSERT_EQ(s.iface_hidden_count, 1);
@@ -337,14 +342,14 @@ void test_toggle_hides_selected(void) {
 void test_deselect_default_is_selected(void) {
     /* Fresh state: no deselected ifaces. iface_is_deselected returns 0
      * for anything asked. */
-    sloth_state_t s = make_state_with_ifaces(2);
+    sloth_state_t s; make_state_with_ifaces(&s, 2);
     ASSERT_EQ(s.iface_deselected_count, 0);
     ASSERT_EQ(iface_is_deselected(&s, "eth0"),  0);
     ASSERT_EQ(iface_is_deselected(&s, "wlan0"), 0);
 }
 
 void test_toggle_deselect(void) {
-    sloth_state_t s = make_state_with_ifaces(2);
+    sloth_state_t s; make_state_with_ifaces(&s, 2);
     s.iface_sel = 0;
     view_iface_key(&s, 'y');
     ASSERT_EQ(s.iface_deselected_count, 1);
@@ -354,7 +359,7 @@ void test_toggle_deselect(void) {
 }
 
 void test_toggle_reselect(void) {
-    sloth_state_t s = make_state_with_ifaces(2);
+    sloth_state_t s; make_state_with_ifaces(&s, 2);
     s.iface_sel = 0;
     view_iface_key(&s, 'y');   /* deselect eth0 */
     view_iface_key(&s, 'y');   /* reselect eth0 */
@@ -365,7 +370,7 @@ void test_toggle_reselect(void) {
 void test_deselect_independent_of_hide(void) {
     /* Hide and deselect are distinct elections — toggling one must
      * not disturb the other. */
-    sloth_state_t s = make_state_with_ifaces(2);
+    sloth_state_t s; make_state_with_ifaces(&s, 2);
     s.iface_sel = 0;
     view_iface_key(&s, 't');   /* hide eth0 */
     view_iface_key(&s, 'y');   /* deselect eth0 */
@@ -385,7 +390,7 @@ void test_deselect_independent_of_hide(void) {
 void test_allow_empty_list_all_pass(void) {
     /* No --iface flags given: the allow-list is empty and everything
      * passes — a bare launch is unrestricted. */
-    sloth_state_t s = make_state_with_ifaces(3);
+    sloth_state_t s; make_state_with_ifaces(&s, 3);
     ASSERT_EQ(s.iface_allowed_count, 0);
     ASSERT_EQ(iface_is_allowed(&s, "eth0"),    1);
     ASSERT_EQ(iface_is_allowed(&s, "wlan0"),   1);
@@ -394,7 +399,7 @@ void test_allow_empty_list_all_pass(void) {
 
 void test_allow_whitelist(void) {
     /* Non-empty list = whitelist: only listed names pass. */
-    sloth_state_t s = make_state_with_ifaces(3);
+    sloth_state_t s; make_state_with_ifaces(&s, 3);
     ASSERT_EQ(iface_allow_add(&s, "wlan0"), 1);
     ASSERT_EQ(s.iface_allowed_count, 1);
     ASSERT_STR(s.iface_allowed[0], "wlan0");
@@ -405,7 +410,7 @@ void test_allow_whitelist(void) {
 }
 
 void test_allow_multiple_ifaces(void) {
-    sloth_state_t s = make_state_with_ifaces(4);
+    sloth_state_t s; make_state_with_ifaces(&s, 4);
     ASSERT_EQ(iface_allow_add(&s, "wlan0"), 1);
     ASSERT_EQ(iface_allow_add(&s, "eth0"),  1);
     ASSERT_EQ(s.iface_allowed_count, 2);
@@ -417,7 +422,7 @@ void test_allow_multiple_ifaces(void) {
 void test_allow_dedupe(void) {
     /* Re-adding a present name reports success but grows nothing —
      * `--iface wlan0 --monitor-only` resolving to wlan0 is one entry. */
-    sloth_state_t s = make_state_with_ifaces(2);
+    sloth_state_t s; make_state_with_ifaces(&s, 2);
     ASSERT_EQ(iface_allow_add(&s, "wlan0"), 1);
     ASSERT_EQ(iface_allow_add(&s, "wlan0"), 1);
     ASSERT_EQ(s.iface_allowed_count, 1);
@@ -427,7 +432,7 @@ void test_allow_null_empty_ignored(void) {
     /* A failed --monitor-only resolve passes "" / NULL; the list must
      * not grow a bogus entry. Startup then refuses the run rather than
      * capture unrestricted (#85, capture_scope_verdict()). */
-    sloth_state_t s = make_state_with_ifaces(2);
+    sloth_state_t s; make_state_with_ifaces(&s, 2);
     ASSERT_EQ(iface_allow_add(&s, NULL), 0);
     ASSERT_EQ(iface_allow_add(&s, ""),   0);
     ASSERT_EQ(s.iface_allowed_count, 0);
@@ -435,7 +440,7 @@ void test_allow_null_empty_ignored(void) {
 }
 
 void test_allow_bounded_at_max(void) {
-    sloth_state_t s = make_state_with_ifaces(1);
+    sloth_state_t s; make_state_with_ifaces(&s, 1);
     char name[16];
     for (int i = 0; i < MAX_IFACES; i++) {
         snprintf(name, sizeof(name), "if%d", i);
@@ -453,7 +458,7 @@ void test_allow_independent_of_deselect(void) {
      * drops when EITHER rejects. An iface can be allowed and
      * deselected at once — deselect still wins in the callback's
      * composed predicate. */
-    sloth_state_t s = make_state_with_ifaces(2);
+    sloth_state_t s; make_state_with_ifaces(&s, 2);
     s.iface_sel = 1;
     iface_allow_add(&s, "wlan0");
     view_iface_key(&s, 'y');   /* deselect wlan0 at runtime */
@@ -478,7 +483,7 @@ void test_allow_independent_of_deselect(void) {
 
 void test_excluded_empty_list_marks_nothing(void) {
     /* Bare launch: empty allow-list excludes nothing, render unchanged. */
-    sloth_state_t s = make_state_with_ifaces(3);
+    sloth_state_t s; make_state_with_ifaces(&s, 3);
     ASSERT_EQ(iface_is_excluded(&s, "eth0"),  0);
     ASSERT_EQ(iface_is_excluded(&s, "wlan0"), 0);
     ASSERT_EQ(iface_is_excluded(&s, "lo"),    0);
@@ -489,7 +494,7 @@ void test_excluded_empty_list_marks_nothing(void) {
 void test_excluded_marks_unlisted_only(void) {
     /* Non-empty list: unlisted ifaces get the 'x' marker, listed ones
      * render exactly as unrestricted. */
-    sloth_state_t s = make_state_with_ifaces(3);
+    sloth_state_t s; make_state_with_ifaces(&s, 3);
     iface_allow_add(&s, "wlan0");
     ASSERT_EQ(iface_is_excluded(&s, "eth0"),  1);
     ASSERT_EQ(iface_is_excluded(&s, "lo"),    1);
@@ -504,7 +509,7 @@ void test_excluded_marks_unlisted_only(void) {
 void test_excluded_prefix_precedence(void) {
     /* hidden > deselected > excluded: an iface rejected by both
      * elections reads as the one the operator can still toggle. */
-    sloth_state_t s = make_state_with_ifaces(2);
+    sloth_state_t s; make_state_with_ifaces(&s, 2);
     iface_allow_add(&s, "wlan0");
     ASSERT_EQ(iface_row_prefix(&s, "eth0", 0), 'x');
     s.iface_sel = 0;
@@ -523,14 +528,14 @@ void test_excluded_prefix_precedence(void) {
  * that state actually becomes visible to the operator. */
 
 void test_scan_bar_no_hop_list_shows_scanning(void) {
-    sloth_state_t s = make_state_with_ifaces(1);
+    sloth_state_t s; make_state_with_ifaces(&s, 1);
     char buf[128];
     iface_fmt_scan_bar(&s, buf, sizeof(buf));
     ASSERT_STR(buf, "  [scanning]");
 }
 
 void test_scan_bar_confirmed_channel_has_no_marker(void) {
-    sloth_state_t s = make_state_with_ifaces(1);
+    sloth_state_t s; make_state_with_ifaces(&s, 1);
     s.scan_chans[0] = 1; s.scan_chans[1] = 6; s.scan_chans[2] = 11;
     s.scan_chan_count = 3;
     s.scan_cur_idx = 2;
@@ -542,7 +547,7 @@ void test_scan_bar_confirmed_channel_has_no_marker(void) {
 }
 
 void test_scan_bar_unconfirmed_retune_marks_current_channel(void) {
-    sloth_state_t s = make_state_with_ifaces(1);
+    sloth_state_t s; make_state_with_ifaces(&s, 1);
     s.scan_chans[0] = 1; s.scan_chans[1] = 6; s.scan_chans[2] = 11;
     s.scan_chan_count = 3;
     s.scan_cur_idx = 2;
@@ -556,7 +561,7 @@ void test_scan_bar_unconfirmed_retune_marks_current_channel(void) {
 void test_scan_bar_before_first_confirmation_is_unmarked(void) {
     /* chan_requested == 0 means chanhop hasn't ticked yet at all — not
      * the same as "requested and failed", so no marker. */
-    sloth_state_t s = make_state_with_ifaces(1);
+    sloth_state_t s; make_state_with_ifaces(&s, 1);
     s.scan_chans[0] = 1;
     s.scan_chan_count = 1;
     s.scan_cur_idx = 0;
@@ -574,17 +579,16 @@ void test_scan_bar_before_first_confirmation_is_unmarked(void) {
  * a healthy sensor shows only the two liveness words, so anything past
  * them is news. */
 
-static sloth_state_t make_healthy_sensor_state(void) {
-    sloth_state_t s = make_state_with_ifaces(1);
-    s.cap_health.open = 1; s.cap_health.running = 1;
-    s.cap_health.exit_reason = CAPTURE_EXIT_NONE;
-    s.mon_health.open = 1; s.mon_health.running = 1;
-    s.mon_health.exit_reason = CAPTURE_EXIT_NONE;
-    return s;
+static void make_healthy_sensor_state(sloth_state_t *s) {
+    make_state_with_ifaces(s, 1);
+    s->cap_health.open = 1; s->cap_health.running = 1;
+    s->cap_health.exit_reason = CAPTURE_EXIT_NONE;
+    s->mon_health.open = 1; s->mon_health.running = 1;
+    s->mon_health.exit_reason = CAPTURE_EXIT_NONE;
 }
 
 void test_health_strip_healthy_is_quiet(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     char buf[160];
     iface_fmt_health_strip(&s, buf, sizeof(buf));
     ASSERT_STR(buf, "  health: cap up  mon up");
@@ -593,14 +597,14 @@ void test_health_strip_healthy_is_quiet(void) {
 void test_health_strip_no_handle_reads_off_not_down(void) {
     /* "capture was never opened" and "capture died" are different
      * operator problems; the original bug was that they looked alike. */
-    sloth_state_t s = make_state_with_ifaces(1);
+    sloth_state_t s; make_state_with_ifaces(&s, 1);
     char buf[160];
     iface_fmt_health_strip(&s, buf, sizeof(buf));
     ASSERT_STR(buf, "  health: cap off  mon off");
 }
 
 void test_health_strip_dead_worker_names_the_reason(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     s.mon_health.running     = 0;
     s.mon_health.exit_reason = CAPTURE_EXIT_IFACE_GONE;
     char buf[160];
@@ -611,7 +615,7 @@ void test_health_strip_dead_worker_names_the_reason(void) {
 void test_health_strip_open_handle_with_dead_worker_is_down(void) {
     /* The exact regression #91 opens with: the handle is still open and
      * the tables simply stop growing. */
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     s.cap_health.running     = 0;
     s.cap_health.exit_reason = CAPTURE_EXIT_PERM_LOST;
     char buf[160];
@@ -620,7 +624,7 @@ void test_health_strip_open_handle_with_dead_worker_is_down(void) {
 }
 
 void test_health_strip_reports_drops_per_stream(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     s.cap_health.stats_valid = 1;
     s.cap_health.ps_drop     = 12;
     s.mon_health.stats_valid = 1;
@@ -633,7 +637,7 @@ void test_health_strip_reports_drops_per_stream(void) {
 void test_health_strip_zero_drops_are_not_shown(void) {
     /* Everything past the liveness words is a fault. Printing "drop 0"
      * every second trains the operator to stop reading the line. */
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     s.cap_health.stats_valid = 1;
     s.cap_health.ps_recv     = 1000000;
     char buf[160];
@@ -644,7 +648,7 @@ void test_health_strip_zero_drops_are_not_shown(void) {
 void test_health_strip_reports_radiotap_rejects(void) {
     /* #123: the monitor radio's radiotap refusals, after the drop
      * counters and only when non-zero. */
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     char buf[160];
     iface_fmt_health_strip(&s, buf, sizeof(buf));
     ASSERT_STR(buf, "  health: cap up  mon up");
@@ -656,7 +660,7 @@ void test_health_strip_reports_radiotap_rejects(void) {
 }
 
 void test_health_strip_reports_retune_failures(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     s.chan_retune_failures = 3;
     char buf[160];
     iface_fmt_health_strip(&s, buf, sizeof(buf));
@@ -667,7 +671,7 @@ void test_health_strip_reports_silent_hop_channels(void) {
     /* #91: a retune that reports success but does not take leaves the
        scan bar looking normal — the bracket moves either way — and only
        shows up as a channel that is visited and never hears anything. */
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     sh_evict_reset();
     s.hop_activity.channels        = 4;
     s.hop_activity.silent_channels = 2;
@@ -677,7 +681,7 @@ void test_health_strip_reports_silent_hop_channels(void) {
 }
 
 void test_health_strip_quiet_when_every_hop_channel_hears(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     sh_evict_reset();
     s.hop_activity.channels        = 4;
     s.hop_activity.silent_channels = 0;
@@ -691,7 +695,7 @@ void test_health_strip_quiet_when_every_hop_channel_hears(void) {
 void test_health_strip_reports_dwell_divergence(void) {
     /* #91: the poll loop is servicing a 250ms plan every second, so the
        radio holds each channel 4x as long as the scheduler believes. */
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     sh_evict_reset();
     s.hop_dwell.completed        = 40;
     s.hop_dwell.mean_planned_ms  = 250;
@@ -705,7 +709,7 @@ void test_health_strip_quiet_when_dwell_is_served(void) {
     /* Serviced close enough to plan: not a fault, so the line stays
        short. Also covers completed == 0, where the means are 0 and the
        ratio must not read as divergence. */
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     sh_evict_reset();
     s.hop_dwell.completed        = 40;
     s.hop_dwell.mean_planned_ms  = 250;
@@ -719,7 +723,7 @@ void test_health_strip_quiet_when_dwell_is_served(void) {
 }
 
 void test_health_strip_reports_evictions(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     sh_evict_reset();
     sh_evict_note(SH_EVICT_PNL_SSID);
     sh_evict_note(SH_EVICT_ALERT);
@@ -736,7 +740,7 @@ void test_health_strip_reports_evictions(void) {
  * number every second" habit that trains an operator to stop reading the
  * line. Synthesis-table loss is still news and still shows. */
 void test_health_strip_ignores_flow_ring_turnover(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     char buf[160];
 
     sh_evict_reset();
@@ -757,7 +761,7 @@ void test_health_strip_ignores_flow_ring_turnover(void) {
  * that is not is a fault and says so, so a fail-closed replug is never
  * just a quiet interface. */
 void test_health_strip_enforced_scope_is_quiet(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     s.scope_health.state     = CAPTURE_SCOPE_STATE_ENFORCED;
     s.scope_health.requested = 1;
     s.scope_health.enforced  = 1;
@@ -767,7 +771,7 @@ void test_health_strip_enforced_scope_is_quiet(void) {
 }
 
 void test_health_strip_reports_degraded_scope(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     s.scope_health.state      = CAPTURE_SCOPE_STATE_DEGRADED;
     s.scope_health.requested  = 2;
     s.scope_health.enforced   = 1;
@@ -778,7 +782,7 @@ void test_health_strip_reports_degraded_scope(void) {
 }
 
 void test_health_strip_reports_scope_without_capture(void) {
-    sloth_state_t s = make_state_with_ifaces(1);
+    sloth_state_t s; make_state_with_ifaces(&s, 1);
     s.scope_health.state     = CAPTURE_SCOPE_STATE_NO_CAPTURE;
     s.scope_health.requested = 1;
     char buf[160];
@@ -789,7 +793,7 @@ void test_health_strip_reports_scope_without_capture(void) {
 void test_health_strip_truncates_without_overrunning(void) {
     /* Every fault at once into a buffer far too small — the formatter
      * must truncate, not walk off the end. */
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     s.cap_health.running = 0; s.cap_health.exit_reason = CAPTURE_EXIT_ERROR;
     s.mon_health.running = 0; s.mon_health.exit_reason = CAPTURE_EXIT_IFACE_GONE;
     s.cap_health.stats_valid = 1; s.cap_health.ps_drop = 999999;
@@ -810,7 +814,7 @@ void test_health_strip_truncates_without_overrunning(void) {
  * dashboard_bands.c, but never in the Interfaces view — the one place an
  * operator's [m] retarget keystroke actually lands. */
 void test_health_strip_reports_probe_err(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     snprintf(s.probe_err, sizeof(s.probe_err),
              "wlan1mon9 not in --iface allow-list");
     char buf[160];
@@ -819,7 +823,7 @@ void test_health_strip_reports_probe_err(void) {
 }
 
 void test_health_strip_quiet_when_probe_err_empty(void) {
-    sloth_state_t s = make_healthy_sensor_state();
+    sloth_state_t s; make_healthy_sensor_state(&s);
     s.probe_err[0] = '\0';
     char buf[160];
     iface_fmt_health_strip(&s, buf, sizeof(buf));
@@ -829,7 +833,7 @@ void test_health_strip_quiet_when_probe_err_empty(void) {
 void test_excluded_render_smoke(void) {
     /* Exercise the draw path with an exclusion present — must not
      * crash and must leave state untouched (draw is const). */
-    sloth_state_t s = make_state_with_ifaces(3);
+    sloth_state_t s; make_state_with_ifaces(&s, 3);
     iface_allow_add(&s, "wlan0");
     s.iface_sel = 0;           /* selected row IS an excluded row */
     view_iface_draw(&s);

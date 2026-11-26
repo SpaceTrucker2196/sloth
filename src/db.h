@@ -140,7 +140,13 @@
  * step is five ALTER TABLE ADD COLUMN, all nullable: an incident an
  * earlier build recorded was not assessed, and NULL says so. No
  * existing column or value changes. */
-#define DB_SCHEMA_VERSION 19
+/* Bumped to 20 on 2026-11-26 (#228 step 5, owner ruling 2026-11-25):
+ * twin_evidence_snapshots, one row per EVIL_TWIN candidate pair holding
+ * the evidence vector behind its confidence. The v19 -> v20 step is
+ * CREATE TABLE IF NOT EXISTS and its index, the same DDL the
+ * unconditional schema carries: a new table, no existing table or
+ * value changes. */
+#define DB_SCHEMA_VERSION 20
 
 /* The random-address purge (#239, owner ruling 2026-11-20). A devices
  * row whose MAC is locally administered, last heard more than
@@ -573,6 +579,10 @@ const char *db_schema_migrate_v17_sql(void);
 /* v18 -> v19 (#246): ALTER TABLE alert_incidents ADD COLUMN only, the
  * five quality columns, nullable. */
 const char *db_schema_migrate_v18_sql(void);
+/* v19 -> v20 (#228 step 5): CREATE TABLE IF NOT EXISTS
+ * twin_evidence_snapshots and its index, the same DDL the unconditional
+ * schema carries. */
+const char *db_schema_migrate_v19_sql(void);
 
 /* victron_readings' value column `i` (0 from voltage_v, in the writer's
  * bind order), NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration

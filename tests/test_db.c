@@ -4571,6 +4571,163 @@ static void test_v18_migration_failure_leaves_file_unchanged(void) {
     unlink(db_path);
 }
 
+/* ── Schema v20: twin_evidence_snapshots (#228 step 5) ───────────── */
+
+/* A v19 file: a current file with twin_evidence_snapshots and its
+ * index dropped and the stamp set to 19, exactly a v19 file's shape,
+ * since v19 -> v20 adds a table and touches no other. An alert_incidents
+ * row rides along, to show the step leaves an unrelated table alone. */
+static void write_v19_file(void) {
+    fresh_db();
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "DROP INDEX idx_twin_evidence_snapshots_last_seen;"
+        "DROP TABLE twin_evidence_snapshots;"
+        "INSERT INTO alert_incidents (key,incident_id,type,first_seen,"
+        "last_seen,sev,peak_sev,count,observations)"
+        " VALUES ('v19-key','00000000000000c1',19,1600000000,1600000100,"
+        "1,2,40,3);"
+        "UPDATE meta SET value='19' WHERE key='schema_version';",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v19 -> v20: the table and its index arrive empty, and the row that
+ * was there reads as it was. The { 19, ... } step removed from
+ * g_steps[], the static chain check refuses the build. With
+ * MIGRATE_V19_SQL emptied this test still passes: the unconditional
+ * schema creates the table after the stamp. The step's SQL is what
+ * puts the table inside the step's transaction, and that is what the
+ * failure test below holds. */
+static void test_v19_file_migrates_additively(void) {
+    write_v19_file();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name='twin_evidence_snapshots'"), 0);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, DB_VER_STR);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info"
+                    "('twin_evidence_snapshots') WHERE name IN"
+                    " ('ssid','real_bssid','twin_bssid','confidence',"
+                    "'diff_oui','hashes_differ','attacker_oui','steered',"
+                    "'nbr_claim','carrier_ssid','mesh_vap','faint',"
+                    "'inv_mismatch','positive','context','hard',"
+                    "'first_seen','last_seen')"), 18);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                    " AND name='idx_twin_evidence_snapshots_last_seen'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM twin_evidence_snapshots"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE"
+                    " key='v19-key' AND incident_id='00000000000000c1'"
+                    " AND type=19 AND count=40 AND observations=3"), 1);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v19 file whose stamp cannot be written stays v19 without the table:
+ * the CREATE and the stamp are one transaction. */
+static void test_v19_migration_failure_leaves_file_unchanged(void) {
+    write_v19_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v20 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='20'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "19");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE"
+                    " name IN ('twin_evidence_snapshots',"
+                    "'idx_twin_evidence_snapshots_last_seen')"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"
+                    " WHERE key='v19-key'"), 1);
+    unlink(db_path);
+}
+
+/* Written last-write-wins, not latched like twin_episodes beside it:
+ * a pair whose confidence and flags drop on the next poll reads the
+ * new, lower values, not the old peak. Seen red with the upsert's SET
+ * clause changed to MAX() per column (the old, higher confidence and
+ * flags survived the second write). */
+static void test_twin_evidence_snapshot_overwrites_not_latches(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    twin_evidence_snap_t *v = &s.twin_evidence_snaps[s.twin_evidence_snap_count++];
+    snprintf(v->ssid, sizeof(v->ssid), "corp");
+    memset(v->real_bssid, 0xaa, 6);
+    memset(v->twin_bssid, 0xbb, 6);
+    v->confidence    = 80;
+    v->hashes_differ = 1;
+    v->attacker_oui  = 1;
+    v->positive      = 75;
+    v->last_seen     = NOW;
+    db_tick(&s, NOW);
+    ASSERT_EQ(q_int("SELECT confidence FROM twin_evidence_snapshots"), 80);
+    ASSERT_EQ(q_int("SELECT hashes_differ FROM twin_evidence_snapshots"), 1);
+
+    /* The same pair, re-evaluated weaker: the attacker-OUI half left
+     * earshot and the vendor-IE mismatch resolved itself. */
+    v->confidence    = 20;
+    v->hashes_differ = 0;
+    v->attacker_oui  = 0;
+    v->positive      = 20;
+    v->last_seen     = NOW + 10;
+    db_tick(&s, NOW + 10);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM twin_evidence_snapshots"), 1);
+    ASSERT_EQ(q_int("SELECT confidence FROM twin_evidence_snapshots"), 20);
+    ASSERT_EQ(q_int("SELECT hashes_differ FROM twin_evidence_snapshots"), 0);
+    ASSERT_EQ(q_int("SELECT attacker_oui FROM twin_evidence_snapshots"), 0);
+    ASSERT_EQ(q_int("SELECT positive FROM twin_evidence_snapshots"), 20);
+    /* first_seen is the one column that still takes the earlier value. */
+    ASSERT_EQ(q_int("SELECT first_seen FROM twin_evidence_snapshots"), (int)NOW);
+    db_close();
+    unlink(db_path);
+}
+
+/* twin_evidence_snapshots shares the finding tier with karma_candidates
+ * and rogue_radius: the evidence must outlive nothing less than the
+ * EVIL_TWIN finding it justifies, but it is not exempt from retention
+ * altogether either. Seen red both ways: with the table left off
+ * TIER_FINDING entirely, nothing ages it at 100d (as intended, since
+ * that mutation makes it "no tier" rather than "3x"), so the second
+ * assertion below (pruned past 360d) is what actually catches that
+ * mutation; with the table placed on TIER_ENTITY instead of
+ * TIER_FINDING, the row is gone by 100d and the first assertion
+ * catches it. */
+static void test_twin_evidence_snapshots_in_finding_retention_tier(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    long long old = NOW - 100 * DAY;    /* past 3x (90d), inside 12x */
+    long long ancient = NOW - 400 * DAY; /* past 12x (360d) */
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO twin_evidence_snapshots (ssid,real_bssid,twin_bssid,"
+        "confidence,positive,first_seen,last_seen) VALUES"
+        " ('corp','aa:00:00:00:00:00','bb:00:00:00:00:00',80,75,%lld,%lld);",
+        old, old);
+    insert_at(sql);
+    db_maintain(NOW);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM twin_evidence_snapshots"), 1);
+
+    snprintf(sql, sizeof(sql),
+        "UPDATE twin_evidence_snapshots SET first_seen=%lld, last_seen=%lld;",
+        ancient, ancient);
+    insert_at(sql);
+    db_maintain(NOW);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM twin_evidence_snapshots"), 0);
+    db_close();
+    unlink(db_path);
+}
+
 /* coverage_intervals is on the observation tier: past the window it
  * goes with the other observation rows, and the size ceiling may take
  * it. Seen red with "coverage_intervals" taken out of TIER_OBSERVATION
@@ -6108,6 +6265,10 @@ void run_db_tests(void) {
     RUN_TEST(test_v17_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_v18_file_migrates_additively);
     RUN_TEST(test_v18_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v19_file_migrates_additively);
+    RUN_TEST(test_v19_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_twin_evidence_snapshot_overwrites_not_latches);
+    RUN_TEST(test_twin_evidence_snapshots_in_finding_retention_tier);
     RUN_TEST(test_coverage_intervals_age_with_observations);
     RUN_TEST(test_victron_columns_match_the_allow_list);
     RUN_TEST(test_victron_tables_written);

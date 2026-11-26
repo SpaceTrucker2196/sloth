@@ -153,6 +153,11 @@ static const char *const TIER_FINDING[] = {
      * nil — and the ordinary-steering rows kept alongside are the
      * baseline that makes the forcing ones legible. */
     "btm_requests",
+    /* Same reasoning again: a twin_evidence_snapshots row is the
+     * feature vector behind an EVIL_TWIN finding, so it lives exactly
+     * as long as that finding does. Bounded at MAX_TWIN_EPISODES rows,
+     * so the cost is nil (#228 step 5). */
+    "twin_evidence_snapshots",
 };
 
 #define NELEMS(a) ((int)(sizeof(a) / sizeof((a)[0])))
@@ -180,7 +185,7 @@ enum {
     ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
     ST_BGP, ST_SSH, ST_RDP, ST_SNMP, ST_MQTT, ST_LDAP, ST_KERB, ST_SMB,
     ST_ALERT, ST_ALERT_ROW, ST_INCIDENT, ST_INCIDENT_TRIM, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
-    ST_SCAN, ST_SCAN_PORT, ST_KARMA, ST_ROGUE_RADIUS,
+    ST_SCAN, ST_SCAN_PORT, ST_KARMA, ST_ROGUE_RADIUS, ST_TWIN_EVIDENCE,
     ST_DEV_POS, ST_SENSOR_POS,
     ST_GNSS_FIX, ST_GNSS_SIGHT,
     ST_ADSB_AC, ST_ADSB_SIGHT,
@@ -996,6 +1001,32 @@ static const char *const SQL[ST_COUNT] = {
     "  last_identity=excluded.last_identity,"
     "  first_seen=MIN(rogue_radius.first_seen,excluded.first_seen),"
     "  last_seen=MAX(rogue_radius.last_seen,excluded.last_seen)",
+[ST_TWIN_EVIDENCE] =
+    "INSERT INTO twin_evidence_snapshots (ssid,real_bssid,twin_bssid,"
+    "confidence,diff_oui,same_oui,hashes_differ,late_arrival,attacker_oui,"
+    "steered,self_steer,sibling,nbr_claim,carrier_ssid,mesh_vap,faint,"
+    "inv_mismatch,inv_approved,inv_consulted,positive,context,hard,"
+    "first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,"
+    "?18,?19,?20,?21,?22,?23,?24)"
+    " ON CONFLICT(ssid,real_bssid,twin_bssid) DO UPDATE SET"
+    /* Last write wins, deliberately not MAX-latched like every other
+     * table above — see twin_evidence_snap_t's comment (sloth.h): this
+     * is a label store, and it needs the vector as most recently
+     * observed, not the loudest it ever reached. */
+    "  confidence=excluded.confidence, diff_oui=excluded.diff_oui,"
+    "  same_oui=excluded.same_oui, hashes_differ=excluded.hashes_differ,"
+    "  late_arrival=excluded.late_arrival,"
+    "  attacker_oui=excluded.attacker_oui, steered=excluded.steered,"
+    "  self_steer=excluded.self_steer, sibling=excluded.sibling,"
+    "  nbr_claim=excluded.nbr_claim, carrier_ssid=excluded.carrier_ssid,"
+    "  mesh_vap=excluded.mesh_vap, faint=excluded.faint,"
+    "  inv_mismatch=excluded.inv_mismatch,"
+    "  inv_approved=excluded.inv_approved,"
+    "  inv_consulted=excluded.inv_consulted, positive=excluded.positive,"
+    "  context=excluded.context, hard=excluded.hard,"
+    "  first_seen=MIN(twin_evidence_snapshots.first_seen,excluded.first_seen),"
+    "  last_seen=excluded.last_seen",
 };
 
 /* ── helpers ─────────────────────────────────────────────── */
@@ -1247,6 +1278,8 @@ static const db_step_t g_steps[] = {
     { 18, db_schema_migrate_v18_sql, TABLES_ALERT_INCIDENTS,
       "alert_incidents gained complete, complete_why, latency_ms,"
       " corroboration and src_state (#246)" },
+    { 19, db_schema_migrate_v19_sql, TABLES_NONE,
+      "twin_evidence_snapshots created (#228 step 5)" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -2730,6 +2763,39 @@ static void write_detector_evidence(const sloth_state_t *s, time_t now) {
         sqlite3_bind_int64(st, 10, (sqlite3_int64)(r->first_seen ? r->first_seen : now));
         sqlite3_bind_int64(st, 11, (sqlite3_int64)(r->last_seen  ? r->last_seen  : now));
         step_reset(ST_ROGUE_RADIUS);
+    }
+    for (int i = 0; i < s->twin_evidence_snap_count; i++) {
+        const twin_evidence_snap_t *v = &s->twin_evidence_snaps[i];
+        char real[18], twin[18];
+        mac_str(v->real_bssid, real);
+        mac_str(v->twin_bssid, twin);
+        time_t last = v->last_seen ? v->last_seen : now;
+        sqlite3_stmt *st = g_st[ST_TWIN_EVIDENCE];
+        bind_txt(st, 1, v->ssid);
+        bind_txt(st, 2, real);
+        bind_txt(st, 3, twin);
+        sqlite3_bind_int(st, 4,  v->confidence);
+        sqlite3_bind_int(st, 5,  v->diff_oui);
+        sqlite3_bind_int(st, 6,  v->same_oui);
+        sqlite3_bind_int(st, 7,  v->hashes_differ);
+        sqlite3_bind_int(st, 8,  v->late_arrival);
+        sqlite3_bind_int(st, 9,  v->attacker_oui);
+        sqlite3_bind_int(st, 10, v->steered);
+        sqlite3_bind_int(st, 11, v->self_steer);
+        sqlite3_bind_int(st, 12, v->sibling);
+        sqlite3_bind_int(st, 13, v->nbr_claim);
+        sqlite3_bind_int(st, 14, v->carrier_ssid);
+        sqlite3_bind_int(st, 15, v->mesh_vap);
+        sqlite3_bind_int(st, 16, v->faint);
+        sqlite3_bind_int(st, 17, v->inv_mismatch);
+        sqlite3_bind_int(st, 18, v->inv_approved);
+        sqlite3_bind_int(st, 19, v->inv_consulted);
+        sqlite3_bind_int(st, 20, v->positive);
+        sqlite3_bind_int(st, 21, v->context);
+        sqlite3_bind_int(st, 22, v->hard);
+        sqlite3_bind_int64(st, 23, (sqlite3_int64)last);
+        sqlite3_bind_int64(st, 24, (sqlite3_int64)last);
+        step_reset(ST_TWIN_EVIDENCE);
     }
 }
 
