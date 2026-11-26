@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>sloth — the calm, observant network monitor</title>
-<meta name="description" content="A passive network SIGINT console for Linux. 35 views, 61 alert rules, embedded WiFi SIGINT toolkit. Never injects a frame onto the network it watches; every network-using option is opt-in and announced. White-hat only.">
-<meta property="og:title" content="sloth — the calm, observant network monitor">
-<meta property="og:description" content="Passive network SIGINT for Linux. Eyes, not hands.">
+<title>sloth — Citizen SIGINT, receive only</title>
+<meta name="description" content="Citizen SIGINT: an open, receive-only tool for RF signals intelligence on Linux. Wi-Fi, Bluetooth and BLE, ADS-B, APRS, GNSS, SDR sweeps and the host network. Never injects a frame onto the network it watches; every network-using option is opt-in and announced. Radios, not people. White-hat only.">
+<meta property="og:title" content="sloth — Citizen SIGINT, receive only">
+<meta property="og:description" content="Citizen SIGINT for Linux: see the radio spectrum around you. Eyes, not hands.">
 <meta property="og:image" content="assets/sloth.png">
 <meta property="og:type" content="website">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -146,7 +146,7 @@
     </a>
     <div class="nav-links">
       <a href="#what">What it sees</a>
-      <a href="views.html">35 views</a>
+      <a href="views.html">Views</a>
       <a href="philosophy.html">Philosophy</a>
       <a href="streaming.html">Stream</a>
       <a href="quickstart.html">Quickstart</a>
@@ -159,12 +159,14 @@
 <section id="top" class="hero">
   <div class="hero-inner">
     <div class="hero-text">
-      <p class="eyebrow">A passive SIGINT console</p>
-      <h1>The calm, observant<br/>network monitor.</h1>
+      <p class="eyebrow">Citizen SIGINT</p>
+      <h1>See the radio spectrum<br/>around you.</h1>
       <p class="lede">
-        35 live views. 61 alert rules. An embedded WiFi-SIGINT toolkit.
-        A JSONL stream you can plug into Splunk, Elastic, or syslog in
-        five minutes. <strong>Never injects. Every network-using option off by default, opt-in and announced.</strong>
+        Wi-Fi, Bluetooth and BLE, ADS-B, APRS, GNSS, SDR sweeps and the
+        host network, in live terminal views and a browser dashboard.
+        Alert rules with written, cited assessments. A JSONL stream you
+        can plug into Splunk, Elastic, or syslog in five minutes.
+        <strong>Receive only. Never injects. Every network-using option off by default, opt-in and announced.</strong>
         Sloth is the eyes, not the hands.
       </p>
       <div class="cta-row">
@@ -173,7 +175,7 @@
       </div>
       <p class="hero-meta">
         <span class="badge badge-green">C99 · Linux · libpcap</span>
-        <span class="badge badge-gold">9,152 test assertions</span>
+        <span class="badge badge-gold">Radios, not people</span>
         <span class="badge badge-clay">White-hat only</span>
       </p>
     </div>
@@ -188,11 +190,13 @@
   <div class="section-inner">
     <h2>Eyes on every layer of the canopy.</h2>
     <p class="section-lede">
-      Sloth reads what your host already sees — <code>/proc</code>, <code>/sys</code>,
-      rtnetlink, nl80211, INET_DIAG, and an optional libpcap stream — and
-      synthesises it into views, alerts, and a forensic log. Nothing is
-      injected. Nothing is solicited. The bytes you observe are bytes that
-      were already there.
+      Sloth reads what your sensor already receives — a monitor-mode
+      Wi-Fi radio, Bluetooth advertisements, the decoders you run for
+      ADS-B, APRS and rtl_433, a GNSS receiver, an SDR sweep, and the
+      host's own interfaces through libpcap, <code>/proc</code>,
+      rtnetlink, nl80211 and INET_DIAG — and turns it into views,
+      alerts, assessments and a forensic log. Nothing is injected.
+      Nothing is solicited. The signals you observe were already there.
     </p>
 
     <div class="feature-grid">
@@ -200,11 +204,12 @@
         <div class="feature-icon">🌿</div>
         <h3>Eyes, not hands</h3>
         <p>
-          Sloth never sends a packet, never decrypts a frame, never runs
-          a passphrase against a captured handshake. It detects WEP,
+          Sloth never sends a frame onto a network it watches, never
+          decrypts a frame, never runs a passphrase against a captured
+          handshake, and never says who carries a device. It detects WEP,
           WPA-TKIP, weak TLS, evil twins, rogue DHCP, DGA-style DNS,
-          KARMA/Pineapple — and flags them. <em>Operating</em> on them is
-          the operator's job, under their own legal cover.
+          KARMA/Pineapple, GNSS jamming — and flags them. <em>Operating</em>
+          on them is the operator's job, under their own legal cover.
         </p>
         <a class="card-link" href="philosophy.html">Read the mission →</a>
       </div>
@@ -215,9 +220,10 @@
         <p>
           Per-MAC Preferred Network List aggregation. RSN / cipher / AKM /
           MFP inventory from beacon IEs. EAPOL / PMKID / 4-way handshake
-          capture with hashcat-22000 export. Sequence-number based
-          MAC-randomisation deanonymisation. Hidden-SSID reveal from
-          probe-responses.
+          capture with opt-in hashcat-22000 export. Sequence-number
+          correlation across MAC rotations &mdash; a hypothesis about a
+          radio, never an identification of a person. Hidden-SSID reveal
+          from probe-responses.
         </p>
         <a class="card-link" href="views.html#wifi-sigint">See the WiFi SIGINT views →</a>
       </div>
@@ -257,13 +263,15 @@
   </svg>
 </div>
 
-<!-- ── 35 views ───────────────────────────────────────────────────── -->
+<!-- ── Views ──────────────────────────────────────────────────────── -->
 <section id="views" class="section section-canopy">
   <div class="section-inner">
-    <h2>Thirty-five live views,<br/>tiled into the terminal.</h2>
+    <h2>Live views,<br/>tiled into the terminal.</h2>
     <p class="section-lede pale">
       Each view is a complete protocol or synthesis — its own keybinding,
       its own ring buffer, its own per-view documentation. Tab to cycle.
+      ADS-B, APRS, rtl_433 and the SDR sweep are read in the slothweb
+      browser dashboard.
       Press <kbd>o</kbd> for the composite dashboard. Press <kbd>l</kbd>
       for the OSI synthesis grid.
     </p>
@@ -295,13 +303,20 @@
       <div class="view-category">
         <h4>Synthesis</h4>
         <p>
-          Alerts · Devices · Dashboard · OSI stack
+          Alerts · Devices · Dashboard · OSI stack · Twins · KARMA ·
+          RADIUS · FragAttacks · Research
         </p>
       </div>
       <div class="view-category">
-        <h4>WiFi SIGINT (v1.1)</h4>
+        <h4>WiFi SIGINT</h4>
         <p>
           PNL · EAPOL · Seqnum · Assoc · Channel
+        </p>
+      </div>
+      <div class="view-category">
+        <h4>Other radios</h4>
+        <p>
+          BLE · GNSS
         </p>
       </div>
     </div>
@@ -362,14 +377,26 @@
           researchers, CTF and training environments, and security-aware
           travellers who want to know what the café Wi-Fi is doing. Not
           for surveillance, harassment, or operating against any network
-          you don't have written authority to observe.
+          you aren't authorised on. Broadcast signals need no permission;
+          a network's own traffic needs you to have joined it with
+          credentials its owner gave or published.
+        </p>
+      </div>
+      <div class="value">
+        <span class="value-num">5.</span>
+        <h4>Radios, not people.</h4>
+        <p>
+          Reports a device's presence, its technical behaviour and its
+          position or movement relative to the sensor. Never who uses it,
+          or what they do, why, or when.
         </p>
       </div>
     </div>
 
     <p class="philosophy-pullquote">
-      &ldquo;Sloth is a passive, white-hat SIGINT console: it watches, it
-      flags, it never attacks.&rdquo;
+      &ldquo;Sloth is an open, receive-only Citizen SIGINT tool: it watches
+      the spectrum, it flags what is hostile, it reports radios, not
+      people, and it never attacks.&rdquo;
     </p>
   </div>
 </section>
@@ -450,33 +477,33 @@
   <div class="section-inner">
     <h2>Quickstart.</h2>
     <p class="section-lede">
-      One binary. No daemon. No config file. Build it, point it at an
-      interface, watch what your host sees.
+      Two daemons and a few helpers from one tree. Build them, put a
+      radio in monitor mode, watch what is around you. To run them as
+      services, follow the README's quick start.
     </p>
 
     <div class="quickstart-grid">
       <div class="qs-card">
         <h4>1. Install dependencies (Debian / Ubuntu)</h4>
 <pre class="code-block">sudo apt-get install -y \
-    build-essential \
-    libpcap-dev \
-    libncursesw5-dev</pre>
+    build-essential pkg-config \
+    libpcap-dev libncurses-dev libsqlite3-dev</pre>
       </div>
 
       <div class="qs-card">
         <h4>2. Build</h4>
 <pre class="code-block">cd sloth
-make test    # 9,152 assertions, no root needed
-make         # builds ./sloth</pre>
+make test    # the whole suite, no root needed
+make         # sloth-wifi (alias sloth), sloth-rf, helpers</pre>
       </div>
 
       <div class="qs-card">
         <h4>3. Run (needs <code>CAP_NET_RAW</code>)</h4>
-<pre class="code-block">sudo ./sloth                              # TUI on default iface
-sudo ./sloth -i eth0                      # pin capture iface
-sudo ./sloth -o /var/log/sloth.jsonl      # forensic stream
-sudo ./sloth --data-socket unix:/run/sloth/sloth.sock
-sudo ./sloth --eapol-dir /tmp/sloth-eapol # WiFi handshake export</pre>
+<pre class="code-block">sudo ./sloth-wifi --hop                   # TUI; finds the monitor radio
+sudo ./sloth-wifi --iface eth0            # restrict the stream to eth0
+sudo ./sloth-wifi -o /var/log/sloth.jsonl # forensic stream
+sudo ./sloth-wifi --data-socket unix:/run/sloth/sloth.sock
+sudo ./sloth-wifi --collect-handshakes --eapol-dir /tmp/sloth-eapol</pre>
       </div>
 
       <div class="qs-card">
@@ -507,7 +534,7 @@ sudo ./sloth --eapol-dir /tmp/sloth-eapol # WiFi handshake export</pre>
       <h5>Navigate</h5>
       <ul>
         <li><a href="#top">Top</a></li>
-        <li><a href="views.html">35 views</a></li>
+        <li><a href="views.html">Views</a></li>
         <li><a href="philosophy.html">Philosophy</a></li>
         <li><a href="streaming.html">Stream</a></li>
         <li><a href="quickstart.html">Quickstart</a></li>
@@ -517,18 +544,20 @@ sudo ./sloth --eapol-dir /tmp/sloth-eapol # WiFi handshake export</pre>
     <div class="footer-col footer-about">
       <h5>About</h5>
       <p>
-        Passive, white-hat SIGINT for IP and 802.11. Thirty-five
-        live views, 61 passive alert rules, a WiFi-SIGINT toolkit, and a
-        JSONL stream you can pipe into any SIEM. Built in C99 for
-        Linux, with a small reference consumer + forwarder in
-        Python.
+        Citizen SIGINT: an open, receive-only tool for the radio
+        spectrum around you &mdash; Wi-Fi, Bluetooth and BLE, ADS-B,
+        APRS, GNSS, SDR sweeps and the host network. Live views, alert
+        rules with written assessments, and a JSONL stream you can pipe
+        into any SIEM. Radios, not people. Built in C99 for Linux.
       </p>
     </div>
   </div>
   <div class="footer-meta">
     <p>
       Run sloth only on networks you have explicit authority to
-      observe.
+      observe, and follow the law where you are.
+      <a href="https://github.com/SpaceTrucker2196/sloth/blob/main/MISSION.md">MISSION.md</a>
+      has the terms.
     </p>
   </div>
 </footer>

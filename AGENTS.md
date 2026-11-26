@@ -1,16 +1,15 @@
 # sloth — agent instructions (pointer)
 
-The canonical, cross-tool agent instructions have moved to **`agents/AGENTS.md`**
-and are **git-crypt encrypted** to prevent third-party contamination of the
-files that govern agent behavior.
+Sloth is an open, receive-only tool for RF signals intelligence:
+Citizen SIGINT. It lets a private citizen see and understand the radio
+spectrum around them, flags hostile or anomalous activity aimed at the
+operator's own networks, and reports radios, not people. The charter
+and its non-negotiable rules are the root [`MISSION.md`](MISSION.md).
 
-- Trusted local agents (with the git-crypt key unlocked) read `agents/AGENTS.md`
-  as normal plaintext.
-- Third parties (GitHub viewers, forks, PR authors) see only ciphertext and
-  cannot read or tamper with the real instructions.
+The canonical, cross-tool agent instructions are **`agents/AGENTS.md`**.
+They are plaintext and public; the git-crypt encryption they once had
+was removed on 2026-07-28, and the root `CLAUDE.md` says why.
 
-If `agents/AGENTS.md` is ciphertext on your machine, run `git-crypt unlock` with
-the project key before relying on any instruction file. The build/infra runbook
-is `agents/FACTORY.md`; the pattern + autonomy contract is
-`agents/dark-factory.md`; the product charter and sacred invariants remain in
-the root `MISSION.md`.
+- The build/infra runbook is `agents/FACTORY.md`.
+- The pattern and the autonomy contract are `agents/dark-factory.md`.
+- The product charter and the rules of engagement are `MISSION.md`.

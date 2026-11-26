@@ -1,5 +1,9 @@
 # sloth — agent instructions
 
+Sloth is an open, receive-only tool for RF signals intelligence:
+Citizen SIGINT. The charter, including the rules of engagement and
+"radios, not people", is the root `MISSION.md`.
+
 Canonical agent instructions live in `agents/AGENTS.md`.
 
 That folder is plaintext and public. It was git-crypt encrypted until

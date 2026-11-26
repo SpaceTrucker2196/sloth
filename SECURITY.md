@@ -145,7 +145,13 @@ citing sloth in a data-handling or evidence-lifecycle document.
 
 ## Passive-only guarantee
 
-The mission statement in [`MISSION.md`](MISSION.md) §2 is the
-canonical list of things sloth doesn't do. Any code change that
-violates one of those rules is by definition a security issue and
-should be reported through the same channel.
+Sloth is a receive-only Citizen SIGINT tool. The mission statement in
+[`MISSION.md`](MISSION.md) §2 is the canonical list of things sloth
+doesn't do: transmit onto what it monitors, decrypt or crack what it
+captured, exploit what it detects, or infer who uses a device (rule 6,
+"radios, not people"). Any code change that violates one of those rules
+is by definition a security issue and should be reported through the
+same channel. The one sloth-family program that transmits, `sloth-va`,
+is bounded by
+[ADR 0011](docs/wiki/adr/0011-sloth-va-transmits.md); behaviour
+outside that bound is a security issue too.

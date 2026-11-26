@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Philosophy — sloth</title>
-<meta name="description" content="The five non-negotiable rules behind sloth: passive only, no active key recovery, vulnerabilities flagged not exploited, white hat only, operator owns the consequences.">
+<meta name="description" content="The non-negotiable rules behind sloth, a receive-only Citizen SIGINT tool: passive only, no active key recovery, vulnerabilities flagged not exploited, white hat only, operator owns the consequences, radios not people.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;600;700&family=VT323&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -22,7 +22,7 @@
     </a>
     <div class="nav-links">
       <a href="index.html#what">What it sees</a>
-      <a href="views.html">35 views</a>
+      <a href="views.html">Views</a>
       <a href="philosophy.html">Philosophy</a>
       <a href="streaming.html">Stream</a>
       <a href="quickstart.html">Quickstart</a>
@@ -38,10 +38,12 @@
     <p class="page-eyebrow">The non-negotiables</p>
     <h1 class="page-title">Philosophy.</h1>
     <p class="page-lede">
-      Five rules define what sloth is allowed to do. They are not
+      Sloth is Citizen SIGINT: an open, receive-only tool that lets a
+      private citizen see and understand the radio spectrum around
+      them. Six rules define what it is allowed to do. They are not
       preferences and they are not negotiable per feature. They are
       what makes sloth trustworthy to run on a sensitive segment:
-      <strong>the bytes it observes are bytes that were already there.</strong>
+      <strong>the signals it observes were already there.</strong>
       Lose that and the tool is just another offensive fork.
     </p>
   </div>
@@ -179,8 +181,17 @@
         <p>
           It is <strong>not built</strong> for surveillance of third
           parties, harassment, stalking, or any operation against a
-          network the operator does not have explicit written authority
-          to observe.
+          network the operator is not authorised on.
+        </p>
+        <p>
+          Receiving broadcast signals (beacons, probes, BLE
+          advertisements, ADS-B, APRS, GNSS) needs no permission: they
+          are sent in the clear to anyone in range. Observing a
+          network&rsquo;s own traffic needs authorisation, and joining it
+          is that authorisation: authenticating through its WPA login
+          with credentials its owner issued or published implies
+          permission to observe it. A guessed, cracked or borrowed
+          credential is not.
         </p>
       </div>
     </div>
@@ -210,6 +221,59 @@
   </div>
 </section>
 
+<!-- ── Rule 6: Radios, not people ─────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">RULE 06</span>
+        <h3>Radios, not people.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          Sloth reports that a device is present, how it behaves
+          technically, and where it is or how it moves relative to the
+          sensor. It never infers who uses a device, or that person's
+          activity, purpose or routine.
+        </p>
+        <p>
+          <em>A correlation across MAC rotations is a hypothesis about
+          a radio, never an identification of a person.</em>
+          (Set by the operator on 2026-11-25.)
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Lawful and ethical use ─────────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">LAWFUL USE</span>
+        <h3>The terms sloth is built for.</h3>
+      </div>
+      <div class="split-body">
+        <ul>
+          <li>Receive only. The one helper that transmits,
+              <code>sloth-va</code>, talks only to the operator's own
+              Victron devices and is off by default.</li>
+          <li>No decryption and no content interception.</li>
+          <li>No key recovery.</li>
+          <li>Collect only what is broadcast in the clear.</li>
+          <li>Remove third-party identifiers &mdash; other people's MAC
+              addresses, network names, call signs &mdash; from anything
+              you share.</li>
+          <li>The law where you are is your responsibility. In the
+              U.S. that includes, for example, FCC rules and the ECPA.
+              This is not legal advice.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ── Out of scope ───────────────────────────────────────────────── -->
 <section class="page-section dark">
   <div class="page-section-inner">
@@ -233,6 +297,8 @@
           <li>Frame injection of any kind.</li>
           <li>Online cracking, dictionary attacks, password-spray,
               credential validation.</li>
+          <li>Decrypting anyone else's traffic.</li>
+          <li>Identifying, profiling or following a person.</li>
           <li>Network configuration (DHCP server, DNS resolver,
               firewall rules).</li>
           <li>Any "honeypot" mode that responds to inbound traffic.</li>
@@ -250,8 +316,9 @@
 <section class="page-section">
   <div class="page-section-inner">
     <p class="page-pullquote">
-      &ldquo;Sloth is a passive, white-hat SIGINT console: it watches,
-      it flags, it never attacks.&rdquo;
+      &ldquo;Sloth is an open, receive-only Citizen SIGINT tool: it
+      watches the spectrum, it flags what is hostile, it reports radios,
+      not people, and it never attacks.&rdquo;
     </p>
   </div>
 </section>
@@ -271,7 +338,7 @@
       <h5>Navigate</h5>
       <ul>
         <li><a href="index.html">Home</a></li>
-        <li><a href="views.html">35 views</a></li>
+        <li><a href="views.html">Views</a></li>
         <li><a href="philosophy.html">Philosophy</a></li>
         <li><a href="streaming.html">Stream</a></li>
         <li><a href="quickstart.html">Quickstart</a></li>
@@ -281,18 +348,20 @@
     <div class="footer-col footer-about">
       <h5>About</h5>
       <p>
-        Passive, white-hat SIGINT for IP and 802.11. Thirty-five
-        live views, 61 passive alert rules, a WiFi-SIGINT toolkit, and a
-        JSONL stream you can pipe into any SIEM. Built in C99 for
-        Linux, with a small reference consumer + forwarder in
-        Python.
+        Citizen SIGINT: an open, receive-only tool for the radio
+        spectrum around you &mdash; Wi-Fi, Bluetooth and BLE, ADS-B,
+        APRS, GNSS, SDR sweeps and the host network. Live views, alert
+        rules with written assessments, and a JSONL stream you can pipe
+        into any SIEM. Radios, not people. Built in C99 for Linux.
       </p>
     </div>
   </div>
   <div class="footer-meta">
     <p>
       Run sloth only on networks you have explicit authority to
-      observe.
+      observe, and follow the law where you are.
+      <a href="https://github.com/SpaceTrucker2196/sloth/blob/main/MISSION.md">MISSION.md</a>
+      has the terms.
     </p>
   </div>
 </footer>

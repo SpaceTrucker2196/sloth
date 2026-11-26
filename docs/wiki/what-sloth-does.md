@@ -1,14 +1,17 @@
 ---
 name: what-sloth-does
-description: The complete picture of sloth as a passive monitor — the sensing surfaces it reads, the views, the alert rules, the outputs, and the hard line it never crosses
+description: The complete picture of sloth as a Citizen SIGINT tool — the signal domains and sensing surfaces it reads, the views, the alert rules, the outputs, and the hard lines it never crosses
 type: reference
 ---
 
 # What sloth does
 
-**Summary**: sloth is a terminal-based **passive** network monitor for
-Linux, C99. It reads what is already on the wire and in
-the air and surfaces it through <!-- count:views -->37<!-- /count --> views and <!-- count:rules -->101<!-- /count --> alert rules. Since the cutover
+**Summary**: sloth is an open, **receive-only** tool for RF signals
+intelligence — Citizen SIGINT (`MISSION.md` §1) — for Linux, in C99.
+It reads what is already on the wire and in the air (Wi-Fi, Bluetooth
+and BLE, ADS-B, APRS, rtl_433, GNSS, SDR sweeps, the host network),
+characterises the emitters, flags hostile or anomalous activity aimed
+at the operator's own networks, and surfaces it through <!-- count:views -->37<!-- /count --> views and <!-- count:rules -->101<!-- /count --> alert rules. Since the cutover
 (#216, [ADR 0010](adr/0010-wifi-rf-daemons.md)) the sensor is two
 daemons: **`sloth-wifi`** (IP, 802.11, BLE and every view; `sloth` is a
 symlink to it), which raises <!-- count:rules-wifi -->96<!-- /count --> of the alert kinds, and the
@@ -21,16 +24,18 @@ page that covers it in full.
 **Sources**: `MISSION.md`, `CLAUDE.md`, `src/main.c`, `include/sloth.h`,
 all `docs/views/*.md`.
 
-**Last updated**: 2026-11-23 (#242 item 4: `sloth-wifi` also raises `SENSOR_SUPPRESSED`, the sensor losing what its sources still deliver); 2026-11-15 (#216: two daemons, which binary has which views and alert kinds; the ADS-B view is gone); 2026-11-07 (the sensor-family views — BLE `[*]`, GNSS `[#]`, ADS-B `[^]` — were missing from the view groups); 2026-10-15.
+**Last updated**: 2026-11-26 (the Citizen SIGINT mission: summary, one-line version, the RF rows of the sensing table, "radios, not people" and the lawful-use pointer in the never-does list); 2026-11-23 (#242 item 4: `sloth-wifi` also raises `SENSOR_SUPPRESSED`, the sensor losing what its sources still deliver); 2026-11-15 (#216: two daemons, which binary has which views and alert kinds; the ADS-B view is gone); 2026-11-07 (the sensor-family views — BLE `[*]`, GNSS `[#]`, ADS-B `[^]` — were missing from the view groups); 2026-10-15.
 
 ---
 
 ## The one-line version
 
-> Point sloth at a wired interface and a monitor-mode Wi-Fi interface.
-> It tells you who is on the network, who is *near* the network, what
-> they are saying in the clear, and which of ~61 known-bad behaviours it
-> just saw — and it writes none of its own traffic to do it.
+> Point sloth at a monitor-mode Wi-Fi radio, the host's interfaces and
+> the decoders you already run. It tells you which radios are near you,
+> what they are and how they behave, which of the alert rules' hostile
+> or anomalous patterns it just saw, and how sure it is — and it writes
+> none of its own traffic to do it. It describes radios, never the
+> people carrying them.
 
 ## What it reads (the sensing surfaces)
 
@@ -43,6 +48,10 @@ all `docs/views/*.md`.
 | Packet stream | libpcap | the L2–L7 decode chain below |
 | 802.11 management | libpcap on a monitor iface | beacons, probes, auth/assoc, deauth, action frames |
 | `/proc/net` | procfs | protocol counters (Stats view) |
+| BLE advertisements | HCI monitor channel (`--bt-monitor`), Ubertooth capture (`--bt-capture`) | advertisers per sensor and the BLE rules ([[ble]]) |
+| GNSS | gpsd or a serial NMEA receiver (`--gps`, both daemons) | the sensor's position, the sky, jamming and spoofing indicators ([[gnss]]) |
+| ADS-B, APRS, rtl_433 | the decoders' output files and sockets (`sloth-rf`) | aircraft, APRS stations and packets, ISM-band devices ([[adsb]], [[aprs]], [[rtl433]]) |
+| Spectrum | `sloth-sdrsweep` through SoapySDR, shown in slothweb | a 0.5–2000 MHz max-hold sweep ([[sdr-sweep]]) |
 
 The packet thread decodes IPv4/IPv6 → TCP/UDP → DNS, TLS, HTTP, QUIC,
 NTP, ICMP, and the 802.11 frame classes ([[how-wifi-works]] §2). It reads
@@ -140,10 +149,22 @@ never in it at all. See [[log]] 2026-10-14.
   `tests/fake_platform.c` is the seam.
 - **No network fetch.** No threat feed, no self-update, no telemetry. A
   version check reads a locally-populated manifest ([[version-checkin]]).
+- **Radios, not people** (`MISSION.md` §2 rule 6, operator 2026-11-25).
+  Sloth reports a device's presence, its technical behaviour and its
+  position or movement relative to the sensor. It never infers who uses
+  a device, or that person's activity, purpose or routine.
+
+The one sloth-family program that transmits is `sloth-va`, which
+connects only to the operator's own listed Victron devices and is kept
+out of the sensor ([ADR 0011](adr/0011-sloth-va-transmits.md)). The
+terms of use — receive only, no decryption, no key recovery, clear-text
+collection only, third-party identifiers minimised in anything shared,
+and the local law the operator's responsibility — are `MISSION.md`
+§2, "Lawful and ethical use".
 
 The line is the product: sloth is trustworthy *because* it is passive.
-An operator can run it on a network they do not own and know it added
-nothing to the air.
+An operator can run it on a sensitive segment and know it added nothing
+to the air.
 
 ## Related pages
 

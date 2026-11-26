@@ -1,5 +1,14 @@
 # Wiki index
 
+Sloth is an open intelligence tool for RF signals intelligence:
+**Citizen Signals Intelligence (Citizen SIGINT)**. It is receive-only.
+It lets a private citizen see and understand the radio spectrum around
+them — Wi-Fi, Bluetooth and BLE, ADS-B, APRS, GNSS, SDR sweeps — and
+the host network, flags hostile or anomalous activity aimed at the
+operator's own networks, and reports findings as assessments. It
+reports radios, not people. The charter is `MISSION.md`; the one-screen
+map is [[what-sloth-does]].
+
 Table of contents for the sloth wiki. Pages are concept-oriented; raw
 per-view documentation lives in `../views/` and is treated as immutable
 source material.
@@ -12,7 +21,9 @@ render of it (see [[wiki-maintenance]]). Edit here, never there.
 ## Read this first — the complete reference
 
 The eight pages that make this a from-scratch reference to sloth and to
-the Wi-Fi it watches:
+the Wi-Fi it watches most closely (Bluetooth, GNSS, ADS-B, APRS,
+rtl_433 and the SDR sweep have their own pages under "WiFi SIGINT"
+below):
 
 - [[what-sloth-does]] — the whole tool on one screen: surfaces, views, alerts, outputs, and the line it never crosses.
 - [[how-wifi-works]] — 802.11 from the radio up: bands, frames, the join sequence, security generations, roaming, MAC randomisation.
@@ -32,11 +43,13 @@ the Wi-Fi it watches:
   (removed at Stage 4, #235; slothweb is sloth-mesh's) and every
   intelligence table in `src/`, with #184's contract table
   C1–C10 filled in and the places the grep disagrees with it.
-- [ADRs 0001–0010](adr/README.md) — the architecture decision records for
+- [ADRs 0001–0011](adr/README.md) — the architecture decision records for
   the three-repository programme (#184), one per decision, with the gaps
   that still need an owner ruling marked in place; 0009 is the owner's
   monitor-only rule for fleet sharing (2026-11-12); 0010 splits the
-  sensor into the `sloth-wifi` and `sloth-rf` daemons (#211).
+  sensor into the `sloth-wifi` and `sloth-rf` daemons (#211); 0011 is
+  `sloth-va`, the one helper that transmits, to the operator's own Victron
+  devices.
 - [[architecture-rf-split]] — the measured coupling between the Wi-Fi
   monitor and the SDR and GNSS modules (ADS-B, APRS, rtl_433, GNSS) in
   today's one process, slothweb's one-socket and one-database

@@ -1,13 +1,15 @@
 # ROADMAP.md — where sloth is going
 
-This file is the **planning ledger**: open, not-yet-owned work, grouped
-by theme and prioritised. It sits between the two documents that bound
-it:
+Sloth is an open, receive-only tool for RF signals intelligence:
+Citizen SIGINT ([`MISSION.md`](MISSION.md) §1). This file is the
+**planning ledger**: open, not-yet-owned work, grouped by theme and
+prioritised. It sits between the two documents that bound it:
 
 - [`MISSION.md`](MISSION.md) §4 is the *direction* — slow-moving gravity,
   and the non-negotiable scope rules (§2). Nothing here overrides those.
   Every item below is passive-only: no injection, no active scan, no
-  cracking, no control surface.
+  cracking, no control surface — and, under §2 rule 6, every item
+  describes radios, not people.
 - [`PROGRESS.md`](PROGRESS.md) is the *rear-view mirror* — what landed,
   what's in flight. When an item here is picked up it becomes an
   "In progress" block there; when it lands it moves to "Recently landed".
@@ -32,20 +34,54 @@ still open) · **✅** landed.
 
 ## Where things stand
 
-> **Re-verified 2026-08-24** against the tree at `f2fe12f`, as a triage
-> sweep over every open issue. The line below ("no open GitHub issues")
-> was true when written on 2026-07-28 and stopped being true on 08-03.
-> It is the same drift this file warns about at the top, four weeks
-> later — worth leaving visible rather than quietly overwriting.
+> **Re-verified 2026-11-26** against the open issue list and the tree at
+> `b01f8c28` (v1.8.7), for the Citizen SIGINT mission. Sections A, B and
+> C below are the Wi-Fi backlog as it stood on 2026-08-25 and are kept
+> as a record; they predate the daemon split, the RF sources and the
+> collection-method programme. The open work now is the issue list,
+> grouped here by theme. All of it is **planned**, none of it shipped.
 
-~~**No open GitHub issues.**~~ **None are open.**
-all of it section-B work now filed rather than merely listed here.
-Section A — the original issue backlog — remains fully landed.
+**Collection method** (#241, after FM 2-0 Chapter 1; coverage
+assessment, passive cueing, finding quality and the exposure report
+have landed from it):
 
-Both of the half-landed issues are now closed:
+- ◆ `#244` Site questions: a requirements file that ties each question
+  to its indicator rules, with a status per question.
+- ◆ `#245` Finding lifecycle: a preliminary state, confirm or withdraw,
+  and a value time limit with expiry.
+- ◆ `#249` Sweep session: a time-limited sweep of a room or site, with
+  a report of each emitter against the baseline.
 
-- ~~**`#59` BTM abuse**~~ — ✅ closed 2026-08-24 across four slices.
-- ~~**`#60` Assoc requests**~~ — ✅ closed 2026-08-24 across five.
+**RF sources and moving sensors:**
+
+- ◆ `#254` APRS: a passive Dire Wolf receive input (KISS/AGW).
+- ◆ `#256` Moving sensors: site epochs for sessions, entities,
+  baselines, alerts and slothweb's views.
+- ◇ `#210` APRS on an SDRplay RSPdx-R2 through `rx_fm`: a sample-rate
+  mismatch (bug, documentation).
+
+**Detectors and correlation** (each a statement about a radio):
+
+- ◆ `#225` `DGA_DOMAIN` recall with a benign-domain n-gram model.
+- ◆ `#220` Responder-style poisoning on Wi-Fi segments (needs a pcap
+  fixture).
+- ◇ `#229` Learned device grouping across MAC rotation.
+- ◇ `#156` Pairing a device's BLE and Wi-Fi identities from
+  capture-backed rows.
+- ◇ `#151`, `#201` Attack-hardware and hcxdumptool fingerprints (need
+  rig captures).
+
+**Validation and plumbing:**
+
+- ◆ `#147` Over-the-air and host-egress validation of the strict
+  observation contract.
+- ◆ `#199` Bench validation against a test AP.
+- ◆ `#240`, `#255` Data-socket and JSONL bugs.
+- ◇ `#146` The architecture programme's two time-gated measurements.
+
+Earlier sweeps, kept for the record: on 2026-08-24 the open-issue list
+was empty and section A complete; `#59` BTM abuse and `#60` assoc
+requests closed that day.
 
 ---
 

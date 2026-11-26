@@ -8,7 +8,11 @@ dropped.
 
 ## What sloth is
 
-A terminal-based **passive** network monitor for Linux, written in C99.
+An open, **receive-only** tool for RF signals intelligence — Citizen
+SIGINT (`MISSION.md` §1): it lets a private citizen see and understand
+the radio spectrum around them (Wi-Fi, Bluetooth/BLE, ADS-B, APRS,
+GNSS, SDR sweeps) and the host network, for Linux, written in C99.
+It reports radios, not people (`MISSION.md` §2 rule 6).
 It never injects a frame onto a network it monitors — the one absolute
 in `MISSION.md` §2; every other network-using behaviour is opt-in and
 announced. It reads `/proc`, `/sys`, netlink (rtnetlink / nl80211 / INET_DIAG) and a
