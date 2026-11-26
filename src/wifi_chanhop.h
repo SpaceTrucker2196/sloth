@@ -29,10 +29,11 @@
  * making it a rolling window rather than an all-time count. */
 
 /* 48 since #249: a sweep visits every 20 MHz channel of 2.4 and 5 GHz
- * (38). The default --hop list is 11. The per-slot masks a record
- * carries (sensor_health chan_refused_mask, the scan bar) cover slots
- * 0..31 as before. */
-#define CHANHOP_MAX 48
+ * (38); 128 since its 6 GHz plan, which adds the band's 59 (97). The
+ * default --hop list is 11. The per-slot masks a record carries
+ * (sensor_health chan_refused_mask, the scan bar) cover slots 0..31 as
+ * before. */
+#define CHANHOP_MAX 128
 
 typedef struct {
     int      channel;    /* 802.11 channel number */
@@ -177,9 +178,13 @@ int chanhop_init_default(chanhop_t *h);
  * of `minutes` (sweep_ms above). DFS channels included: the radio only
  * listens (a monitor interface sends nothing, MISSION §2), and a driver
  * that will not tune one refuses it, which the sweep reports as not
- * swept. No 6 GHz: its 59 channels do not fit, and the report names the
- * band as not swept. Returns the channel count. */
-int chanhop_init_sweep(chanhop_t *h, unsigned minutes);
+ * swept. With `six_ghz` (a sensor radio can tune 6 GHz, its wiphy's
+ * bands: linux_wifi_iface_bands()), the 59 20 MHz channels of 6 GHz
+ * (1, 5, ... 233; IEEE 802.11ax-2021 §27.3.23.2) follow, 97 in all;
+ * without it the report names 6 GHz as not swept. Returns the channel
+ * count. */
+#define CHANHOP_SWEEP_6GHZ_N 59
+int chanhop_init_sweep(chanhop_t *h, unsigned minutes, int six_ghz);
 
 /* Round the sweep dwell down to a multiple of `poll_ms`, the interval
  * the scheduler is serviced at (above). */
@@ -394,6 +399,15 @@ int chanhop_retune_reason_bit(int err);
  * revisit. The number of channels in the share; 0 when the list is
  * shorter than k + 1, and that radio is then not retuned. */
 int chanhop_split(chanhop_t *h, const chanhop_t *full, int radios, int k);
+
+/* The same with the 6 GHz entries dealt apart (the 6 GHz sweep plan):
+ * the other entries go round all `radios` as above (the j-th of them to
+ * radio j % radios), and the 6 GHz ones round only the `six_n` radios
+ * that can tune the band (the j-th to the one whose six_k is j % six_n);
+ * six_k -1 is a radio that cannot, and is given none. With no 6 GHz
+ * entry in `full` this is chanhop_split(). */
+int chanhop_split_caps(chanhop_t *h, const chanhop_t *full, int radios, int k,
+                       int six_n, int six_k);
 
 /* One scheduler's poll for the radio `iface`: attribute mon_frames to
  * its confirmed channel, tick, and when a retune is due issue it

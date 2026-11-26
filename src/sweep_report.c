@@ -17,8 +17,9 @@ static const char *const LIMITS[] = {
     "stores and sends later, or that uses a wire.",
     "Each channel is heard for its dwell only: a device that is silent "
     "while the radio is on its channel is not heard there.",
-    "Wi-Fi is heard on 20 MHz channel centres of 2.4 and 5 GHz; 6 GHz "
-    "and sub-GHz are not swept.",
+    "Wi-Fi is heard on 20 MHz channel centres of 2.4 and 5 GHz, and of "
+    "6 GHz only when a sensor radio can tune that band; sub-GHz is not "
+    "swept.",
     "BLE is heard through the host's own Bluetooth controller (or an "
     "Ubertooth) for the whole sweep; a device that does not advertise "
     "is not found.",
@@ -38,13 +39,22 @@ const char *sweep_end_name(int end_why) {
 }
 
 void sweep_bands_not_swept(const sw_cov_t *c, char *out, size_t sz) {
-    int b24 = 0, b5 = 0;
+    int b24 = 0, b5 = 0, b6 = 0;
     for (int i = 0; c && i < c->n; i++) {
         if (!c->ch[i].ms) continue;
         if (c->ch[i].band == WIFI_BAND_2GHZ) b24 = 1;
         if (c->ch[i].band == WIFI_BAND_5GHZ) b5 = 1;
+        if (c->ch[i].band == WIFI_BAND_6GHZ) b6 = 1;
     }
-    snprintf(out, sz, "%s%s6ghz,sub_ghz", b24 ? "" : "2.4ghz,", b5 ? "" : "5ghz,");
+    snprintf(out, sz, "%s%s%ssub_ghz", b24 ? "" : "2.4ghz,", b5 ? "" : "5ghz,",
+             b6 ? "" : "6ghz,");
+}
+
+/* Whether the plan held a 6 GHz channel (a sensor radio could tune it). */
+static int plan_has_6(const sw_cov_t *c) {
+    for (int i = 0; c && i < c->n; i++)
+        if (c->ch[i].band == WIFI_BAND_6GHZ) return 1;
+    return 0;
 }
 
 static const char *band_name(int band) {
@@ -233,8 +243,11 @@ void sweep_report_md(FILE *out, const sw_report_t *r) {
                                               : "not swept: not reached");
     }
     sweep_bands_not_swept(cv, bands, sizeof(bands));
-    fputs("\nBands not swept: 6 GHz (no 6 GHz channel in the sweep plan), "
-          "sub-GHz (no sub-GHz receiver in a sweep)", out);
+    fputs("\nBands not swept: sub-GHz (no sub-GHz receiver in a sweep)", out);
+    if (strstr(bands, "6ghz"))
+        fputs(plan_has_6(cv) ? ", 6 GHz (no channel swept)"
+                             : ", 6 GHz (no 6 GHz channel in the sweep plan: no "
+                               "sensor radio can tune the band)", out);
     if (strstr(bands, "2.4ghz")) fputs(", 2.4 GHz (no channel swept)", out);
     if (strstr(bands, "5ghz,"))  fputs(", 5 GHz (no channel swept)", out);
     fputs(".\n\nSources at the end: monitor radio ", out);
@@ -365,7 +378,8 @@ void sweep_report_emit(const sw_report_t *r) {
         if (cv->ch[i].ms) continue;
         int w = snprintf(not_swept + o, sizeof(not_swept) - o, "%s%s:%d",
                          o ? "," : "",
-                         cv->ch[i].band == WIFI_BAND_2GHZ ? "2.4" : "5",
+                         cv->ch[i].band == WIFI_BAND_2GHZ ? "2.4"
+                         : cv->ch[i].band == WIFI_BAND_6GHZ ? "6" : "5",
                          cv->ch[i].channel);
         if (w < 0 || (size_t)w >= sizeof(not_swept) - o) break;
         o += (size_t)w;

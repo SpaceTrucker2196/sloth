@@ -125,6 +125,19 @@ int  sweep_run_tick(sweep_run_t *r, const sloth_state_t *s,
 int  sweep_run_finish(sweep_run_t *r, const sloth_state_t *s, int stopped,
                       int ble_configured, time_t wall, FILE *msg);
 
+/* ── The 6 GHz plan (owner ruling 2026-11-25) ──
+ *
+ * A sweep's plan holds 6 GHz when a sensor radio can tune the band:
+ * its wiphy's bands, read with the same read-only NL80211_CMD_GET_WIPHY
+ * the preflight reads its modes with (linux_wifi_iface_bands()). The
+ * probe is a seam so a test injects a radio's bands; NULL restores the
+ * platform's. sweep_iface_six(): 1 when `iface` can tune 6 GHz, 0 when
+ * it cannot or its bands cannot be read (then 6 GHz is reported not
+ * swept, as before). */
+typedef int (*sweep_bands_fn)(const char *iface, unsigned *mask);
+void sweep_set_bands_probe(sweep_bands_fn f);
+int  sweep_iface_six(const char *iface);
+
 /* Frees without writing. */
 void sweep_run_free(sweep_run_t *r);
 

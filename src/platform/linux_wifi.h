@@ -68,6 +68,20 @@ int linux_wifi_phy_iftypes(int phy_index, unsigned *mask);
 int linux_wifi_parse_reg(const void *buf, size_t len, int family, char alpha2[3]);
 int linux_wifi_parse_iftypes(const void *buf, size_t len, int family, unsigned *mask);
 
+/* The bands one wiphy can tune (sloth#249 follow-up, the 6 GHz sweep
+   plan): the same NL80211_CMD_GET_WIPHY as above, read for
+   NL80211_ATTR_WIPHY_BANDS, as a mask of 1 << NL80211_BAND_* (2.4 GHz
+   bit 0, 5 GHz bit 1, 6 GHz bit 3). A band counts when at least one of
+   its frequencies is not flagged NL80211_FREQUENCY_ATTR_DISABLED (the
+   regulatory domain may switch a band off; a radio that cannot use one
+   should not be planned on it). Read-only, as above: 1 read, 0 no
+   bands attribute, a negative errno otherwise (-EOPNOTSUPP without
+   nl80211 or WITH_WIFI). linux_wifi_iface_bands() finds the phy of a
+   netdev through /sys/class/net/IFACE/phy80211/index first. */
+int linux_wifi_parse_bands(const void *buf, size_t len, int family, unsigned *mask);
+int linux_wifi_phy_bands(int phy_index, unsigned *mask);
+int linux_wifi_iface_bands(const char *iface, unsigned *mask);
+
 /* Decode the reply to an NLM_F_ACK request: 0 for an ACK, the kernel's
    negative errno for a refusal, -EIO for anything that is not a
    well-formed NLMSG_ERROR. Pure, so the errno plumbing is testable with

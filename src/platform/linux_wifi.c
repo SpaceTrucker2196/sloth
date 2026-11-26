@@ -832,6 +832,44 @@ int linux_wifi_parse_iftypes(const void *buf, size_t len, int family, unsigned *
     return 0;
 }
 
+int linux_wifi_parse_bands(const void *buf, size_t len, int family, unsigned *mask) {
+    int rem = 0, err = 0;
+    if (!buf || !mask) return -EIO;
+    *mask = 0;
+    struct nlattr *a = nl_find_cmd(buf, len, family, NL80211_CMD_NEW_WIPHY, &rem, &err);
+    if (!a) return err ? err : 0;
+    for (; na_ok(a, rem); a = na_next(a, &rem)) {
+        if (NA_TYPE(a) != NL80211_ATTR_WIPHY_BANDS) continue;
+        /* Nested: one attribute per band, its type the NL80211_BAND_*;
+         * in each, NL80211_BAND_ATTR_FREQS, one nest per frequency. */
+        int brem = (int)a->nla_len - (int)NA_HDRLEN;
+        struct nlattr *b = (struct nlattr *)NA_DATA(a);
+        for (; na_ok(b, brem); b = na_next(b, &brem)) {
+            int band = NA_TYPE(b);
+            if (band < 0 || band >= 32) continue;
+            int frem = (int)b->nla_len - (int)NA_HDRLEN;
+            struct nlattr *f = (struct nlattr *)NA_DATA(b);
+            for (; na_ok(f, frem); f = na_next(f, &frem)) {
+                if (NA_TYPE(f) != NL80211_BAND_ATTR_FREQS) continue;
+                int qrem = (int)f->nla_len - (int)NA_HDRLEN;
+                struct nlattr *q = (struct nlattr *)NA_DATA(f);
+                for (; na_ok(q, qrem); q = na_next(q, &qrem)) {
+                    int arem = (int)q->nla_len - (int)NA_HDRLEN;
+                    struct nlattr *x = (struct nlattr *)NA_DATA(q);
+                    int has_freq = 0, disabled = 0;
+                    for (; na_ok(x, arem); x = na_next(x, &arem)) {
+                        if (NA_TYPE(x) == NL80211_FREQUENCY_ATTR_FREQ) has_freq = 1;
+                        if (NA_TYPE(x) == NL80211_FREQUENCY_ATTR_DISABLED) disabled = 1;
+                    }
+                    if (has_freq && !disabled) *mask |= 1u << band;
+                }
+            }
+        }
+        return 1;
+    }
+    return 0;
+}
+
 /* One GET (never a dump, never NLM_F_ACK) and its one reply into rbuf.
  * The request carries no attribute but the wiphy index when `wiphy` is
  * not negative. Bytes received, or a negative errno. */
@@ -892,6 +930,33 @@ int linux_wifi_phy_iftypes(int phy_index, unsigned *mask) {
     long r = nl_get_once(NL80211_CMD_GET_WIPHY, phy_index, rbuf, sizeof(rbuf), &family);
     if (r < 0) return (int)r;
     return linux_wifi_parse_iftypes(rbuf, (size_t)r, family, mask);
+}
+
+int linux_wifi_phy_bands(int phy_index, unsigned *mask) {
+    /* A wiphy with every band and its frequencies is the largest GET
+     * reply there is; a 6 GHz radio lists about 60 more frequencies. */
+    static uint8_t rbuf[65536];
+    int family = -1;
+    if (phy_index < 0) return -EINVAL;
+    long r = nl_get_once(NL80211_CMD_GET_WIPHY, phy_index, rbuf, sizeof(rbuf), &family);
+    if (r < 0) return (int)r;
+    return linux_wifi_parse_bands(rbuf, (size_t)r, family, mask);
+}
+
+int linux_wifi_iface_bands(const char *iface, unsigned *mask) {
+    if (mask) *mask = 0;
+    if (!iface || !iface[0] || strlen(iface) >= IFNAMSIZ || strchr(iface, '/') || !mask)
+        return -EINVAL;
+    char path[96], b[16];
+    snprintf(path, sizeof(path), "/sys/class/net/%s/phy80211/index", iface);
+    FILE *f = fopen(path, "r");
+    if (!f) return -ENODEV;
+    char *ok = fgets(b, sizeof(b), f);
+    fclose(f);
+    char *end = NULL;
+    long idx = ok ? strtol(b, &end, 10) : -1;
+    if (!ok || end == b || idx < 0 || idx > 1000000) return -ENODEV;
+    return linux_wifi_phy_bands((int)idx, mask);
 }
 
 #endif /* WITH_WIFI */

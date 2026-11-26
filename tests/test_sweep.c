@@ -467,7 +467,7 @@ out:
 
 static void test_sweep_plan_is_equal_dwell(void) {
     chanhop_t h;
-    ASSERT_EQ(chanhop_init_sweep(&h, 10), 38);
+    ASSERT_EQ(chanhop_init_sweep(&h, 10, 0), 38);
     int n24 = 0, n5 = 0;
     for (int i = 0; i < h.count; i++) {
         n24 += h.slots[i].band == WIFI_BAND_2GHZ;
@@ -484,15 +484,15 @@ static void test_sweep_plan_is_equal_dwell(void) {
         ASSERT_EQ(chanhop_slot_plan_ms(&h, i), 600000u / 38u);
     /* Too little time for the channels: the floor. A whole minute over
      * 38 channels is above it, so the time is set by hand. */
-    ASSERT_EQ(chanhop_init_sweep(&h, 1), 38);
+    ASSERT_EQ(chanhop_init_sweep(&h, 1, 0), 38);
     h.sweep_ms = 10000;
     ASSERT_EQ(chanhop_sweep_dwell_ms(&h), CHANHOP_SWEEP_FLOOR_MS);
     /* Zero minutes is not a sweep. */
-    chanhop_init_sweep(&h, 0);
+    chanhop_init_sweep(&h, 0, 0);
     ASSERT_EQ(chanhop_sweep_dwell_ms(&h), 0u);
     /* A radio's share spreads the whole time over its own channels. */
     chanhop_t full, part;
-    chanhop_init_sweep(&full, 10);
+    chanhop_init_sweep(&full, 10, 0);
     ASSERT_EQ(chanhop_split(&part, &full, 2, 1), 19);
     ASSERT_EQ(chanhop_sweep_dwell_ms(&part), 600000u / 19u);
     /* Not a sweep: the #22 plan, unchanged. */
@@ -527,7 +527,7 @@ static void test_sweep_one_pass_and_a_refusal(void) {
     g_fake_net.refuse_freq_mhz = 2437;
     g_fake_net.refuse_rc = -EINVAL;
     chanhop_t h;
-    chanhop_init_sweep(&h, 1);
+    chanhop_init_sweep(&h, 1, 0);
     static sw_cov_t c;
     uint64_t end = drive(&h, &c, 10 * 60000);
     ASSERT(h.sweep_done);
@@ -561,7 +561,7 @@ static void test_sweep_one_pass_and_a_refusal(void) {
 static void test_sweep_stopped_early(void) {
     fake_net_reset();
     chanhop_t h;
-    chanhop_init_sweep(&h, 10);
+    chanhop_init_sweep(&h, 10, 0);
     static sw_cov_t c;
     uint64_t stop = 600000u * 4 / 10;
     (void)drive(&h, &c, stop);
@@ -602,7 +602,7 @@ static char *slurp(const char *p) {
 static void test_report_of_a_stopped_sweep(void) {
     fake_net_reset();
     chanhop_t h;
-    chanhop_init_sweep(&h, 10);
+    chanhop_init_sweep(&h, 10, 0);
     static sw_cov_t c;
     (void)drive(&h, &c, 600000u * 4 / 10);
 
@@ -639,7 +639,7 @@ static void test_report_of_a_stopped_sweep(void) {
         ASSERT(strstr(t, "Channels in the plan: 38; swept: 16; not swept: 22.") != NULL);
         ASSERT(strstr(t, "| 2.4 GHz | 1 | 2412 | 15.8") != NULL);
         ASSERT(strstr(t, "| 5 GHz | 165 | 5825 | 0.000 | 0 | 0 | 0 | not swept: not reached |") != NULL);
-        ASSERT(strstr(t, "Bands not swept: 6 GHz") != NULL);
+        ASSERT(strstr(t, "6 GHz (no 6 GHz channel in the sweep plan") != NULL);
         ASSERT(strstr(t, "sub-GHz") != NULL);
         ASSERT(strstr(t, "Baseline: none accepted") != NULL);
         ASSERT(strstr(t, "stopped before") != NULL);
@@ -733,7 +733,7 @@ static void test_run_writes_and_never_accepts(void) {
     fake_net_reset();
     FILE *nul = fopen("/dev/null", "w");
     chanhop_t h;
-    chanhop_init_sweep(&h, 1);
+    chanhop_init_sweep(&h, 1, 0);
     chanhop_sweep_quantum(&h, 50);        /* the loop below polls every 50 ms */
     ASSERT_EQ(chanhop_sweep_dwell_ms(&h), 1550u);
     static sweep_run_t r;
@@ -780,7 +780,7 @@ static void test_run_writes_and_never_accepts(void) {
     char keep[SWEEP_PATH_MAX + 8];
     snprintf(keep, sizeof(keep), "%s.keep", base);
     ASSERT(copy_file(base, keep));
-    chanhop_init_sweep(&h, 1);
+    chanhop_init_sweep(&h, 1, 0);
     ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, NULL, &h, 0, 1764000600, err, sizeof(err)), 0);
     ASSERT(r.base != NULL);
     ASSERT_EQ(r.base_version, 2);
@@ -797,7 +797,7 @@ static void test_run_writes_and_never_accepts(void) {
 
     /* One sweep never replaces another's record: the same second again
      * is refused, and the first record stays. */
-    chanhop_init_sweep(&h, 1);
+    chanhop_init_sweep(&h, 1, 0);
     ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, NULL, &h, 0, 1764000600, err, sizeof(err)), 0);
     ASSERT_EQ(sweep_run_finish(&r, &g_s, 1, 0, 1764000620, nul), -1);
     t1 = slurp(path);
@@ -868,7 +868,7 @@ static void test_run_group_dir(void) {
     fake_net_reset();
     FILE *nul = fopen("/dev/null", "w");
     chanhop_t h;
-    chanhop_init_sweep(&h, 1);
+    chanhop_init_sweep(&h, 1, 0);
     static sweep_run_t r;
     mode_t um = umask(077);       /* the mode is set, not left to the umask */
     ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &g, &h, 0, 1764000000, err,
@@ -895,7 +895,7 @@ static void test_run_group_dir(void) {
     ASSERT(copy_file(path, base));
     ASSERT_EQ(chmod(base, 0640), 0);
     ASSERT_EQ(sweep_baseline_check(dir, "room", &g, err, sizeof(err)), 1);
-    chanhop_init_sweep(&h, 1);
+    chanhop_init_sweep(&h, 1, 0);
     ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &g, &h, 0, 1764000600, err,
                               sizeof(err)), 0);
     ASSERT(r.base != NULL && r.base_version == 2);
@@ -1134,6 +1134,84 @@ static void test_resolved_rows_hand_edited(void) {
     unlink(path);
 }
 
+/* ── the 6 GHz plan (owner ruling 2026-11-25) ── */
+
+static unsigned g_fake_bands;
+static int      g_fake_bands_rc;
+static int fake_bands(const char *iface, unsigned *mask) {
+    (void)iface;
+    *mask = g_fake_bands;
+    return g_fake_bands_rc;
+}
+
+static void test_sweep_plan_6ghz(void) {
+    chanhop_t h;
+    ASSERT_EQ(chanhop_init_sweep(&h, 10, 1), 38 + CHANHOP_SWEEP_6GHZ_N);
+    int n6 = 0;
+    for (int i = 0; i < h.count; i++)
+        if (h.slots[i].band == WIFI_BAND_6GHZ) {
+            n6++;
+            ASSERT_EQ(h.slots[i].freq_mhz, 5950 + 5 * h.slots[i].channel);
+        }
+    ASSERT_EQ(n6, 59);
+    ASSERT_EQ(h.slots[38].channel, 1);
+    ASSERT_EQ(h.slots[h.count - 1].channel, 233);
+    ASSERT_EQ(chanhop_sweep_dwell_ms(&h), 600000u / 97u);
+
+    /* Two radios, only radio 0 can tune 6 GHz: it is given every 6 GHz
+     * channel beside its half of the rest; radio 1 none (seen red with
+     * six_k ignored in chanhop_split_caps(), commit message). */
+    chanhop_t r0, r1;
+    ASSERT_EQ(chanhop_split_caps(&r0, &h, 2, 0, 1, 0), 19 + 59);
+    ASSERT_EQ(chanhop_split_caps(&r1, &h, 2, 1, 1, -1), 19);
+    for (int i = 0; i < r1.count; i++) ASSERT(r1.slots[i].band != WIFI_BAND_6GHZ);
+    /* Neither can: no 6 GHz channel is dealt, so none is swept. */
+    ASSERT_EQ(chanhop_split_caps(&r0, &h, 2, 0, 0, -1), 19);
+    /* Both can: the 6 GHz channels are halved too, disjoint. */
+    ASSERT_EQ(chanhop_split_caps(&r0, &h, 2, 0, 2, 0) +
+              chanhop_split_caps(&r1, &h, 2, 1, 2, 1), 97);
+    /* With no 6 GHz in the plan, the deal is chanhop_split()'s. */
+    chanhop_t p38, a, b;
+    chanhop_init_sweep(&p38, 10, 0);
+    chanhop_split(&a, &p38, 3, 2);
+    chanhop_split_caps(&b, &p38, 3, 2, 0, -1);
+    ASSERT_EQ(a.count, b.count);
+    for (int i = 0; i < a.count && i < b.count; i++)
+        ASSERT_EQ(a.slots[i].freq_mhz, b.slots[i].freq_mhz);
+
+    /* The capability, injected: bit 3 (NL80211_BAND_6GHZ) of the
+     * wiphy's bands. Unreadable bands are not 6 GHz. */
+    sweep_set_bands_probe(fake_bands);
+    g_fake_bands = (1u << 0) | (1u << 1) | (1u << 3);
+    g_fake_bands_rc = 1;
+    ASSERT_EQ(sweep_iface_six("mon0"), 1);
+    g_fake_bands = (1u << 0) | (1u << 1);
+    ASSERT_EQ(sweep_iface_six("mon0"), 0);
+    g_fake_bands = 1u << 3;
+    g_fake_bands_rc = -EOPNOTSUPP;
+    ASSERT_EQ(sweep_iface_six("mon0"), 0);
+    ASSERT_EQ(sweep_iface_six(""), 0);
+    sweep_set_bands_probe(NULL);
+
+    /* Ten minutes over the 97: every channel, 6 GHz included, swept,
+     * and the record's bands name only sub-GHz. */
+    fake_net_reset();
+    chanhop_init_sweep(&h, 10, 1);
+    chanhop_sweep_quantum(&h, 50);            /* drive() polls every 50 ms */
+    static sw_cov_t c;
+    (void)drive(&h, &c, 10 * 60000);
+    ASSERT(h.sweep_done);
+    ASSERT_EQ(sweep_cov_swept(&c), 97);
+    char bands[64];
+    sweep_bands_not_swept(&c, bands, sizeof(bands));
+    ASSERT(!strcmp(bands, "sub_ghz"));
+    /* Without the band the plan is the 38 and 6 GHz is not swept. */
+    chanhop_init_sweep(&h, 10, 0);
+    (void)drive(&h, &c, 10 * 60000);
+    sweep_bands_not_swept(&c, bands, sizeof(bands));
+    ASSERT(!strcmp(bands, "6ghz,sub_ghz"));
+}
+
 void run_sweep_tests(void) {
     TEST_SUITE("sweep (#249): inventory");
     RUN_TEST(test_ble_kept_types);
@@ -1158,5 +1236,6 @@ void run_sweep_tests(void) {
     RUN_TEST(test_run_writes_and_never_accepts);
     RUN_TEST(test_run_group_dir);
     RUN_TEST(test_resolve_randomised);
+    RUN_TEST(test_sweep_plan_6ghz);
     RUN_TEST(test_resolved_rows_hand_edited);
 }

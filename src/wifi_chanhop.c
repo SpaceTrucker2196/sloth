@@ -134,13 +134,18 @@ int chanhop_init_default(chanhop_t *h) {
                         (int)(sizeof(DEFAULT_CHANNELS) / sizeof(DEFAULT_CHANNELS[0])));
 }
 
-int chanhop_init_sweep(chanhop_t *h, unsigned minutes) {
+int chanhop_init_sweep(chanhop_t *h, unsigned minutes, int six_ghz) {
     if (!h) return 0;
     chanhop_reset(h);
     for (size_t i = 0; i < sizeof(SWEEP_24) / sizeof(SWEEP_24[0]); i++)
         chanhop_add(h, WIFI_BAND_2GHZ, SWEEP_24[i]);
     for (size_t i = 0; i < sizeof(SWEEP_5) / sizeof(SWEEP_5[0]); i++)
         chanhop_add(h, WIFI_BAND_5GHZ, SWEEP_5[i]);
+    /* 6 GHz: every 20 MHz channel, 1 to 233 in steps of 4 (5955 to
+     * 7115 MHz), PSC or not: a device that is not an AP's primary on a
+     * preferred scanning channel is still on one of these. */
+    for (int c = 1; six_ghz && c <= 233; c += 4)
+        chanhop_add(h, WIFI_BAND_6GHZ, c);
     h->sweep_ms = (uint64_t)minutes * 60000u;
     return h->count;
 }
@@ -456,11 +461,26 @@ int chanhop_retune_reason_bit(int err) {
 }
 
 int chanhop_split(chanhop_t *h, const chanhop_t *full, int radios, int k) {
+    return chanhop_split_caps(h, full, radios, k, radios, k);
+}
+
+int chanhop_split_caps(chanhop_t *h, const chanhop_t *full, int radios, int k,
+                       int six_n, int six_k) {
     if (!h) return 0;
     chanhop_reset(h);
     if (!full || radios < 1 || k < 0 || k >= radios) return 0;
-    for (int i = k; i < full->count && i < CHANHOP_MAX; i += radios)
-        chanhop_add(h, full->slots[i].band, full->slots[i].channel);
+    int other = 0, six = 0;
+    for (int i = 0; i < full->count && i < CHANHOP_MAX; i++) {
+        const chanhop_slot_t *sl = &full->slots[i];
+        if (sl->band == WIFI_BAND_6GHZ) {
+            if (six_n > 0 && six_k >= 0 && six % six_n == six_k)
+                chanhop_add(h, sl->band, sl->channel);
+            six++;
+        } else {
+            if (other % radios == k) chanhop_add(h, sl->band, sl->channel);
+            other++;
+        }
+    }
     /* A sweep's share keeps the sweep's time (#249): each radio spreads
      * the whole time over its own share. */
     h->sweep_ms = full->sweep_ms;

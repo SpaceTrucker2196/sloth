@@ -29,7 +29,7 @@ own sensor radios. This is not [[direction-finding]], whose
 (`--monitor-iface`, `chanhop_drive()`), `src/poll.c`, `src/jsonl.c`
 (`sensor_health`), `tests/test_mon_radios.c`.
 
-**Last updated**: 2026-11-24 (owner ruling: the cue limit is over all radios, with a per-radio floor), 2026-11-24 (#248 review: such refusals are `share_small`, not a limit), 2026-11-24 (#248: which radio serves a `--cue` cue, and why three radios on the default list refuse them), 2026-11-16 (new; JSONL `2.3.0`)
+**Last updated**: 2026-11-25 (#249 follow-up, owner ruling: a sweep's 6 GHz channels are dealt only to the radios that can tune the band). 2026-11-24 (owner ruling: the cue limit is over all radios, with a per-radio floor), 2026-11-24 (#248 review: such refusals are `share_small`, not a limit), 2026-11-24 (#248: which radio serves a `--cue` cue, and why three radios on the default list refuse them), 2026-11-16 (new; JSONL `2.3.0`)
 
 ## Running it
 
@@ -173,6 +173,14 @@ channels on one radio revisited every 3 dwells and the eight 5 GHz ones
 every 4 on two; the deal is even instead.) Each radio keeps its own
 scheduler and its own adaptive dwell, fed only the frames that radio
 delivered (`chanhop_step()`, `mon_hop_service()`).
+
+A sweep's 6 GHz channels ([[sweep-session]] § 2) are dealt apart
+(`chanhop_split_caps()`): the 2.4 and 5 GHz entries go round every
+radio as above, the 6 GHz ones round only the radios whose wiphy can
+tune the band (`mon_radios_set_six()`, from `sweep_iface_six()`). A
+radio that cannot is given none of them; with no capable radio left in
+the deal, no 6 GHz channel is dealt and the report names each as not
+swept. A plan with no 6 GHz is dealt exactly as before.
 
 Radio 0's hop state is where it always was (`chan_*`, `hop_*` in
 `sensor_health`); the others report `mon_rK_chan`,

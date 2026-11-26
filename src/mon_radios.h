@@ -122,6 +122,10 @@ int  mon_radios_extra(void);
 int  mon_radios_active(void);
 int  mon_radios_get(int radio, mon_radio_t *out);
 void mon_radios_set_state(int radio, mon_radio_state_t st, const char *err);
+/* Whether the radio can tune 6 GHz (its wiphy's bands, the sweep's 6 GHz
+ * plan): the deal gives a plan's 6 GHz channels only to such radios
+ * (chanhop_split_caps()). 0 until set; main thread, before the deal. */
+void mon_radios_set_six(int radio, int six);
 const char *mon_radio_state_name(mon_radio_state_t st);
 /* A radio whose frames can still arrive. */
 int  mon_radio_alive(mon_radio_state_t st);

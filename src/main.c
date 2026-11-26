@@ -1822,7 +1822,13 @@ int main(int argc, char **argv) {
     static chanhop_t sweep_plan;            /* the whole list, before the deal */
     if (g_hop_enabled) {
         if (sweep_label) {
-            chanhop_init_sweep(&g_chanhop, sweep_minutes);
+            /* 6 GHz in the plan when a named sensor radio can tune it
+             * (owner ruling 2026-11-25; its wiphy's bands, read-only).
+             * A discovered radio 0 is asked once it is open, below. */
+            int six = 0;
+            for (int k = 0; k < mon_cli.n && k < MON_RADIO_MAX; k++)
+                six |= sweep_iface_six(mon_cli.name[k]);
+            chanhop_init_sweep(&g_chanhop, sweep_minutes, six);
             chanhop_sweep_quantum(&g_chanhop, refresh_ms > 0 ? (uint32_t)refresh_ms
                                                              : POLL_MS);
         } else {
@@ -1942,10 +1948,14 @@ int main(int argc, char **argv) {
             return 2;
         }
         fprintf(stderr, "sloth: --sweep %s: %u min over %d channels of 2.4 and "
-                        "5 GHz, %u ms each, one pass, then a report against the "
+                        "5 GHz%s, %u ms each, one pass, then a report against the "
                         "label's baseline in %s; receive-only, nothing "
                         "transmitted\n", sweep_label, sweep_minutes,
-                g_chanhop.count, chanhop_sweep_dwell_ms(&g_chanhop), sweep_dir);
+                g_chanhop.count,
+                g_chanhop.count &&
+                g_chanhop.slots[g_chanhop.count - 1].band == WIFI_BAND_6GHZ
+                    ? " and 6 GHz" : " (no sensor radio named can tune 6 GHz)",
+                chanhop_sweep_dwell_ms(&g_chanhop), sweep_dir);
     }
 
     memset(&g_state, 0, sizeof(g_state));
@@ -2018,6 +2028,19 @@ int main(int argc, char **argv) {
                                 "capture, no fallback to another radio\n",
                         g_state.probe_err);
         }
+        /* A sweep's radio 0 found by discovery was not asked about 6 GHz
+         * when the plan was made: ask now, and add the band if it can. */
+        if (sweep_label && g_hop_enabled && mon_cli.n == 0 &&
+            g_state.probe_iface[0] && sweep_iface_six(g_state.probe_iface)) {
+            chanhop_init_sweep(&g_chanhop, sweep_minutes, 1);
+            chanhop_sweep_quantum(&g_chanhop, refresh_ms > 0 ? (uint32_t)refresh_ms
+                                                             : POLL_MS);
+            sweep_plan = g_chanhop;
+            fprintf(stderr, "sloth: --sweep %s: %s can tune 6 GHz: the plan is "
+                            "%d channels, %u ms each\n", sweep_label,
+                    g_state.probe_iface, g_chanhop.count,
+                    chanhop_sweep_dwell_ms(&g_chanhop));
+        }
         /* Further --monitor-iface radios (src/mon_radios.h): sensor
          * radios like the first, opened here for the reason it is. Each
          * is announced; one that is absent or not in monitor mode is
@@ -2031,10 +2054,12 @@ int main(int argc, char **argv) {
             mon_radios_reset();
             mon_radios_add(g_state.probe_iface);
             mon_radios_set_state(0, MON_RADIO_OPEN, "");
+            if (sweep_label) mon_radios_set_six(0, sweep_iface_six(g_state.probe_iface));
             for (int k = 1; k < mon_cli.n; k++) {
                 char why[96];
                 int idx = mon_radios_add(mon_cli.name[k]);
                 if (idx < 0) continue;      /* the CLI refused a repeat */
+                if (sweep_label) mon_radios_set_six(idx, sweep_iface_six(mon_cli.name[k]));
                 if (mon_radio_open(idx, mon_cli.name[k], why, sizeof(why))) {
                     fprintf(stderr, "sloth: --monitor-iface: sensor radio %d "
                                     "opened on %s beside %s (receive-only; a "

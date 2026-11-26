@@ -32,7 +32,7 @@
 #define COV_IV_MS       60000
 
 /* The channels one record holds: the most a --hop list had before a
- * sweep (#249) raised CHANHOP_MAX to 48. Under --hop the radios' shares
+ * sweep (#249) raised CHANHOP_MAX to 48 (128 with its 6 GHz plan). Under --hop the radios' shares
  * are disjoint, so this is every channel of the default list; a sweep
  * of a minute or two can dwell on more than 32 channels in one minute,
  * and a re-deal after a radio is lost can put one channel

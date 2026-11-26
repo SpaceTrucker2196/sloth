@@ -915,6 +915,53 @@ static void test_nl80211_parsers(void) {
     attr(&m, NL80211_ATTR_REG_ALPHA2, "GB", 3);
     msg_end(&m, h);
     ASSERT_EQ(linux_wifi_parse_iftypes(m.b, m.n, FAM, &mask), 0);
+
+    /* NEW_WIPHY with WIPHY_BANDS (the sweep's 6 GHz plan, sloth#249
+     * follow-up): 2.4 GHz with 2412 enabled; 5 GHz with only a disabled
+     * frequency; 6 GHz with 5955 disabled and 5975 enabled. The mask is
+     * 2.4 and 6 GHz: a band whose every frequency is disabled is not
+     * one the radio can tune (seen red with the DISABLED flag ignored,
+     * commit message). */
+    memset(&m, 0, sizeof(m));
+    h = msg_begin(&m, FAM, NL80211_CMD_NEW_WIPHY);
+    attr(&m, NL80211_ATTR_WIPHY, &idx, 4);
+    size_t bands = attr(&m, NL80211_ATTR_WIPHY_BANDS | NLA_F_NESTED, NULL, 0);
+    static const struct { int band; uint32_t mhz; int disabled; } F[] = {
+        { NL80211_BAND_2GHZ, 2412, 0 }, { NL80211_BAND_5GHZ, 5180, 1 },
+        { NL80211_BAND_6GHZ, 5955, 1 }, { NL80211_BAND_6GHZ, 5975, 0 },
+    };
+    for (int b = 0; b < 4; b++) {
+        size_t bn = 0, fq = 0;
+        int any = 0;
+        for (size_t i = 0; i < sizeof F / sizeof F[0]; i++) {
+            if (F[i].band != b) continue;
+            if (!any) {
+                bn = attr(&m, (uint16_t)b | NLA_F_NESTED, NULL, 0);
+                fq = attr(&m, NL80211_BAND_ATTR_FREQS | NLA_F_NESTED, NULL, 0);
+                any = 1;
+            }
+            size_t one = attr(&m, (uint16_t)i | NLA_F_NESTED, NULL, 0);
+            attr(&m, NL80211_FREQUENCY_ATTR_FREQ, &F[i].mhz, 4);
+            if (F[i].disabled) attr(&m, NL80211_FREQUENCY_ATTR_DISABLED, NULL, 0);
+            put16(m.b + one, (unsigned)(m.n - one));
+        }
+        if (any) {
+            put16(m.b + fq, (unsigned)(m.n - fq));
+            put16(m.b + bn, (unsigned)(m.n - bn));
+        }
+    }
+    put16(m.b + bands, (unsigned)(m.n - bands));
+    msg_end(&m, h);
+    mask = 99;
+    ASSERT_EQ(linux_wifi_parse_bands(m.b, m.n, FAM, &mask), 1);
+    ASSERT_EQ(mask, (1u << NL80211_BAND_2GHZ) | (1u << NL80211_BAND_6GHZ));
+    /* No bands attribute: 0, nothing set. */
+    memset(&m, 0, sizeof(m));
+    h = msg_begin(&m, FAM, NL80211_CMD_NEW_WIPHY);
+    attr(&m, NL80211_ATTR_WIPHY, &idx, 4);
+    msg_end(&m, h);
+    ASSERT_EQ(linux_wifi_parse_bands(m.b, m.n, FAM, &mask), 0);
+    ASSERT_EQ(mask, 0u);
 }
 #endif
 

@@ -157,6 +157,16 @@ int linux_wifi_phy_iftypes(int phy_index, unsigned *mask) {
     if (mask) *mask = 0;
     return -EOPNOTSUPP;
 }
+int linux_wifi_phy_bands(int phy_index, unsigned *mask) {
+    (void)phy_index;
+    if (mask) *mask = 0;
+    return -EOPNOTSUPP;
+}
+int linux_wifi_iface_bands(const char *iface, unsigned *mask) {
+    (void)iface;
+    if (mask) *mask = 0;
+    return -EOPNOTSUPP;
+}
 #endif
 
 /* ── Neighbour table ───────────────────────────────────── */

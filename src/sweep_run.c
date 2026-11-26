@@ -2,6 +2,9 @@
 #include "wifi_snapshot.h"
 #include "secure_file.h"
 #include "mon_radios.h"
+#ifdef PLATFORM_LINUX
+#include "platform/linux_wifi.h"
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -54,6 +57,31 @@ void sweep_run_free(sweep_run_t *r) {
     sweep_inv_free(r->inv);
     sweep_inv_free(r->base);
     r->inv = r->base = NULL;
+}
+
+/* ── the 6 GHz plan ── */
+
+static int platform_bands(const char *iface, unsigned *mask) {
+#ifdef PLATFORM_LINUX
+    return linux_wifi_iface_bands(iface, mask);
+#else
+    (void)iface;
+    *mask = 0;
+    return -EOPNOTSUPP;
+#endif
+}
+
+static sweep_bands_fn g_bands = platform_bands;
+
+void sweep_set_bands_probe(sweep_bands_fn f) { g_bands = f ? f : platform_bands; }
+
+/* NL80211_BAND_6GHZ, by value: this file need not include nl80211. */
+#define SW_NL_BAND_6GHZ 3
+
+int sweep_iface_six(const char *iface) {
+    unsigned mask = 0;
+    if (!iface || !iface[0]) return 0;
+    return g_bands(iface, &mask) == 1 && (mask & (1u << SW_NL_BAND_6GHZ)) ? 1 : 0;
 }
 
 /* ── the shared group ── */

@@ -46,6 +46,11 @@ static chanhop_t g_full;                 /* the whole list, as --hop gave it */
 static chanhop_t g_hop[MON_RADIO_MAX];   /* radios 1.. ; [0] unused */
 static unsigned  g_dealt;                /* bit k: radio k is in the deal */
 static uint64_t  g_fed[MON_RADIO_MAX];   /* frames already fed to its scheduler */
+static int       g_six[MON_RADIO_MAX];   /* can tune 6 GHz (mon_radios_set_six()) */
+
+void mon_radios_set_six(int radio, int six) {
+    if (radio >= 0 && radio < MON_RADIO_MAX) g_six[radio] = six ? 1 : 0;
+}
 
 void mon_radios_reset(void) {
     pthread_mutex_lock(&g_mu);
@@ -58,6 +63,7 @@ void mon_radios_reset(void) {
     memset(g_hop, 0, sizeof(g_hop));
     g_dealt = 0;
     memset(g_fed, 0, sizeof(g_fed));
+    memset(g_six, 0, sizeof(g_six));
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -260,14 +266,19 @@ static int deal(chanhop_t *h0) {
     unsigned m = live_mask();
     int radios = 0;
     for (int k = 0; k < MON_RADIO_MAX; k++) radios += (m >> k) & 1u;
-    int share = 0;
+    int share = 0, six_n = 0, six_share = 0;
+    for (int k = 0; k < MON_RADIO_MAX; k++) six_n += ((m >> k) & 1u) && g_six[k];
     for (int k = 0; k < MON_RADIO_MAX; k++) {
         chanhop_t *h = k == 0 ? h0 : &g_hop[k];
         int n = 0;
         /* Radio 0's cued totals are lifetime (sensor_health
          * cue_cued_ms, #248 review); chanhop_split() resets them. */
         uint64_t cued_dwells = h->cued_dwells, cued_ms = h->cued_total_ms;
-        if ((m >> k) & 1u) n = chanhop_split(h, &g_full, radios, share++);
+        /* A plan's 6 GHz channels go round the radios that can tune the
+         * band only; the rest round them all. */
+        if ((m >> k) & 1u)
+            n = chanhop_split_caps(h, &g_full, radios, share++, six_n,
+                                   g_six[k] ? six_share++ : -1);
         else if (k > 0)    memset(h, 0, sizeof(*h));
         if (k == 0) {
             h->cued_dwells   = cued_dwells;
