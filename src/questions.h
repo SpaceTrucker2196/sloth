@@ -131,4 +131,27 @@ int q_derive(const q_question_t *q, const alert_t *a, int n, const q_cov_t *c,
  * none; the length written, truncating at sz-1. */
 int q_found_str(const uint8_t found[ALERT_TYPE_COUNT], char *out, size_t sz);
 
+/* ── The operator's questions (--questions PATH) ─────────────────────
+ *
+ * The operator's own file (owner ruling 2026-11-25; sloth-mesh may
+ * write it later). One question per line:
+ *
+ *   id|priority|question|decision|KIND,KIND,...
+ *
+ * `#` starts a comment line; blank lines are skipped; spaces around a
+ * field are dropped. id is 1..15 of [A-Za-z0-9_-]; priority 1..9; the
+ * question and the decision are non-empty and under Q_TEXT_LEN bytes;
+ * the kinds are sloth_alerts.def names (EVIL_TWIN), at least one.
+ * Refused, with the line number: an unknown kind, a duplicate id, a
+ * field missing or out of range, more than Q_MAX questions, none at
+ * all. A refused file leaves `set` as it was.
+ *
+ * Returns 0 and fills `set`, or -1 with one sentence in `err`. */
+int q_set_parse(q_set_t *set, const char *text, char *err, size_t errsz);
+/* The same from a file of at most 64 KiB. */
+int q_set_load(q_set_t *set, const char *path, char *err, size_t errsz);
+
+/* The kind named `name` (sloth_alerts.def spelling); -1 for none. */
+int q_kind_by_name(const char *name);
+
 #endif /* SLOTH_QUESTIONS_H */

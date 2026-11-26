@@ -1,6 +1,9 @@
 /* Site questions (#244): src/questions.h. */
 
+#include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "questions.h"
 #include "alert_lifecycle.h"
@@ -161,4 +164,150 @@ int q_found_str(const uint8_t found[ALERT_TYPE_COUNT], char *out, size_t sz) {
         off += (size_t)k;
     }
     return (int)off;
+}
+
+/* ── The operator's file ──────────────────────────────────────────── */
+
+int q_kind_by_name(const char *name) {
+    if (!name || !name[0]) return -1;
+    for (int t = 0; t < ALERT_TYPE_COUNT; t++)
+        if (strcmp(cov_kind_name((alert_type_t)t), name) == 0) return t;
+    return -1;
+}
+
+/* Trim spaces in place; returns the start. */
+static char *trim(char *p) {
+    while (*p == ' ' || *p == '\t') p++;
+    size_t n = strlen(p);
+    while (n && (p[n - 1] == ' ' || p[n - 1] == '\t' || p[n - 1] == '\r')) p[--n] = '\0';
+    return p;
+}
+
+#define Q_LINE_MAX 2048
+
+static int fail(char *err, size_t errsz, int line, const char *fmt, const char *arg) {
+    if (err && errsz) {
+        char what[256];
+        snprintf(what, sizeof(what), fmt, arg ? arg : "");
+        snprintf(err, errsz, "line %d: %s", line, what);
+    }
+    return -1;
+}
+
+static int parse_line(char *ln, int lineno, q_set_t *set, char *err, size_t errsz) {
+    char *f[5];
+    int nf = 0;
+    char *p = ln;
+    f[nf++] = p;
+    for (; *p; p++) {
+        if (*p != '|') continue;
+        if (nf == 5) return fail(err, errsz, lineno, "more than five fields", NULL);
+        *p = '\0';
+        f[nf++] = p + 1;
+    }
+    if (nf != 5)
+        return fail(err, errsz, lineno,
+                    "want id|priority|question|decision|KIND,KIND", NULL);
+    for (int i = 0; i < 5; i++) f[i] = trim(f[i]);
+
+    const char *id = f[0];
+    size_t il = strlen(id);
+    if (il == 0 || il >= Q_ID_LEN)
+        return fail(err, errsz, lineno, "the id must be 1 to 15 characters", NULL);
+    for (size_t i = 0; i < il; i++)
+        if (!isalnum((unsigned char)id[i]) && id[i] != '_' && id[i] != '-')
+            return fail(err, errsz, lineno, "the id \"%s\" may hold only letters, digits, '_' and '-'", id);
+    for (int i = 0; i < set->n; i++)
+        if (strcmp(set->q[i].id, id) == 0)
+            return fail(err, errsz, lineno, "duplicate id \"%s\"", id);
+
+    char *end = NULL;
+    errno = 0;
+    long prio = strtol(f[1], &end, 10);
+    if (!f[1][0] || *end || errno || prio < 1 || prio > Q_PRIORITY_MAX)
+        return fail(err, errsz, lineno, "the priority \"%s\" is not 1 to 9", f[1]);
+    if (!f[2][0] || strlen(f[2]) >= Q_TEXT_LEN)
+        return fail(err, errsz, lineno, "the question must be 1 to 159 bytes", NULL);
+    if (!f[3][0] || strlen(f[3]) >= Q_TEXT_LEN)
+        return fail(err, errsz, lineno, "the decision must be 1 to 159 bytes", NULL);
+    if (set->n >= Q_MAX)
+        return fail(err, errsz, lineno, "more than 32 questions", NULL);
+
+    q_question_t q;
+    memset(&q, 0, sizeof(q));
+    snprintf(q.id, sizeof(q.id), "%s", id);
+    q.priority = (int)prio;
+    snprintf(q.text, sizeof(q.text), "%s", f[2]);
+    snprintf(q.decision, sizeof(q.decision), "%s", f[3]);
+    char *save = NULL;
+    for (char *k = strtok_r(f[4], ",", &save); k; k = strtok_r(NULL, ",", &save)) {
+        k = trim(k);
+        if (!k[0]) continue;
+        int t = q_kind_by_name(k);
+        if (t < 0) return fail(err, errsz, lineno, "unknown alert kind \"%s\"", k);
+        if (!q.kind[t]) q.nkinds++;
+        q.kind[t] = 1;
+    }
+    if (!q.nkinds) return fail(err, errsz, lineno, "no alert kind", NULL);
+    set->q[set->n++] = q;
+    return 0;
+}
+
+int q_set_parse(q_set_t *set, const char *text, char *err, size_t errsz) {
+    if (err && errsz) err[0] = '\0';
+    if (!set || !text) return -1;
+    static q_set_t tmp;   /* ~13 KiB: off the stack */
+    memset(&tmp, 0, sizeof(tmp));
+    int lineno = 0;
+    const char *p = text;
+    while (*p) {
+        lineno++;
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        if (len >= Q_LINE_MAX) return fail(err, errsz, lineno, "line too long", NULL);
+        char ln[Q_LINE_MAX];
+        memcpy(ln, p, len);
+        ln[len] = '\0';
+        char *t = trim(ln);
+        if (t[0] && t[0] != '#' && parse_line(t, lineno, &tmp, err, errsz) < 0) return -1;
+        if (!eol) break;
+        p = eol + 1;
+    }
+    if (!tmp.n) {
+        if (err && errsz) snprintf(err, errsz, "no questions");
+        return -1;
+    }
+    *set = tmp;
+    return 0;
+}
+
+#define Q_FILE_MAX (64 * 1024)
+
+int q_set_load(q_set_t *set, const char *path, char *err, size_t errsz) {
+    if (err && errsz) err[0] = '\0';
+    if (!set || !path) return -1;
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        if (err && errsz) snprintf(err, errsz, "cannot open: %s", strerror(errno));
+        return -1;
+    }
+    char *buf = malloc(Q_FILE_MAX + 1);
+    if (!buf) { fclose(f); return -1; }
+    size_t n = fread(buf, 1, Q_FILE_MAX + 1, f);
+    int rerr = ferror(f);
+    fclose(f);
+    if (rerr || n > Q_FILE_MAX) {
+        if (err && errsz) snprintf(err, errsz, rerr ? "read failed" : "larger than 64 KiB");
+        free(buf);
+        return -1;
+    }
+    buf[n] = '\0';
+    if (memchr(buf, '\0', n)) {
+        if (err && errsz) snprintf(err, errsz, "not a text file");
+        free(buf);
+        return -1;
+    }
+    int rc = q_set_parse(set, buf, err, errsz);
+    free(buf);
+    return rc;
 }

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: issue #244 (from #241 item 1) and its owner rulings of 2026-11-25; FM 2-0 (2004) figure 1-2 (priority question, specific questions, indicators, collection tasks), 1-34 (a priority question asks only one question and supports a decision) and 4-6 (clear requirements preclude being overwhelmed by too much information), as quoted in the issue; `include/sloth_questions.def` (the questions), `include/sloth_question_map.def` (the indicators); `src/questions.h`, `src/questions.c`; `tests/test_questions.c`; [[coverage-assessment]] (the status every answer carries).
 
-**Last updated**: 2026-11-25 (#244: the page, § 4 the status)
+**Last updated**: 2026-11-25 (#244: the page, § 4 the status, § 5 the file format)
 
 ## 1. The default questions
 
@@ -166,6 +166,25 @@ A finding is reported whatever the coverage: a replayed evil twin gives Q1 `find
 Each daemon answers only for the kinds its rule table raises (`cov_daemon_raises()`). `sloth-rf` raises the GNSS and ADS-B kinds and `SENSOR_SOURCE_DOWN`, so it answers Q6 and Q7 of the defaults; a question none of whose indicators a daemon raises has no answer there and is not reported by it.
 
 The status is about the sensor and the findings it holds, never a claim about the site: `no_finding` is "looked and found nothing", not "nothing is there" ([[coverage-assessment]] § 5).
+
+## 5. The operator's own questions: the file format
+
+The operator's own file, read with `--questions PATH` (owner ruling 2026-11-25: the sensor reads the file; sloth-mesh may write it later). With no `--questions`, the seven defaults are used; with it, the file's questions replace them. One question per line:
+
+```
+# id|priority|question|decision|KIND,KIND,...
+TWIN|1|Is someone copying HomeNet?|Tell the household.|EVIL_TWIN,KARMA_AP,KARMA_PROBE_FORGE
+KEYS|1|Is anyone after the Wi-Fi key?|Rotate the key.|PMKID_HARVEST,HANDSHAKE_HARVEST
+EYES|1|Can the sensor see?|Fix the sensor first.|NO_MONITOR_MODE,SENSOR_SOURCE_DOWN,SENSOR_SUPPRESSED
+```
+
+- `#` starts a comment line; blank lines are skipped; spaces around a field are dropped; CRLF reads as LF.
+- `id`: 1 to 15 of `A-Z a-z 0-9 _ -`, unique in the file.
+- `priority`: 1 (most urgent) to 9.
+- `question`, `decision`: non-empty, under 160 bytes each. Ask one question (FM 2-0 1-34).
+- the kinds: `include/sloth_alerts.def` names, comma-separated, at least one. A kind named twice counts once.
+
+The file is refused, and sloth exits 2 naming the line, for an unknown kind, a duplicate id, a field missing or out of range, more than 32 questions, no question at all, a line of 2048 bytes or more, a file over 64 KiB or one that is not text (`q_set_load()`, `q_set_parse()`; `tests/test_questions.c :: test_parse_refusals`).
 
 ## Related pages
 

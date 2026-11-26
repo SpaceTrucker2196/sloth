@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include "tmp_dir.h"
 #include "runner.h"
 #include "sloth.h"
 #include "questions.h"
@@ -386,6 +388,108 @@ static void test_per_daemon(void) {
         ASSERT(q_derive(&set.q[i], NULL, 0, &c, &r));
 }
 
+
+/* ── the operator's file ───────────────────────────────────────────── */
+
+static const char *k_good =
+    "# the operator's own questions\n"
+    "\n"
+    "  TWIN | 1 | Is someone copying HomeNet? | Tell the household. | EVIL_TWIN, KARMA_AP\n"
+    "harvest|2|Is anyone after the key?|Rotate the key.|PMKID_HARVEST,HANDSHAKE_HARVEST,PMKID_HARVEST\r\n"
+    "eyes|1|Can the sensor see?|Fix it.|NO_MONITOR_MODE";
+
+static void test_parse_good(void) {
+    q_set_t set;
+    char err[256];
+    ASSERT_EQ(q_set_parse(&set, k_good, err, sizeof(err)), 0);
+    ASSERT_STR(err, "");
+    ASSERT_EQ(set.n, 3);
+    ASSERT_STR(set.q[0].id, "TWIN");
+    ASSERT_EQ(set.q[0].priority, 1);
+    ASSERT_STR(set.q[0].text, "Is someone copying HomeNet?");
+    ASSERT_STR(set.q[0].decision, "Tell the household.");
+    ASSERT_EQ(set.q[0].nkinds, 2);
+    ASSERT(set.q[0].kind[ALERT_TYPE_EVIL_TWIN] && set.q[0].kind[ALERT_TYPE_KARMA_AP]);
+    /* A kind named twice counts once; a CRLF line reads as LF. */
+    ASSERT_EQ(set.q[1].nkinds, 2);
+    ASSERT_EQ(set.q[1].priority, 2);
+    ASSERT_STR(set.q[1].decision, "Rotate the key.");
+    ASSERT_STR(set.q[2].id, "eyes");
+    ASSERT_EQ(set.q[2].nkinds, 1);
+    ASSERT_EQ(q_kind_by_name("SENSOR_SUPPRESSED"), (int)ALERT_TYPE_SENSOR_SUPPRESSED);
+    ASSERT_EQ(q_kind_by_name("ALERT_TYPE_EVIL_TWIN"), -1);
+    ASSERT_EQ(q_kind_by_name("evil_twin"), -1);
+}
+
+/* Each refusal names its line, and a refused file leaves the set as it
+ * was (the defaults stay). */
+static void test_parse_refusals(void) {
+    static const struct { const char *text; const char *err; } k[] = {
+        { "a|1|Q?|D.|EVIL_TWIN\nb|1|Q?|D.|EVIL_TWIN,NOT_A_KIND\n",
+          "line 2: unknown alert kind \"NOT_A_KIND\"" },
+        { "a|1|Q?|D.|EVIL_TWIN\n# c\na|2|R?|E.|KARMA_AP\n", "line 3: duplicate id \"a\"" },
+        { "a|0|Q?|D.|EVIL_TWIN\n", "line 1: the priority \"0\" is not 1 to 9" },
+        { "a|10|Q?|D.|EVIL_TWIN\n", "line 1: the priority \"10\" is not 1 to 9" },
+        { "a|1x|Q?|D.|EVIL_TWIN\n", "line 1: the priority \"1x\" is not 1 to 9" },
+        { "a|1|Q?|EVIL_TWIN\n", "line 1: want id|priority|question|decision|KIND,KIND" },
+        { "a|1|Q?|D.|EVIL_TWIN|x\n", "line 1: more than five fields" },
+        { "a|1|Q?|D.| , \n", "line 1: no alert kind" },
+        { "a b|1|Q?|D.|EVIL_TWIN\n",
+          "line 1: the id \"a b\" may hold only letters, digits, '_' and '-'" },
+        { "0123456789abcdef|1|Q?|D.|EVIL_TWIN\n", "line 1: the id must be 1 to 15 characters" },
+        { "a|1| |D.|EVIL_TWIN\n", "line 1: the question must be 1 to 159 bytes" },
+        { "a|1|Q?||EVIL_TWIN\n", "line 1: the decision must be 1 to 159 bytes" },
+        { "# nothing\n\n", "no questions" },
+        { "", "no questions" },
+    };
+    for (size_t i = 0; i < sizeof(k) / sizeof(*k); i++) {
+        q_set_t set;
+        q_set_defaults(&set);
+        char err[256];
+        ASSERT_EQ(q_set_parse(&set, k[i].text, err, sizeof(err)), -1);
+        if (strcmp(err, k[i].err) != 0) fprintf(stderr, "  case %zu: \"%s\"\n", i, err);
+        ASSERT_STR(err, k[i].err);
+        ASSERT_EQ(set.n, Q_DEFAULT_COUNT);
+        ASSERT_STR(set.q[0].id, "Q1");
+    }
+    /* Thirty-two questions are allowed, the thirty-third is not. */
+    static char big[64 * 40];
+    size_t off = 0;
+    for (int i = 0; i < 33; i++)
+        off += (size_t)snprintf(big + off, sizeof(big) - off, "q%d|1|Q?|D.|EVIL_TWIN\n", i);
+    q_set_t set;
+    char err[256];
+    ASSERT_EQ(q_set_parse(&set, big, err, sizeof(err)), -1);
+    ASSERT_STR(err, "line 33: more than 32 questions");
+    big[strlen(big) - strlen("q32|1|Q?|D.|EVIL_TWIN\n")] = '\0';
+    ASSERT_EQ(q_set_parse(&set, big, err, sizeof(err)), 0);
+    ASSERT_EQ(set.n, Q_MAX);
+}
+
+static void test_load_file(void) {
+    char path[512];
+    int fd = mkstemp(test_tmp_tpl(path, sizeof(path), "sloth_q_XXXXXX"));
+    ASSERT(fd >= 0);
+    if (fd < 0) return;
+    ASSERT_EQ((size_t)write(fd, k_good, strlen(k_good)), strlen(k_good));
+    close(fd);
+    q_set_t set;
+    char err[256];
+    ASSERT_EQ(q_set_load(&set, path, err, sizeof(err)), 0);
+    ASSERT_EQ(set.n, 3);
+    /* A file with a NUL is not text. */
+    FILE *f = fopen(path, "wb");
+    ASSERT(f != NULL);
+    if (f) { fwrite("a|1|Q?|D.|EVIL_TWIN\n\0", 1, 21, f); fclose(f); }
+    q_set_defaults(&set);
+    ASSERT_EQ(q_set_load(&set, path, err, sizeof(err)), -1);
+    ASSERT_STR(err, "not a text file");
+    ASSERT_EQ(set.n, Q_DEFAULT_COUNT);
+    unlink(path);
+    ASSERT_EQ(q_set_load(&set, path, err, sizeof(err)), -1);
+    ASSERT(contains(err, "cannot open: "));
+}
+
 void run_questions_tests(void) {
     TEST_SUITE("site questions (#244)");
     RUN_TEST(test_map_matches_alert_list);
@@ -401,4 +505,7 @@ void run_questions_tests(void) {
     RUN_TEST(test_closed_findings_do_not_count);
     RUN_TEST(test_ids_are_bounded);
     RUN_TEST(test_per_daemon);
+    RUN_TEST(test_parse_good);
+    RUN_TEST(test_parse_refusals);
+    RUN_TEST(test_load_file);
 }
