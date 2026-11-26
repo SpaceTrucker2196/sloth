@@ -693,7 +693,7 @@ static void test_classes_through_the_monitor_path(void) {
  * figures, NULL drops where not measured, and the record's arrays. */
 static void test_rows_in_the_database(void) {
     begin();
-    char path[TEST_TMP_MAX];
+    char path[TEST_TMP_MAX] = "";   /* test_tmp_tpl() fills an empty buffer only */
     int fd = mkstemp(test_tmp_tpl(path, sizeof(path), "sloth_covdb_XXXXXX"));
     if (fd >= 0) close(fd);
     unlink(path);
@@ -737,7 +737,7 @@ static void test_rows_in_the_database(void) {
  * (two rows). */
 static void test_db_catches_up_several(void) {
     begin();
-    char path[TEST_TMP_MAX];
+    char path[TEST_TMP_MAX] = "";   /* test_tmp_tpl() fills an empty buffer only */
     int fd = mkstemp(test_tmp_tpl(path, sizeof(path), "sloth_covdb_XXXXXX"));
     if (fd >= 0) close(fd);
     unlink(path);
