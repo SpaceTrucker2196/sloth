@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <time.h>
+#include <sys/types.h>
 #include "sweep.h"
 
 /* ── sloth --sweep LABEL --sweep-minutes N (#249) ────────────────────
@@ -14,12 +15,14 @@
  * flag checks are sweep_run_check_*() so a test reaches them.
  *
  * Files, all in the sweep directory (--sweep-dir, or the --db file's
- * directory), all 0600 through secure_file:
+ * directory), 0600 through secure_file; with --sweep-group, 0640 in the
+ * group's directory (sweep_group_t below):
  *
  *   sweep-LABEL.baseline.tsv        the accepted baseline, snapshot v2.
  *                                   Read here, never written: accepting
  *                                   a sweep is slothweb's (owner ruling
- *                                   2026-11-25, sloth-mesh).
+ *                                   2026-11-25, sloth-mesh), which
+ *                                   writes it into the group directory.
  *   sweep-LABEL.<UTC start>.tsv     this sweep's inventory, snapshot v2,
  *                                   what an accept copies to the
  *                                   baseline
@@ -39,9 +42,47 @@ int sweep_label_ok(const char *label);
 /* "N" in 1..SWEEP_MINUTES_MAX, the whole string. 0, or -1. */
 int sweep_minutes_parse(const char *s, unsigned *out);
 
+/* ── The shared group (--sweep-group NAME, owner ruling 2026-11-25) ──
+ *
+ * slothweb accepts a sweep by writing the label's baseline into the
+ * sweep directory, so the directory is shared between the account sloth
+ * runs as and slothweb's through one group. With a group:
+ *
+ *   - the directory must be a real directory (not a symlink) owned by
+ *     the effective uid or root, its group the named one, its mode
+ *     exactly 0770 or 2770 (nothing for other; setgid optional, and the
+ *     one that lets the outputs take the group without membership);
+ *   - the sweep's inventory and reports are created 0640 in it, group
+ *     the named one (fchown when the directory did not give it), O_EXCL
+ *     and O_NOFOLLOW against the directory's descriptor;
+ *   - the baseline is opened O_NOFOLLOW and must be a regular file with
+ *     one link and no bit for other, owned by the effective uid or in
+ *     the group (slothweb's account writes it).
+ *
+ * Without one, nothing changes: the directory is only checked to be
+ * one, and the files are 0600 through secure_file. */
+#define SWEEP_GROUP_MAX 64
+
+typedef struct {
+    int   on;
+    gid_t gid;
+    char  name[SWEEP_GROUP_MAX];
+} sweep_group_t;
+
+/* Resolve --sweep-group NAME (a name or a number). 0, or -1 with `err`
+ * filled. */
+int  sweep_group_resolve(const char *name, sweep_group_t *g, char *err,
+                         size_t errsz);
+
+/* The sweep directory, before anything opens (main.c exits 2 on -1).
+ * `g` NULL or off: a directory. On: the rule above. */
+int  sweep_dir_check(const char *dir, const sweep_group_t *g, char *err,
+                     size_t errsz);
+
 typedef struct {
     char         label[SWEEP_LABEL_MAX + 1];
     char         dir[SWEEP_PATH_MAX];
+    sweep_group_t group;              /* off: 0600 files, no group */
     unsigned     minutes;
     time_t       start;
     uint64_t     start_ms;
@@ -58,14 +99,15 @@ typedef struct {
  * on -1, as on any other refusal): 1 present and readable, 0 none yet,
  * -1 with `err` filled (not a regular file, not readable, a path that
  * does not fit). sweep_run_begin() reads it again for the run. */
-int  sweep_baseline_check(const char *dir, const char *label, char *err,
-                          size_t errsz);
+int  sweep_baseline_check(const char *dir, const char *label,
+                          const sweep_group_t *g, char *err, size_t errsz);
 
 /* Start: read the label's baseline if there is one, allocate, and take
  * the plan from `full` (chanhop_init_sweep()'s list). 0, or -1 with
  * `err` filled (no memory, a baseline that cannot be read). */
 int  sweep_run_begin(sweep_run_t *r, const char *label, unsigned minutes,
-                     const char *dir, const chanhop_t *full,
+                     const char *dir, const sweep_group_t *g,
+                     const chanhop_t *full,
                      uint64_t now_ms, time_t wall, char *err, size_t errsz);
 
 /* One poll, after poll_data(): merge the state's tables in, sample

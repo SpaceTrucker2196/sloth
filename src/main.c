@@ -394,7 +394,8 @@ static void print_usage(const char *argv0) {
             "       [--preflight [--json]] [--handoff DIR]\n"
             "       [--interference-report FILE [--from T] [--to T]]\n"
             "       [--jsonl-chain N] [--verify PATH]\n"
-            "       [--sweep LABEL --sweep-minutes N [--sweep-dir DIR]]\n"
+            "       [--sweep LABEL --sweep-minutes N [--sweep-dir DIR]\n"
+            "        [--sweep-group NAME]]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created 0600 if it doesn't\n"
             "                     exist; an existing FILE must already be\n"
@@ -864,6 +865,10 @@ static void print_usage(const char *argv0) {
             "  --sweep-dir DIR    where the label's baseline is read and the\n"
             "                     sweep's inventory and reports are written\n"
             "                     (0600); default the --db file's directory.\n"
+            "  --sweep-group NAME the sweep directory is shared with slothweb\n"
+            "                     through group NAME (its accept writes the\n"
+            "                     baseline): the directory must be 2770 or\n"
+            "                     0770 in NAME, the outputs are 0640 in NAME.\n"
             "  --interference-report FILE\n"
             "                     write one Markdown section per RF_DEGRADED,\n"
             "                     RTS_FLOOD or GNSS_JAMMING episode in --db\n"
@@ -1050,6 +1055,9 @@ int main(int argc, char **argv) {
     const char *sweep_label  = NULL;     /* --sweep LABEL (#249) */
     const char *sweep_min_arg = NULL;    /* --sweep-minutes N */
     const char *sweep_dir    = NULL;     /* --sweep-dir DIR */
+    const char *sweep_grp_arg = NULL;    /* --sweep-group NAME */
+    sweep_group_t sweep_grp;
+    memset(&sweep_grp, 0, sizeof(sweep_grp));
     unsigned    sweep_minutes = 0;
     int         sweep_failed  = 0;       /* not started, or a file not written */
     char        sweep_dir_buf[SWEEP_PATH_MAX];
@@ -1339,6 +1347,8 @@ int main(int argc, char **argv) {
             sweep_min_arg = argv[++i];
         } else if (!strcmp(argv[i], "--sweep-dir") && i + 1 < argc) {
             sweep_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--sweep-group") && i + 1 < argc) {
+            sweep_grp_arg = argv[++i];
         } else if (!strcmp(argv[i], "--jsonl-chain") && i + 1 < argc) {
             char cerr[96];
             if (jc_parse_block(argv[++i], &jsonl_chain, cerr, sizeof(cerr)) != 0) {
@@ -1457,9 +1467,9 @@ int main(int argc, char **argv) {
                         "separate commands\n");
         return 2;
     }
-    if ((sweep_min_arg || sweep_dir) && !sweep_label) {
-        fprintf(stderr, "sloth: --sweep-minutes and --sweep-dir qualify "
-                        "--sweep: there is no sweep\n");
+    if ((sweep_min_arg || sweep_dir || sweep_grp_arg) && !sweep_label) {
+        fprintf(stderr, "sloth: --sweep-minutes, --sweep-dir and --sweep-group "
+                        "qualify --sweep: there is no sweep\n");
         return 2;
     }
     if (sweep_label) {
@@ -1503,9 +1513,14 @@ int main(int argc, char **argv) {
                      sl ? (dn ? dn : 1) : 1, sl ? db_path : ".");
             sweep_dir = sweep_dir_buf;
         }
-        struct stat sd;
-        if (stat(sweep_dir, &sd) != 0 || !S_ISDIR(sd.st_mode)) {
-            fprintf(stderr, "sloth: --sweep-dir %s: not a directory\n", sweep_dir);
+        char berr[256];
+        if (sweep_grp_arg &&
+            sweep_group_resolve(sweep_grp_arg, &sweep_grp, berr, sizeof(berr)) != 0) {
+            fprintf(stderr, "sloth: %s\n", berr);
+            return 2;
+        }
+        if (sweep_dir_check(sweep_dir, &sweep_grp, berr, sizeof(berr)) != 0) {
+            fprintf(stderr, "sloth: %s\n", berr);
             return 2;
         }
         if (strlen(sweep_dir) > SWEEP_PATH_MAX - 96) {
@@ -1515,8 +1530,8 @@ int main(int argc, char **argv) {
         /* A baseline that is there and cannot be read is a refusal like
          * any other, before the preflight and before anything opens; a
          * sweep against nothing would call the whole room new. */
-        char berr[256];
-        if (sweep_baseline_check(sweep_dir, sweep_label, berr, sizeof(berr)) < 0) {
+        if (sweep_baseline_check(sweep_dir, sweep_label, &sweep_grp, berr,
+                                 sizeof(berr)) < 0) {
             fprintf(stderr, "sloth: --sweep %s\n", berr);
             return 2;
         }
@@ -2415,7 +2430,7 @@ int main(int argc, char **argv) {
     if (sweep_label) {
         char serr[256];
         if (sweep_run_begin(&sweep, sweep_label, sweep_minutes, sweep_dir,
-                            &sweep_plan, sloth_mono_ms(), sloth_wall(),
+                            &sweep_grp, &sweep_plan, sloth_mono_ms(), sloth_wall(),
                             serr, sizeof(serr)) != 0) {
             fprintf(stderr, "sloth: --sweep %s\n", serr);
             g_quit = 1;

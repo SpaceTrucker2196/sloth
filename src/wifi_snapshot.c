@@ -257,6 +257,11 @@ int wifi_snapshot_write_inv(const sw_inv_t *inv, const char *path,
            ? 0 : -1;
 }
 
+void wifi_snapshot_write_inv_f(FILE *f, const sw_inv_t *inv,
+                               const char *label, long now) {
+    if (f && inv) emit(f, inv, label, now, 0);
+}
+
 int wifi_snapshot_write_live(const sloth_state_t *s, const char *live,
                              const char *label, long now,
                              char *err, size_t errsz) {
@@ -493,6 +498,13 @@ int wifi_snapshot_read(const char *path, sw_inv_t *out, int *version) {
     if (!path || !out) return -1;
     FILE *f = fopen(path, "r");
     if (!f) return -1;
+    int rc = wifi_snapshot_read_f(f, out, version);
+    fclose(f);
+    return rc;
+}
+
+int wifi_snapshot_read_f(FILE *f, sw_inv_t *out, int *version) {
+    if (!f || !out) return -1;
     sweep_inv_clear(out);
     int ver = 0;
     char line[1024];
@@ -528,7 +540,6 @@ int wifi_snapshot_read(const char *path, sw_inv_t *out, int *version) {
         else if (!strncmp(line, "ble\t", 4)) (void)read_ble(out, line + 4);
         else                                 (void)read_ap(out, line);
     }
-    fclose(f);
     /* No magic line: a file the diff reader has always accepted (the
      * pre-#137 hand-made baselines), read as v1. */
     if (!ver) ver = 1;

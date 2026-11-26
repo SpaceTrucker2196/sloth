@@ -8,11 +8,11 @@ type: reference
 
 **Summary**: `sloth --sweep LABEL --sweep-minutes N --hop [--sweep-dir DIR]` runs the preflight, then visits every 20 MHz channel of 2.4 and 5 GHz once, each for an equal share of N minutes, while the BLE source (if one is given) listens throughout. At the end it writes a report of every emitter heard (access points, Wi-Fi clients, BLE advertisers) as **new**, **known** or **missing** against the label's accepted baseline, unknown emitters first and strongest first, cameras, setup-mode devices and hidden-name access points in their own section, the coverage statement (what was swept, for how long, and what was not) and the limits of a sweep. It adds no detector: it packages the inventory sloth already keeps. Receive-only, like every other part of sloth (MISSION §2): only sloth's own monitor radio is retuned, and nothing is transmitted.
 
-**Status**: #249, 2026-11-25 (JSONL 2.16.0). Built in sloth: the flags, the in-process preflight, the sweep plan, the inventory, the comparison, the reports, the `sweep_report` record and the baseline file (snapshot v2). Not built here: the slothweb button that accepts a sweep as the label's baseline (owner ruling 2026-11-25: a sloth-mesh write route behind the write-path ACL); until it exists, accepting is the copy described in § 5. No PDF (no report export exists).
+**Status**: #249, 2026-11-25 (JSONL 2.16.0). Built in sloth: the flags, the in-process preflight, the sweep plan, the inventory, the comparison, the reports, the `sweep_report` record, the baseline file (snapshot v2) and `--sweep-group`, the directory shared with slothweb (owner ruling 2026-11-25, § 5). The Accept button is slothweb's (sloth-mesh: `POST /api/sweep/accept`, behind its write-path ACL, refused to agents). No PDF (no report export exists).
 
 **Sources**: issue #249 (from #241 item 14) and its owner rulings of 2026-11-25; FM 2-0 (17 May 2004) 11-18, page 11-5 (technical surveillance countermeasures: keeping sensitive and restricted areas "clear of any adversary intelligence-placed active or passive electronic sensing, or eavesdropping or collection devices") and chapter 9, 9-4, page 9-2 (Unintentional Radiation Intelligence, a MASINT subdiscipline), both checked against the manual's text in the #249 review; IEEE 802.11-2020 §11.1.3.2 (dot11BeaconPeriod, the dwell floor); Bluetooth Core v5.4 Vol 6 Part B §1.3.2 (BLE address kinds); IEEE 802-2014 §8.2 (the locally administered bit); `src/sweep.h`, `src/sweep.c` (inventory, compare), `src/sweep_cov.c` (coverage), `src/sweep_report.c` (reports, record), `src/sweep_run.h`, `src/sweep_run.c` (the run, the files), `src/wifi_chanhop.c` (`chanhop_init_sweep()`), `src/wifi_snapshot.c` (format v2, `wifi_snapshot_read()`), `src/main.c` (the flags); `tests/test_sweep.c`.
 
-**Last updated**: 2026-11-25 (#249 review: the FM 2-0 citations checked against the manual; an unreadable baseline is refused before the preflight; the exit status; the refusals under `make replay-check`), 2026-11-25 (#249: the page).
+**Last updated**: 2026-11-25 (#249 follow-up, owner ruling: `--sweep-group`, the directory shared with slothweb, 0640 outputs, the operator's setup, § 5), 2026-11-25 (#249 review: the FM 2-0 citations checked against the manual; an unreadable baseline is refused before the preflight; the exit status; the refusals under `make replay-check`), 2026-11-25 (#249: the page).
 
 ---
 
@@ -25,7 +25,7 @@ sloth --sweep boardroom --sweep-minutes 10 --hop --monitor-iface wlan1 \
 
 - `--hop` is required (the sweep is a hop plan) and `--cue` is refused: cueing lengthens one channel's dwell on a finding ([[passive-cueing]]), and a sweep gives every channel the same time.
 - `--replay` is refused (no radio), and so are the offline commands (`--preflight`, `--handoff`, `--verify`, `--interference-report`).
-- The sweep directory is `--sweep-dir DIR`, or the `--db` file's directory. It must exist.
+- The sweep directory is `--sweep-dir DIR`, or the `--db` file's directory. It must exist. With `--sweep-group NAME` it must be the group's shared directory (§ 5), checked before anything opens.
 - The `--preflight` checks ([[preflight]]) run in process first; the page goes to stderr and a `fail` exits `2` before anything is opened or a session starts. A warning does not stop the sweep.
 - The `--db` session is labelled `sweep:LABEL`.
 - A label baseline that is there and cannot be read (not a regular file, not readable) exits `2` before the preflight, like the refusals above. A sweep that did not start, or did not write its inventory or a report, exits `1`; one that wrote them exits `0`. `tests/replay/sweep_cli.sh` (run by `make replay-check`) holds every refusal above to exit `2` with nothing left in the sweep directory.
@@ -57,14 +57,14 @@ The cameras / setup mode / hidden names section flags: an address in a camera ve
 
 ## 4. The report
 
-Files in the sweep directory, all `0600`, the three per-sweep ones created `O_EXCL` (a sweep never replaces another's record):
+Files in the sweep directory, all `0600` (`0640` in the group with `--sweep-group`, § 5), the three per-sweep ones created `O_EXCL` (a sweep never replaces another's record):
 
 | file | what |
 |---|---|
 | `sweep-LABEL.<UTC start>.tsv` | this sweep's inventory, a snapshot v2 file ([[wifi-sigint-techniques]] § snapshot format) |
 | `sweep-LABEL.<UTC start>.md` | the report |
 | `sweep-LABEL.<UTC start>.json` | the same as JSON |
-| `sweep-LABEL.baseline.tsv` | the label's accepted baseline; read, never written by sloth |
+| `sweep-LABEL.baseline.tsv` | the label's accepted baseline; read, never written by sloth (slothweb's accept writes it) |
 
 The report holds: the start, end, time given and why it ended; the baseline (path and version, or none); counts by kind and status; the new, known and missing tables (kind, address, SSID / name / vendor escaped as the snapshot escapes them, best signal, channel, and for a known access point whose channel or encryption moved, the baseline's); the cameras / setup / hidden section; the coverage statement: every channel of the plan with its measured time (the scheduler's own start-of-dwell to start-of-next accounting), visits, refused retunes, frames and whether it was swept, the channels not swept and the bands not swept (6 GHz and sub-GHz always; 2.4 or 5 GHz when no channel of it was swept); whether the monitor radio and the BLE source were up at the end; and the limits:
 
@@ -80,13 +80,32 @@ One `sweep_report` JSONL record ([[jsonl-schema]]) is written at the end: counts
 
 ## 5. Accepting a baseline
 
-A sweep never changes the baseline. Accepting one makes its inventory file the label's `sweep-LABEL.baseline.tsv`; the owner's ruling puts that behind a button in slothweb (sloth-mesh), a write route behind its write-path ACL. Until that is built, the operator accepts by copying the sweep's `.tsv` over the baseline (keeping it `0600`). The next sweep with the label compares against it.
+A sweep never changes the baseline. Accepting one makes its inventory file the label's `sweep-LABEL.baseline.tsv`, and the next sweep with the label compares against it. The owner's ruling (2026-11-25) puts that behind an **Accept** button in slothweb (sloth-mesh), a write route behind its write-path ACL that an agent is refused: slothweb reads the `sweep_report` record, offers the sweep, and on Accept reads the sweep's inventory from the sweep directory and writes the label's baseline beside it (a temporary file in the same directory, then a rename over the baseline; a baseline that is a symlink or not a regular file is refused). Without slothweb, accepting is still a copy of the sweep's `.tsv` over the baseline.
+
+### The shared group (operator setup)
+
+sloth and slothweb both run as `sloth` on the reference host today, but neither may rely on that: the sweep directory is shared through a group, `--sweep-group NAME` on the sweep and slothweb's own `--sweep-dir DIR --sweep-group NAME`. The setup is the operator's and nothing here performs it:
+
+```
+groupadd --system sloth-sweep
+usermod -aG sloth-sweep sloth                       # the account the sweep runs as
+usermod -aG sloth-sweep <slothweb's account>        # when it is another one
+install -d -o sloth -g sloth-sweep -m 2770 /var/lib/sloth/sweep
+# or, for an existing directory:
+chgrp sloth-sweep /var/lib/sloth/sweep && chmod 2770 /var/lib/sloth/sweep
+```
+
+and in slothweb's unit (sloth-mesh's `packaging/systemd/slothweb.service`), `SupplementaryGroups=sloth-sweep` with `--sweep-dir /var/lib/sloth/sweep --sweep-group sloth-sweep` on its command line; a sweep run by hand as `sloth` (`sudo -u sloth`, which applies the account's groups) then passes `--sweep-dir /var/lib/sloth/sweep --sweep-group sloth-sweep`.
+
+What sloth holds the directory to with `--sweep-group` (`src/sweep_run.h`, `sweep_dir_check()`): a real directory (a symlink is refused), owned by the account sloth runs as or root, in the group, mode exactly `2770` or `0770`. `2770` is the one to use: setgid makes every file created in it the group's without the creating account having to be a member. The inventory and the two reports are created `0640`, in the group (`fchown` when the directory did not give it, which needs membership), `O_EXCL` and `O_NOFOLLOW` against the directory's descriptor, which is checked again at the end. The baseline is read only if it is a regular file with one link and no bit for other, owned by sloth's account or in the group (slothweb's account writes it `0640`); a symlink is refused, not followed.
+
+A sweep started as root with `--user sloth` drops every supplementary group (`src/privdrop.c`), so the dropped process is not in the group: with `2770` its files still take the group, but it cannot read a baseline slothweb's account wrote unless that account is `sloth`. Run the sweep as `sloth` instead.
 
 The baseline file is outside sloth.db, so the #239 random-address purge never touches it ([[retention]] § 2e); it holds no private BLE address and no locally administered client address, only their counts.
 
 ## Related pages
 
-- [[cli-reference]] — `--sweep`, `--sweep-minutes`, `--sweep-dir`.
+- [[cli-reference]] — `--sweep`, `--sweep-minutes`, `--sweep-dir`, `--sweep-group`.
 - [[preflight]] — the checks a sweep runs first.
 - [[wifi-sigint-techniques]] — the snapshot file, v2.
 - [[passive-cueing]] — why `--cue` is refused.

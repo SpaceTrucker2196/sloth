@@ -32,6 +32,13 @@ const char *wifi_snapshot_error(void);
 int wifi_snapshot_write_inv(const sw_inv_t *inv, const char *path,
                             const char *label, long now);
 
+/* The same file body to an open stream the caller created and closes
+ * (#249: a sweep's group-mode outputs are created 0640 against the
+ * directory's descriptor, src/sweep_run.c). The caller checks the
+ * stream (sfile_fclose()). */
+void wifi_snapshot_write_inv_f(FILE *f, const sw_inv_t *inv,
+                               const char *label, long now);
+
 /* Read a snapshot file, v1 or v2, into `out` (cleared first): AP rows,
  * and from a v2 file the client and BLE rows and the two counts lines.
  * out->has_kind[] says which kinds the file holds (v1: APs only), and
@@ -41,6 +48,9 @@ int wifi_snapshot_write_inv(const sw_inv_t *inv, const char *path,
  * ruling 2026-11-25: never a row). 0, or -1 when the file cannot be
  * opened. */
 int wifi_snapshot_read(const char *path, sw_inv_t *out, int *version);
+/* The same from an open stream (the caller opened it O_NOFOLLOW and
+ * checked it, and closes it). 0, or -1 on a NULL argument. */
+int wifi_snapshot_read_f(FILE *f, sw_inv_t *out, int *version);
 
 /* The same inventory written while the session runs (#190), to `live`
  * (the caller derives it: snapshot.txt -> snapshot.live.txt). Rendered

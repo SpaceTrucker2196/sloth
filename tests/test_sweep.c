@@ -738,7 +738,7 @@ static void test_run_writes_and_never_accepts(void) {
     ASSERT_EQ(chanhop_sweep_dwell_ms(&h), 1550u);
     static sweep_run_t r;
     char err[256];
-    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &h, 0, 1764000000, err, sizeof(err)), 0);
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, NULL, &h, 0, 1764000000, err, sizeof(err)), 0);
     ASSERT(r.base == NULL);
     memset(&g_s, 0, sizeof(g_s));
     seed_ap(&g_s, AP1, "Lobby", "WPA2", 6, -50);
@@ -781,7 +781,7 @@ static void test_run_writes_and_never_accepts(void) {
     snprintf(keep, sizeof(keep), "%s.keep", base);
     ASSERT(copy_file(base, keep));
     chanhop_init_sweep(&h, 1);
-    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &h, 0, 1764000600, err, sizeof(err)), 0);
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, NULL, &h, 0, 1764000600, err, sizeof(err)), 0);
     ASSERT(r.base != NULL);
     ASSERT_EQ(r.base_version, 2);
     seed_ap(&g_s, AP2, "Planted", "WPA2", 1, -30);
@@ -798,23 +798,140 @@ static void test_run_writes_and_never_accepts(void) {
     /* One sweep never replaces another's record: the same second again
      * is refused, and the first record stays. */
     chanhop_init_sweep(&h, 1);
-    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &h, 0, 1764000600, err, sizeof(err)), 0);
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, NULL, &h, 0, 1764000600, err, sizeof(err)), 0);
     ASSERT_EQ(sweep_run_finish(&r, &g_s, 1, 0, 1764000620, nul), -1);
     t1 = slurp(path);
     ASSERT(t1 && strstr(t1, "Planted"));
 
     /* main.c's check before anything opens: present, absent, and (below)
      * there but not a file. */
-    ASSERT_EQ(sweep_baseline_check(dir, "room", err, sizeof(err)), 1);
-    ASSERT_EQ(sweep_baseline_check(dir, "other", err, sizeof(err)), 0);
+    ASSERT_EQ(sweep_baseline_check(dir, "room", NULL, err, sizeof(err)), 1);
+    ASSERT_EQ(sweep_baseline_check(dir, "other", NULL, err, sizeof(err)), 0);
 
     /* A baseline that is not a file is refused at the start. */
     unlink(base);
     ASSERT_EQ(mkdir(base, 0700), 0);
-    ASSERT_EQ(sweep_baseline_check(dir, "room", err, sizeof(err)), -1);
+    ASSERT_EQ(sweep_baseline_check(dir, "room", NULL, err, sizeof(err)), -1);
     ASSERT(strstr(err, "cannot be read") != NULL);
-    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &h, 0, 1764000900, err, sizeof(err)), -1);
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, NULL, &h, 0, 1764000900, err, sizeof(err)), -1);
     rmdir(base);
+    if (nul) fclose(nul);
+    test_rm_tree(dir);
+}
+
+/* --sweep-group (owner ruling 2026-11-25): the directory slothweb writes
+ * the baseline into is the group's, 2770 or 0770; the outputs are 0640
+ * in the group; the baseline slothweb wrote (0640, the group's) is read,
+ * and one that is a symlink, has a bit for other, or is a directory is
+ * refused. The process's own group stands in for the shared one. */
+static void test_run_group_dir(void) {
+    char dir[TEST_TMP_MAX] = "";
+    ASSERT(mkdtemp(test_tmp_tpl(dir, sizeof(dir), "sloth_sweepgrp_XXXXXX")) != NULL);
+    char gname[32];
+    snprintf(gname, sizeof(gname), "%lu", (unsigned long)getegid());
+    sweep_group_t g;
+    char err[320];
+    ASSERT_EQ(sweep_group_resolve(gname, &g, err, sizeof(err)), 0);
+    ASSERT(g.on && g.gid == getegid());
+    sweep_group_t bad;
+    ASSERT_EQ(sweep_group_resolve("no-such-sloth-group-x", &bad, err, sizeof(err)), -1);
+    ASSERT(strstr(err, "no such group") != NULL);
+    ASSERT(!bad.on);
+
+    /* The directory: mkdtemp's 0700 is refused under the group rule and
+     * passes without it; 0770 and 2770 pass; 0775 and 2777 do not. */
+    ASSERT_EQ(sweep_dir_check(dir, NULL, err, sizeof(err)), 0);
+    ASSERT_EQ(sweep_dir_check(dir, &g, err, sizeof(err)), -1);
+    ASSERT(strstr(err, "not 2770 or 0770") != NULL);
+    ASSERT_EQ(chmod(dir, 0775), 0);
+    ASSERT_EQ(sweep_dir_check(dir, &g, err, sizeof(err)), -1);
+    ASSERT_EQ(chmod(dir, 02777), 0);
+    ASSERT_EQ(sweep_dir_check(dir, &g, err, sizeof(err)), -1);
+    ASSERT_EQ(chmod(dir, 0770), 0);
+    ASSERT_EQ(sweep_dir_check(dir, &g, err, sizeof(err)), 0);
+    ASSERT_EQ(chmod(dir, 02770), 0);
+    ASSERT_EQ(sweep_dir_check(dir, &g, err, sizeof(err)), 0);
+    /* Another group's directory is not this one. */
+    sweep_group_t other = g;
+    other.gid = g.gid + 1;
+    ASSERT_EQ(sweep_dir_check(dir, &other, err, sizeof(err)), -1);
+    ASSERT(strstr(err, "not --sweep-group") != NULL);
+    /* A symlink to the right directory is refused, not followed. */
+    char lnk[TEST_TMP_MAX + 8];
+    snprintf(lnk, sizeof(lnk), "%s.ln", dir);
+    ASSERT_EQ(symlink(dir, lnk), 0);
+    ASSERT_EQ(sweep_dir_check(lnk, &g, err, sizeof(err)), -1);
+    ASSERT(strstr(err, "a symlink") != NULL);
+    unlink(lnk);
+
+    /* A run in the group directory: 0640 outputs in the group. */
+    fake_net_reset();
+    FILE *nul = fopen("/dev/null", "w");
+    chanhop_t h;
+    chanhop_init_sweep(&h, 1);
+    static sweep_run_t r;
+    mode_t um = umask(077);       /* the mode is set, not left to the umask */
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &g, &h, 0, 1764000000, err,
+                              sizeof(err)), 0);
+    memset(&g_s, 0, sizeof(g_s));
+    seed_ap(&g_s, AP1, "Lobby", "WPA2", 6, -50);
+    (void)sweep_run_tick(&r, &g_s, &h, 50);
+    ASSERT_EQ(sweep_run_finish(&r, &g_s, 1, 0, 1764000060, nul), 0);
+    umask(um);
+    char stem[SWEEP_PATH_MAX], path[SWEEP_PATH_MAX + 8], base[SWEEP_PATH_MAX];
+    ASSERT_EQ(sweep_record_stem(dir, "room", 1764000000, stem, sizeof(stem)), 0);
+    ASSERT_EQ(sweep_baseline_path(dir, "room", base, sizeof(base)), 0);
+    static const char *const ext[3] = { "tsv", "md", "json" };
+    for (int i = 0; i < 3; i++) {
+        struct stat st;
+        snprintf(path, sizeof(path), "%s.%s", stem, ext[i]);
+        ASSERT_EQ(lstat(path, &st), 0);
+        ASSERT_EQ((int)(st.st_mode & 07777), 0640);
+        ASSERT(st.st_gid == g.gid);
+    }
+
+    /* slothweb's accept: the inventory as the baseline, 0640. */
+    snprintf(path, sizeof(path), "%s.tsv", stem);
+    ASSERT(copy_file(path, base));
+    ASSERT_EQ(chmod(base, 0640), 0);
+    ASSERT_EQ(sweep_baseline_check(dir, "room", &g, err, sizeof(err)), 1);
+    chanhop_init_sweep(&h, 1);
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &g, &h, 0, 1764000600, err,
+                              sizeof(err)), 0);
+    ASSERT(r.base != NULL && r.base_version == 2);
+    sweep_run_free(&r);
+    /* A bit for other: refused. */
+    ASSERT_EQ(chmod(base, 0644), 0);
+    ASSERT_EQ(sweep_baseline_check(dir, "room", &g, err, sizeof(err)), -1);
+    ASSERT(strstr(err, "by other") != NULL);
+    /* A symlink to a good file: refused, not followed. */
+    char real[SWEEP_PATH_MAX + 8];
+    snprintf(real, sizeof(real), "%s.real", base);
+    ASSERT_EQ(rename(base, real), 0);
+    ASSERT_EQ(chmod(real, 0640), 0);
+    ASSERT_EQ(symlink(real, base), 0);
+    ASSERT_EQ(sweep_baseline_check(dir, "room", &g, err, sizeof(err)), -1);
+    ASSERT(strstr(err, "a symlink") != NULL);
+    ASSERT_EQ(sweep_run_begin(&r, "room", 1, dir, &g, &h, 0, 1764000900, err,
+                              sizeof(err)), -1);
+    /* Two links: refused. */
+    unlink(base);
+    ASSERT_EQ(link(real, base), 0);
+    ASSERT_EQ(sweep_baseline_check(dir, "room", &g, err, sizeof(err)), -1);
+    ASSERT(strstr(err, "more than one link") != NULL);
+    unlink(base);
+    unlink(real);
+    /* The directory changed under the run: the outputs are refused at
+     * the end, not written into a directory that broke the rule. */
+    ASSERT_EQ(sweep_run_begin(&r, "late", 1, dir, &g, &h, 0, 1764001200, err,
+                              sizeof(err)), 0);
+    ASSERT_EQ(chmod(dir, 0777), 0);
+    ASSERT_EQ(sweep_run_finish(&r, &g_s, 1, 0, 1764001260, nul), -1);
+    ASSERT_EQ(chmod(dir, 02770), 0);
+    ASSERT_EQ(sweep_record_stem(dir, "late", 1764001200, stem, sizeof(stem)), 0);
+    snprintf(path, sizeof(path), "%s.tsv", stem);
+    struct stat st;
+    ASSERT(lstat(path, &st) != 0);
     if (nul) fclose(nul);
     test_rm_tree(dir);
 }
@@ -841,4 +958,5 @@ void run_sweep_tests(void) {
     TEST_SUITE("sweep (#249): the run");
     RUN_TEST(test_label_and_minutes);
     RUN_TEST(test_run_writes_and_never_accepts);
+    RUN_TEST(test_run_group_dir);
 }
