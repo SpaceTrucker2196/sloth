@@ -179,7 +179,7 @@ static void test_write_succeeds_over_private_existing_file(void) {
     ASSERT(f != NULL);
     char line[64] = { 0 };
     if (f) { ASSERT(fgets(line, sizeof(line), f) != NULL); fclose(f); }
-    ASSERT_STR(line, "# sloth-snapshot v1\n");
+    ASSERT_STR(line, "# sloth-snapshot v2\n");
     unlink(prev_path);
 }
 

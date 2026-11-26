@@ -1,5 +1,6 @@
 #include "wifi_snapshot.h"
 #include "secure_file.h"
+#include "sweep.h"
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -123,13 +124,25 @@ static void bssid_str(const uint8_t *b, char *out, int sz) {
              b[0], b[1], b[2], b[3], b[4], b[5]);
 }
 
+static void mac_str(const uint8_t *b, char *out, int sz) {
+    bssid_str(b, out, sz);
+}
+
 /* The file body. `live` adds one header line (#190): the diff reader
  * skips every '#' line, so a live file still reads as a baseline, but a
  * person or a script looking at it can tell it is not the shutdown
- * snapshot. */
-static void emit(FILE *f, const sloth_state_t *s, const char *label,
+ * snapshot.
+ *
+ * Format v2 (#249) adds the clients and the BLE advertisers a sweep
+ * compares against, after the AP rows and in the same file, so one
+ * file is still one site's baseline. Each such row starts with its kind
+ * ("client", "ble") and has fewer than the six fields an AP row needs,
+ * so a v1 reader - every sloth before #249, and wifi_snapshot_diff() -
+ * skips it and reads the APs as it always did. The rotating addresses
+ * are counts only (src/sweep.h) and are header lines, never rows. */
+static void emit(FILE *f, const sw_inv_t *inv, const char *label,
                  long now, int live) {
-    fprintf(f, "# sloth-snapshot v1\n");
+    fprintf(f, "# sloth-snapshot v2\n");
     /* The label is the operator's, but a newline in it would still start
      * a row in the next run's baseline, so it takes the same escape. */
     char lab[256];
@@ -137,16 +150,51 @@ static void emit(FILE *f, const sloth_state_t *s, const char *label,
     fprintf(f, "# label\t%s\n", lab);
     fprintf(f, "# ts\t%ld\n", now);
     if (live) fprintf(f, "# session\trunning\n");
-    fprintf(f, "# count\t%d\n", s->beacon_count);
+    fprintf(f, "# count\t%d\n", inv->per_kind[SW_K_AP]);
+    fprintf(f, "# clients\t%d\n", inv->per_kind[SW_K_CLIENT]);
+    fprintf(f, "# ble_devices\t%d\n", inv->per_kind[SW_K_BLE]);
+    fprintf(f, "# client_random\t%d\n", sweep_set_count(&inv->client_random));
+    fprintf(f, "# ble_private\t%d\n", sweep_set_count(&inv->ble_private));
     fprintf(f, "# bssid\tssid\tenc\tchannel\takm\tmfp\tvendor\n");
-
-    for (int i = 0; i < s->beacon_count; i++) {
-        const beacon_ap_t *a = &s->beacon_aps[i];
+    for (int i = 0; i < inv->n; i++) {
+        const sw_emitter_t *e = &inv->e[i];
+        if (e->kind != SW_K_AP) continue;
         char bss[20];
-        bssid_str(a->bssid, bss, sizeof(bss));
-        wifi_snapshot_row(f, bss, a->ssid, a->enc, a->channel, a->akm,
-                          a->mfp, a->vendor);
+        mac_str(e->addr, bss, sizeof(bss));
+        wifi_snapshot_row(f, bss, e->ssid, e->enc, e->channel, e->akm,
+                          e->mfp, e->vendor);
     }
+    fprintf(f, "# client\tmac\tchannel\tvendor\n");
+    for (int i = 0; i < inv->n; i++) {
+        const sw_emitter_t *e = &inv->e[i];
+        if (e->kind != SW_K_CLIENT) continue;
+        char mac[20], ve[32 * 4 + 1];
+        mac_str(e->addr, mac, sizeof(mac));
+        field_escape(e->vendor, ve, sizeof(ve));
+        fprintf(f, "client\t%s\t%d\t%s\n", mac,
+                e->channel > 0 && e->channel < 256 ? e->channel : 0, ve);
+    }
+    fprintf(f, "# ble\taddr\ttype\tcategory\tname\n");
+    for (int i = 0; i < inv->n; i++) {
+        const sw_emitter_t *e = &inv->e[i];
+        if (e->kind != SW_K_BLE) continue;
+        /* The name and the category are the advertiser's choice of
+         * octets, as untrusted as an SSID. */
+        char mac[20], cat[16 * 4 + 1], name[32 * 4 + 1];
+        mac_str(e->addr, mac, sizeof(mac));
+        field_escape(e->cat, cat, sizeof(cat));
+        field_escape(e->name, name, sizeof(name));
+        fprintf(f, "ble\t%s\t%s\t%s\t%s\n", mac,
+                sweep_ble_type_name(e->ble_type), cat, name);
+    }
+}
+
+/* The state's inventory as the file holds it. NULL on allocation
+ * failure (the reason is the caller's to set). */
+static sw_inv_t *state_inv(const sloth_state_t *s) {
+    sw_inv_t *inv = sweep_inv_new();
+    if (inv) sweep_inv_observe(inv, s);
+    return inv;
 }
 
 void wifi_snapshot_escape(const char *in, char *out, size_t cap) {
@@ -182,10 +230,24 @@ int wifi_snapshot_write(const sloth_state_t *s, const char *path,
      * re-pointing --snapshot-out at last visit's file is the documented
      * repeat-survey workflow. stderr is left to the caller, which
      * already prints one line per outcome. */
+    sw_inv_t *inv = state_inv(s);
+    if (!inv) {
+        snprintf(g_fail.last, sizeof(g_fail.last), "%.200s: out of memory", path);
+        return -1;
+    }
+    int rc = wifi_snapshot_write_inv(inv, path, label, now);
+    sweep_inv_free(inv);
+    return rc;
+}
+
+int wifi_snapshot_write_inv(const sw_inv_t *inv, const char *path,
+                            const char *label, long now) {
+    sfile_fail_reset(&g_fail);
+    if (!inv || !path) return -1;
     FILE *f = sfile_fopen(AT_FDCWD, path, SFILE_TRUNC,
                           g_fail.last, sizeof(g_fail.last));
     if (!f) return -1;
-    emit(f, s, label, now, 0);
+    emit(f, inv, label, now, 0);
     /* sfile_fclose folds in ferror, the flush and the close, so a
      * failure anywhere in the fprintf run above surfaces here — which
      * is why the individual writes stay unchecked. Before this the
@@ -215,9 +277,15 @@ int wifi_snapshot_write_live(const sloth_state_t *s, const char *live,
      * unlink removes the name without following it, and O_EXCL then
      * guarantees the file written is one this call created, 0600. */
     (void)unlink(tmp);
+    sw_inv_t *inv = state_inv(s);
+    if (!inv) {
+        snprintf(err, errsz, "%.200s: out of memory", live);
+        return -1;
+    }
     FILE *f = sfile_fopen(AT_FDCWD, tmp, SFILE_EXCL, err, errsz);
-    if (!f) return -1;
-    emit(f, s, label, now, 1);
+    if (!f) { sweep_inv_free(inv); return -1; }
+    emit(f, inv, label, now, 1);
+    sweep_inv_free(inv);
     /* On disk before it is visible: a rename that survives a power cut
      * while the data does not is how a zero-length file appears. */
     int sync_bad = fflush(f) != 0 || fsync(fileno(f)) != 0;
@@ -274,6 +342,10 @@ int wifi_snapshot_diff(const sloth_state_t *s, const char *baseline_path,
         (void)strtok_r(NULL, "\t", &save);              /* akm — not diffed */
         char *mfp   = strtok_r(NULL, "\t", &save);
         if (!bssid || !ssid || !enc || !chan || !mfp) continue;
+        /* A v2 file's client and BLE rows (#249) are not APs; they
+         * already fall short of six fields, and are named here too so
+         * a hand-edited one cannot read as an AP. */
+        if (!strcmp(bssid, "client") || !strcmp(bssid, "ble")) continue;
         /* Channel numbers top out at 233 (6 GHz); mfp is 0/1/2. A row
          * outside either is not one this writer produced. */
         int ch_v, mfp_v;
@@ -334,4 +406,135 @@ int wifi_snapshot_diff(const sloth_state_t *s, const char *baseline_path,
 
     free(base);
     return diffs;
+}
+
+/* "aa:bb:cc:dd:ee:ff", hex either case, nothing after. */
+static int parse_mac(const char *s, uint8_t out[6]) {
+    if (strlen(s) != 17) return 0;
+    for (int i = 0; i < 6; i++) {
+        int hi = hexnib(s[3 * i]), lo = hexnib(s[3 * i + 1]);
+        if (hi < 0 || lo < 0 || (i < 5 && s[3 * i + 2] != ':')) return 0;
+        out[i] = (uint8_t)(hi * 16 + lo);
+    }
+    return 1;
+}
+
+static int read_ap(sw_inv_t *inv, char *line) {
+    char *save = NULL;
+    char *bssid = strtok_r(line, "\t", &save);
+    char *ssid  = strtok_r(NULL, "\t", &save);
+    char *enc   = strtok_r(NULL, "\t", &save);
+    char *chan  = strtok_r(NULL, "\t", &save);
+    char *akm   = strtok_r(NULL, "\t", &save);
+    char *mfp   = strtok_r(NULL, "\t", &save);
+    char *ven   = strtok_r(NULL, "\t", &save);
+    sw_emitter_t e;
+    memset(&e, 0, sizeof(e));
+    int ch_v, mfp_v;
+    if (!bssid || !ssid || !enc || !chan || !akm || !mfp ||
+        !parse_mac(bssid, e.addr) || !field_int(chan, 0, 255, &ch_v) ||
+        !field_int(mfp, 0, 2, &mfp_v))
+        return 0;
+    e.kind = SW_K_AP;
+    field_unescape(ssid, e.ssid, sizeof(e.ssid));
+    if (!e.ssid[0]) e.flags |= SW_F_HIDDEN;
+    if (strcmp(enc, "-")) snprintf(e.enc, sizeof(e.enc), "%s", enc);
+    if (strcmp(akm, "-")) snprintf(e.akm, sizeof(e.akm), "%s", akm);
+    if (ven && strcmp(ven, "-")) snprintf(e.vendor, sizeof(e.vendor), "%s", ven);
+    e.channel = ch_v;
+    e.mfp = mfp_v;
+    return sweep_inv_add(inv, &e) == 0;
+}
+
+static int read_client(sw_inv_t *inv, char *rest) {
+    char *save = NULL;
+    char *mac = strtok_r(rest, "\t", &save);
+    char *chan = strtok_r(NULL, "\t", &save);
+    char *ven = strtok_r(NULL, "\t", &save);
+    sw_emitter_t e;
+    memset(&e, 0, sizeof(e));
+    int ch_v;
+    if (!mac || !chan || !parse_mac(mac, e.addr) ||
+        !field_int(chan, 0, 255, &ch_v))
+        return 0;
+    /* A locally administered or group address is a count, never a row
+     * (src/sweep.h), in a hand-edited file as in a sweep. */
+    if (e.addr[0] & 0x03) return 0;
+    e.kind = SW_K_CLIENT;
+    e.channel = ch_v;
+    if (ven) field_unescape(ven, e.vendor, sizeof(e.vendor));
+    return sweep_inv_add(inv, &e) == 0;
+}
+
+static int read_ble(sw_inv_t *inv, char *rest) {
+    char *save = NULL;
+    char *mac  = strtok_r(rest, "\t", &save);
+    char *type = strtok_r(NULL, "\t", &save);
+    char *cat  = strtok_r(NULL, "\t", &save);
+    char *name = strtok_r(NULL, "\t", &save);
+    sw_emitter_t e;
+    memset(&e, 0, sizeof(e));
+    if (!mac || !type || !parse_mac(mac, e.addr)) return 0;
+    if (!strcmp(type, "public"))      e.ble_type = SW_BLE_PUBLIC;
+    else if (!strcmp(type, "static")) e.ble_type = SW_BLE_STATIC;
+    else return 0;
+    /* A private address in a hand-edited file is still never a row
+     * (owner ruling 2026-11-25): only a static address's top bits are
+     * 11. */
+    if (e.ble_type == SW_BLE_STATIC && (e.addr[0] & 0xC0) != 0xC0) return 0;
+    e.kind = SW_K_BLE;
+    e.channel = -1;
+    if (cat)  field_unescape(cat, e.cat, sizeof(e.cat));
+    if (name) field_unescape(name, e.name, sizeof(e.name));
+    return sweep_inv_add(inv, &e) == 0;
+}
+
+int wifi_snapshot_read(const char *path, sw_inv_t *out, int *version) {
+    if (!path || !out) return -1;
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    sweep_inv_clear(out);
+    int ver = 0;
+    char line[1024];
+    int first = 1;
+    while (fgets(line, sizeof(line), f)) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        else if (!feof(f)) {
+            /* A line longer than any this writer produces: skip it
+             * whole rather than read its tail as a row. */
+            int c;
+            while ((c = fgetc(f)) != EOF && c != '\n') {}
+            first = 0;
+            continue;
+        }
+        if (first) {
+            first = 0;
+            if (!strcmp(line, "# sloth-snapshot v1")) { ver = 1; continue; }
+            if (!strcmp(line, "# sloth-snapshot v2")) { ver = 2; continue; }
+        }
+        if (line[0] == '#') {
+            int v;
+            if (!strncmp(line, "# ble_private\t", 14) &&
+                field_int(line + 14, 0, 1L << 30, &v))
+                out->file_ble_private = v;
+            else if (!strncmp(line, "# client_random\t", 16) &&
+                     field_int(line + 16, 0, 1L << 30, &v))
+                out->file_client_random = v;
+            continue;
+        }
+        if (!line[0]) continue;
+        if (!strncmp(line, "client\t", 7))   (void)read_client(out, line + 7);
+        else if (!strncmp(line, "ble\t", 4)) (void)read_ble(out, line + 4);
+        else                                 (void)read_ap(out, line);
+    }
+    fclose(f);
+    /* No magic line: a file the diff reader has always accepted (the
+     * pre-#137 hand-made baselines), read as v1. */
+    if (!ver) ver = 1;
+    out->has_kind[SW_K_AP] = 1;
+    out->has_kind[SW_K_CLIENT] = ver >= 2;
+    out->has_kind[SW_K_BLE] = ver >= 2;
+    if (version) *version = ver;
+    return 0;
 }

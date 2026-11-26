@@ -275,10 +275,13 @@ static int copy_snapshot(ho_t *h, const char *src, const char *name) {
     FILE *in = fdopen(fd, "r");
     if (!in) { close(fd); snprintf(h->err, sizeof(h->err), "%.200s: fdopen", src); return -1; }
     char line[1024];
-    static const char magic[] = "# sloth-snapshot v1";
-    if (!fgets(line, sizeof(line), in) || strncmp(line, magic, sizeof(magic) - 1) != 0) {
-        snprintf(h->err, sizeof(h->err), "%.200s: not a sloth snapshot (no \"%s\""
-                 " first line)", src, magic);
+    /* v2 (#249) adds client and BLE rows a v1 reader skips. */
+    static const char magic[] = "# sloth-snapshot v";
+    if (!fgets(line, sizeof(line), in) || strncmp(line, magic, sizeof(magic) - 1) != 0 ||
+        (strcmp(line + sizeof(magic) - 1, "1\n") != 0 &&
+         strcmp(line + sizeof(magic) - 1, "2\n") != 0)) {
+        snprintf(h->err, sizeof(h->err), "%.200s: not a sloth snapshot (no \"%s1\""
+                 " or \"%s2\" first line)", src, magic, magic);
         fclose(in);
         return -1;
     }

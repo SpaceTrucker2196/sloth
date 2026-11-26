@@ -164,6 +164,7 @@ CORE_BASE_SRCS = \
        src/attack_hw.c       \
        src/captive_portal.c  \
        src/wifi_snapshot.c   \
+       src/sweep.c           \
        src/wifi_assess.c     \
        src/wifi_baseline.c   \
        src/sensors.c         \

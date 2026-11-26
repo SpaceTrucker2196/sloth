@@ -15,7 +15,7 @@ this page is receive-only; it is the discipline sloth was built around.
 **Sources**: `docs/views/{probe,pnl,beacons,seqnum,assoc,eapol,channel,devices}.md`,
 `docs/wiki/{wifi-sigint,mac-randomisation,ja3-fingerprinting}.md`.
 
-**Last updated**: 2026-10-15 (#137: snapshot file format, SSID escaping).
+**Last updated**: 2026-11-25 (#249: snapshot format v2, clients and BLE advertisers, the counts-only addresses). 2026-10-15 (#137: snapshot file format, SSID escaping).
 
 ---
 
@@ -60,6 +60,26 @@ exactly as before, so the version line did not change. On read,
 outside either is skipped rather than read as channel 0. The
 `--baseline-in` drift report shows SSIDs in the same escaped form, so
 no on-air byte reaches the terminal raw.
+
+**Format v2** (#249, the baseline a sweep session compares against;
+owner ruling 2026-11-25: the baseline lives in this file, no database
+change). The first line is `# sloth-snapshot v2`; the header
+adds `# clients`, `# ble_devices`, and two counts-only lines,
+`# client_random` and `# ble_private`. After the AP rows come
+`client mac channel vendor` rows and `ble addr type category name`
+rows, each starting with its kind. Kept are clients with a universal
+address and BLE advertisers with a public or static random address
+(`type` `public` or `static`); a locally administered client address
+and a resolvable or non-resolvable private BLE address are counted as
+distinct addresses heard and are never a row (owner ruling 2026-11-25
+for BLE; the client side is held the same way because such an address
+changes per network). The vendor, category and name take the SSID's
+escape. A client or BLE row has fewer than the six fields an AP row
+needs, so a v1 reader (`--baseline-in` in any earlier sloth) skips it
+and reads the APs exactly as before; `--baseline-in` itself still
+diffs APs only. `--snapshot-out` writes v2 since #249; the handoff
+packet's `snapshot.tsv` stays v1 (it is built from `beacon_aps` in
+sloth.db, which holds no BLE rows).
 
 ## Technique 2 — Device fingerprinting
 

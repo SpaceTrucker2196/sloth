@@ -283,6 +283,7 @@ void run_research_mcp_tests(void);
 void run_research_view_tests(void);
 void run_fragattack_view_tests(void);
 void run_wifi_snapshot_tests(void);
+void run_sweep_tests(void);
 void run_wifi_assess_tests(void);
 void run_wifi_baseline_tests(void);
 void run_sensors_tests(void);
@@ -513,6 +514,7 @@ int main(void) {
     run_research_view_tests();
     run_fragattack_view_tests();
     run_wifi_snapshot_tests();
+    run_sweep_tests();
     run_wifi_assess_tests();
     run_wifi_baseline_tests();
     run_sensors_tests();

@@ -912,11 +912,15 @@ static void test_live_snapshot_beside_the_snapshot(void) {
     ASSERT_EQ(posture_live_tick(&L, &s, 0), 1);
 
     const char *r = pl_slurp(live);
-    ASSERT(contains(r, "# sloth-snapshot v1\n"));
+    ASSERT(contains(r, "# sloth-snapshot v2\n"));
     ASSERT(contains(r, "# label\tsite\\tA\n"));
     ASSERT(contains(r, "# session\trunning\n"));
     ASSERT(contains(r, "# count\t1\n"));
-    ASSERT(pl_ends_with(r, "02:00:00:00:00:01\tLobby\tWPA2\t6\t-\t0\t-\n"));
+    /* v2 (#249): the AP row, then the client and BLE column headers
+     * with no rows under them. */
+    ASSERT(pl_ends_with(r, "02:00:00:00:00:01\tLobby\tWPA2\t6\t-\t0\t-\n"
+                           "# client\tmac\tchannel\tvendor\n"
+                           "# ble\taddr\ttype\tcategory\tname\n"));
     struct stat st;
     ASSERT_EQ(stat(live, &st), 0);
     ASSERT_EQ((int)(st.st_mode & 0777), 0600);
