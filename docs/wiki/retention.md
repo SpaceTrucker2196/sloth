@@ -27,7 +27,7 @@ per-alert pcaps in `--pcap-dir` are swept on a 14-day default window
 (`ALERT_PCAP_DEFAULT_RETAIN_DAYS`), `tests/test_alert_pcap.c` for §2d
 (#166).
 
-**Last updated**: 2026-11-25 (#249 follow-up — §2e: randomised addresses the sweep resolved as stable are baseline rows; the rest stay counts). 2026-11-25 (#249 — §2e, sweep baselines: public and static BLE addresses kept per label in the snapshot file, outside the #239 purge; private addresses counts only). 2026-11-26 (#228 step 5, owner ruling 2026-11-25 — `twin_evidence_snapshots` on the finding tier, same reasoning as `karma_candidates` and `rogue_radius`: the evidence outlives nothing less than the finding it justifies). 2026-11-23 (#242 item 2 review — the tier table lists the tables `src/db.c` walks, 22 observation and 24 entity, and the ceiling's bound is 64 × 512 × 22). 2026-11-23 (#242 item 2 — `coverage_intervals` on the observation tier, the size ceiling may take it). 2026-11-20 (#239 review — a pass continues across maintenance; observation-tier groupings expire with their tier). 2026-11-20 (#239, owner ruling of that day — §2b, the random-address purge: a random address heard once is a count in `random_devices_daily` after 7 days, not a row; `retention.random_repeat_s`; §2.3 `random_devices_daily` is never pruned). 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
+**Last updated**: 2026-11-27 (#244 — `question_status` on the observation tier: 23 observation tables, the ceiling's bound 64 × 512 × 23). 2026-11-25 (#249 follow-up — §2e: randomised addresses the sweep resolved as stable are baseline rows; the rest stay counts). 2026-11-25 (#249 — §2e, sweep baselines: public and static BLE addresses kept per label in the snapshot file, outside the #239 purge; private addresses counts only). 2026-11-26 (#228 step 5, owner ruling 2026-11-25 — `twin_evidence_snapshots` on the finding tier, same reasoning as `karma_candidates` and `rogue_radius`: the evidence outlives nothing less than the finding it justifies). 2026-11-23 (#242 item 2 review — the tier table lists the tables `src/db.c` walks, 22 observation and 24 entity, and the ceiling's bound is 64 × 512 × 22). 2026-11-23 (#242 item 2 — `coverage_intervals` on the observation tier, the size ceiling may take it). 2026-11-20 (#239 review — a pass continues across maintenance; observation-tier groupings expire with their tier). 2026-11-20 (#239, owner ruling of that day — §2b, the random-address purge: a random address heard once is a count in `random_devices_daily` after 7 days, not a row; `retention.random_repeat_s`; §2.3 `random_devices_daily` is never pruned). 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
 
 ---
 
@@ -61,7 +61,7 @@ there is nothing to retain.
 
 | Tier | Window | Tables | What it holds |
 |------|--------|-------:|---------------|
-| observation | **1×** (30 d) | 22 | `bgp_sessions`, `ssh_flows`, `rdp_flows`, `snmp_flows`, `mqtt_flows`, `ldap_events`, `kerb_events`, `smb_sessions`, `deauth_events`, `seqnum_correlations`, `twin_episodes`, `eapol_events`, `scan_entries`, `scan_entry_ports`, `device_positions`, `sensor_positions`, `gnss_fixes`, `gnss_sightings`, `adsb_sightings`, `aprs_packets`, `victron_readings`, `coverage_intervals` |
+| observation | **1×** (30 d) | 23 | `bgp_sessions`, `ssh_flows`, `rdp_flows`, `snmp_flows`, `mqtt_flows`, `ldap_events`, `kerb_events`, `smb_sessions`, `deauth_events`, `seqnum_correlations`, `twin_episodes`, `eapol_events`, `scan_entries`, `scan_entry_ports`, `device_positions`, `sensor_positions`, `gnss_fixes`, `gnss_sightings`, `adsb_sightings`, `aprs_packets`, `victron_readings`, `coverage_intervals`, `question_status` |
 | entity | **3×** (90 d) | 24 | `devices`, `pnl_clients`, `pnl_ssids`, `probe_clients`, `beacon_aps`, `beacon_ap_ssids`, `ssid_akm_history`, `wifi_aps`, `wifi_stas`, `assocs`, `assoc_reqs`, `wifi_merged`, `arp`, `dhcp_leases`, `top_hosts`, `mdns_services`, `nbns_names`, `ssdp_devices`, `ndp_ras`, `ndp_ra_prefixes`, `sensors`, `adsb_aircraft`, `aprs_stations`, `victron_devices` |
 | finding | **12×** (360 d) | 7 | `alerts`, `alert_incidents`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests`, `twin_evidence_snapshots` |
 
@@ -421,10 +421,10 @@ is best read as a **pruning trigger, not a cap**. What it does:
    counted, so sloth's actual on-disk footprint can exceed `--db-max-mb`
    while the guard considers the file to be under it.
 2. If over, deletes the **512 oldest rows** (by `last_seen`) from each
-   of the 22 observation tables (`TIER_OBSERVATION` in `src/db.c`),
+   of the 23 observation tables (`TIER_OBSERVATION` in `src/db.c`),
    then runs `PRAGMA incremental_vacuum`.
 3. Repeats, at most **64 rounds per maintenance pass** — an upper bound
-   of 64 × 512 × 22 = 720 896 rows. If the file is still over target
+   of 64 × 512 × 23 = 753 664 rows. If the file is still over target
    after 64 rounds, the pass simply ends, **with no message**, and the
    next hourly pass continues where it left off.
 4. If a round deletes nothing — no prunable telemetry left — it logs
