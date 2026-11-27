@@ -11,7 +11,10 @@
  * keeps a per-client probe counter + first/last seen timestamps.
  * Snapshot copies into sloth_state_t for the view.
  *
- * Wildcard probes (empty SSID) are dropped — they leak no PNL info. */
+ * Wildcard probes (empty SSID) are dropped — they leak no PNL info.
+ *
+ * Each directed probe is also counted per 10-minute bucket for
+ * sloth.db's probe_history (src/probe_hist.h). */
 
 /* `os_fp` and `phy` may be NULL or empty; non-empty values get
  * sticky-stored on the matching client entry (first strong

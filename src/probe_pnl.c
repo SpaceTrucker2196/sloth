@@ -7,6 +7,7 @@
 #include "sensor_health.h"
 #include "bytes.h"
 #include "dot11_ie.h"
+#include "probe_hist.h"
 
 static pnl_client_t    g_tbl[MAX_PNL_CLIENTS];
 static int             g_n   = 0;
@@ -107,6 +108,9 @@ void probe_pnl_observe(const uint8_t mac[6], const char *ssid,
 {
     if (!ssid || !ssid[0]) return;   /* wildcard probes carry no PNL info */
     time_t now = sloth_wall();
+    /* The same probe, counted per 10-minute bucket for sloth.db's
+     * probe_history (src/probe_hist.h). Its own lock, taken alone. */
+    probe_hist_note(mac, ssid, now);
 
     pthread_mutex_lock(&g_mu);
 

@@ -384,7 +384,7 @@ static unsigned evict_scope(sh_evict_t k, unsigned *frames) {
     case SH_EVICT_ALERT: case SH_EVICT_PCAP_COOLDOWN: case SH_EVICT_EVIDENCE_FRAME:
     case SH_EVICT_DNS_LOG: case SH_EVICT_TLS_LOG: case SH_EVICT_QUIC_LOG:
     case SH_EVICT_HTTP_LOG: case SH_EVICT_NTP_LOG: case SH_EVICT_ICMP_LOG:
-    case SH_EVICT_RTL433: case SH_EVICT_KIND_COUNT:
+    case SH_EVICT_RTL433: case SH_EVICT_PROBE_HIST: case SH_EVICT_KIND_COUNT:
         break;
     }
     return 0;

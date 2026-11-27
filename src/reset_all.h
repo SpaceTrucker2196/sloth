@@ -97,6 +97,7 @@
     X(ownership_clear) \
     X(pm_forge_clear) \
     X(probe_clear) \
+    X(probe_hist_clear) \
     X(probe_latency_reset) \
     X(probe_pnl_clear) \
     X(queue_evict_clear) \

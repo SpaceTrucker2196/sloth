@@ -222,6 +222,7 @@ CORE_BASE_SRCS = \
        src/top_hosts.c       \
        src/host_cache.c      \
        src/probe_pnl.c       \
+       src/probe_hist.c      \
        src/views/pnl.c       \
        src/eapol_log.c       \
        src/eap_parse.c       \

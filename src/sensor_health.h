@@ -153,6 +153,10 @@ typedef enum {
      * (model, id) pair is whatever a transmitter puts on the air, so
      * the key space is the band's and not sloth's. */
     SH_EVICT_RTL433,        /* src/rtl433.c — least-recently-heard (model, id) device dropped */
+    /* Directed-probe history (JSONL 2.19.0, sloth.db v23): a NEW
+     * (MAC, SSID, bucket) key refused, drop-on-full like DEVICE, its
+     * probe not counted. Appended. */
+    SH_EVICT_PROBE_HIST,    /* src/probe_hist.c — a NEW (MAC, SSID, 10-minute bucket) key refused, its probe uncounted */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -198,7 +202,7 @@ uint64_t sh_evict_total_tables(void);
  * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending",
  * "deauth_obs", "deauth_victim", "rtsp_exchange", "rtsp_stream",
  * "lan_role", "ble_device", "bredr_lap", "ble_flood", "frag_ap_ident",
- * "probe_latency", "rtl433".
+ * "probe_latency", "rtl433", "probe_hist".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

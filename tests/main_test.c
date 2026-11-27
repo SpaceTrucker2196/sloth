@@ -250,6 +250,7 @@ void run_ip_color_tests(void);
 void run_top_hosts_tests(void);
 void run_host_cache_tests(void);
 void run_probe_pnl_tests(void);
+void run_probe_hist_tests(void);          /* tests/test_probe_hist.c */
 void run_eapol_log_tests(void);
 void run_seqnum_track_tests(void);
 void run_assoc_track_tests(void);
@@ -483,6 +484,7 @@ int main(void) {
     run_top_hosts_tests();
     run_host_cache_tests();
     run_probe_pnl_tests();
+    run_probe_hist_tests();
     run_eapol_log_tests();
     run_seqnum_track_tests();
     run_assoc_track_tests();
