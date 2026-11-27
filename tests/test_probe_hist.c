@@ -187,6 +187,42 @@ static void test_burst_capped_per_bucket(void) {
     ASSERT_EQ(probe_hist_keys(), PROBE_HIST_BUCKET_KEYS + 1);
 }
 
+/* A wall clock stepped forward then back (a bad GNSS or NTP step and
+ * its correction): the future bucket's written keys are freed once the
+ * clock is back, and the present bucket keeps its cap across drains.
+ * Seen red with g_newest the largest bucket ever heard: the future
+ * bucket pinned its keys until db_close(), and every present key was
+ * freed at each drain, so the per-bucket cap reset every minute. */
+static void test_clock_stepped_forward_then_back(void) {
+    probe_hist_set_sink(1);
+    time_t future = B0 + (time_t)100000 * PROBE_HIST_BUCKET_S;
+    for (unsigned i = 0; i < PROBE_HIST_BUCKET_KEYS; i++) {
+        uint8_t m[6]; mac_n(m, i);
+        probe_hist_note(m, "net", future + 5);
+    }
+    ASSERT_EQ(drain_all(), PROBE_HIST_BUCKET_KEYS);
+    ASSERT_EQ(drain_all(), 0);
+    /* Back to the present. */
+    for (unsigned i = 0; i < PROBE_HIST_BUCKET_KEYS; i++) {
+        uint8_t m[6]; mac_n(m, 10000 + i);
+        probe_hist_note(m, "net", B0 + 5);
+    }
+    ASSERT_EQ(drain_all(), PROBE_HIST_BUCKET_KEYS);
+    ASSERT_EQ(drain_all(), 0);
+    ASSERT_EQ(probe_hist_keys(), PROBE_HIST_BUCKET_KEYS);  /* the present's */
+    uint64_t d0 = probe_hist_dropped();
+    uint8_t late[6]; mac_n(late, 900000);
+    probe_hist_note(late, "net", B0 + 70);
+    ASSERT_EQ((long long)(probe_hist_dropped() - d0), 1);  /* cap held */
+    /* A probe a bucket late (two radios straddling the boundary) does
+     * not free the open bucket's keys. */
+    uint8_t a[6]; mac_n(a, 10000);
+    probe_hist_note(a, "net", B0 - 1);
+    ASSERT_EQ(drain_all(), 1);
+    ASSERT_EQ(drain_all(), 0);
+    ASSERT_EQ(probe_hist_keys(), PROBE_HIST_BUCKET_KEYS);
+}
+
 static time_t g_wall;
 static time_t fixed_wall(void) { return g_wall; }
 
@@ -222,6 +258,7 @@ void run_probe_hist_tests(void) {
     RUN_TEST(test_drain_in_pieces);
     RUN_TEST(test_ended_bucket_freed_after_drain);
     RUN_TEST(test_burst_capped_per_bucket);
+    RUN_TEST(test_clock_stepped_forward_then_back);
     RUN_TEST(test_pnl_observe_feeds_history);
     RUN_TEST(test_eviction_kind_named);
 }

@@ -55,8 +55,9 @@ void probe_hist_note(const uint8_t mac[6], const char *ssid, time_t now);
 
 /* Copy up to `max` keys with probes counted since the last drain into
  * `out` and zero their counts. Returns the number copied; call until it
- * returns 0. The call that finds nothing left also frees the keys of
- * buckets older than the newest one heard. */
+ * returns 0. The call that finds nothing left also frees the written
+ * keys of every bucket but the open one (the latest probe's, or the one
+ * before it for a probe a bucket late). */
 int  probe_hist_drain(probe_hist_row_t *out, int max);
 
 /* Keys held, and probes dropped for want of a key since the last

@@ -19,6 +19,11 @@ static probe_hist_row_t g_row[PROBE_HIST_SLOTS];
 static int16_t          g_idx[PH_INDEX];
 static int              g_n;
 static struct { time_t bucket; int n; } g_bk[PH_BUCKETS];
+/* The open bucket: the latest probe's, held back over a probe one
+ * bucket late (two radios straddling a boundary). Not the largest ever
+ * heard: after a wall clock stepped forward and back, that one would
+ * stay in the future, pinning its keys and freeing every present key
+ * at each drain, so the per-bucket cap would reset every drain. */
 static time_t           g_newest;
 static uint64_t         g_dropped;
 static int              g_sink;
@@ -125,15 +130,17 @@ void probe_hist_note(const uint8_t mac[6], const char *ssid, time_t now) {
     if (r->count == 0 || now < r->first_seen) r->first_seen = now;
     if (r->count == 0 || now > r->last_seen)  r->last_seen  = now;
     r->count++;
-    if (bucket > g_newest) g_newest = bucket;
+    if (bucket > g_newest || bucket < g_newest - PROBE_HIST_BUCKET_S)
+        g_newest = bucket;
     pthread_mutex_unlock(&g_mu);
 }
 
-/* Free the keys whose bucket has ended and whose counts are written. */
+/* Free the keys written and not of the open bucket: an ended bucket's,
+ * or a future one's after the clock stepped back. */
 static void compact(void) {
     int w = 0;
     for (int i = 0; i < g_n; i++) {
-        if (g_row[i].count == 0 && g_row[i].bucket < g_newest) continue;
+        if (g_row[i].count == 0 && g_row[i].bucket != g_newest) continue;
         if (w != i) g_row[w] = g_row[i];
         w++;
     }
