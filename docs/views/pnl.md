@@ -29,6 +29,13 @@ empty SSID) are dropped — they leak no PNL info.
 Storage is capped at `MAX_PNL_CLIENTS = 128` clients × 16 SSIDs each;
 LRU eviction by `last_seen`.
 
+With `--db`, each directed probe is also counted per (MAC, SSID,
+10-minute bucket) into `sloth.db`'s `probe_history` (schema v23,
+[sqlite-schema](../wiki/sqlite-schema.md)): the time series between the
+first and last seen this view shows, at most 2048 keys a bucket (the
+rest counted as `sensor_health`'s `evict_probe_hist`). Wildcard probes
+are not counted there either.
+
 ## OS fingerprint
 
 Each probe request can include vendor-specific Information Elements

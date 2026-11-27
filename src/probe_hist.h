@@ -59,7 +59,9 @@ void probe_hist_note(const uint8_t mac[6], const char *ssid, time_t now);
  * buckets older than the newest one heard. */
 int  probe_hist_drain(probe_hist_row_t *out, int max);
 
-/* Keys held, and probes dropped for want of a key (lifetime). */
+/* Keys held, and probes dropped for want of a key since the last
+ * probe_hist_clear() (db_close() clears; the lifetime tally is
+ * sh_evict_count(SH_EVICT_PROBE_HIST)). */
 int      probe_hist_keys(void);
 uint64_t probe_hist_dropped(void);
 
