@@ -159,7 +159,21 @@
  * creates it and its indexes (the same DDL the unconditional schema
  * carries) with the stamp in one transaction. No existing table or
  * value changes. */
-#define DB_SCHEMA_VERSION 22
+/* Bumped to 23 on 2026-11-27 (owner request, the Probes tab's
+ * waterfall): probe_history is a new table, directed probe requests
+ * counted per (MAC, SSID, 10-minute bucket) (src/probe_hist.h), on the
+ * observation tier. The v22 -> v23 step creates it and its indexes (the
+ * same DDL the unconditional schema carries) with the stamp in one
+ * transaction. No existing table or value changes. */
+#define DB_SCHEMA_VERSION 23
+
+/* The least time between two drains of the probe counter into
+ * probe_history (src/probe_hist.h), and a drain at db_close(). Each
+ * drain is one upsert per key heard since the last, inside the tick's
+ * own transaction, so a key is written at most
+ * PROBE_HIST_BUCKET_S / DB_PROBE_HIST_FLUSH_S times a bucket however
+ * often it probes; a killed process loses at most this much. */
+#define DB_PROBE_HIST_FLUSH_S 60
 
 /* The random-address purge (#239, owner ruling 2026-11-20). A devices
  * row whose MAC is locally administered, last heard more than
@@ -602,6 +616,9 @@ const char *db_schema_migrate_v20_sql(void);
 /* v21 -> v22 (#244): CREATE TABLE IF NOT EXISTS question_status and its
  * indexes. */
 const char *db_schema_migrate_v21_sql(void);
+/* v22 -> v23: CREATE TABLE IF NOT EXISTS probe_history and its
+ * indexes. */
+const char *db_schema_migrate_v22_sql(void);
 
 /* victron_readings' value column `i` (0 from voltage_v, in the writer's
  * bind order), NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration

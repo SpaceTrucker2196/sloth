@@ -153,6 +153,34 @@
     "CREATE INDEX IF NOT EXISTS idx_question_status_qid" \
     "  ON question_status(qid, last_seen);\n"
 
+/* probe_history (2026-11-27, schema v23): directed probe requests
+ * counted per (transmitter MAC, SSID, 600 s bucket), src/probe_hist.h.
+ * `bucket` is the bucket's start in Unix seconds (UTC, a multiple of
+ * 600); `count` the probes heard in it; first_seen / last_seen the
+ * first and last of them, so last_seen < bucket + 600 and the
+ * observation tier ages a row out by when its last probe was heard. A
+ * wildcard probe is never a row. `ssid` is the SSID element as
+ * pnl_ssids stores it (C0 and DEL as '?', other octets kept, so not
+ * always UTF-8). The primary key is the writer's upsert target and the
+ * per-device read; idx_probe_history_last_seen is the retention sweep's
+ * and "the last N hours" read's; idx_probe_history_ssid is "one SSID
+ * over time". Shared by the unconditional schema and the v22 -> v23
+ * step. */
+#define PROBE_HISTORY_DDL \
+    "CREATE TABLE IF NOT EXISTS probe_history (" \
+    "  mac        TEXT NOT NULL," \
+    "  ssid       TEXT NOT NULL," \
+    "  bucket     INTEGER NOT NULL," \
+    "  count      INTEGER NOT NULL," \
+    "  first_seen INTEGER NOT NULL," \
+    "  last_seen  INTEGER NOT NULL," \
+    "  PRIMARY KEY (mac, ssid, bucket)" \
+    ");\n" \
+    "CREATE INDEX IF NOT EXISTS idx_probe_history_last_seen" \
+    "  ON probe_history(last_seen);\n" \
+    "CREATE INDEX IF NOT EXISTS idx_probe_history_ssid" \
+    "  ON probe_history(ssid, bucket);\n"
+
 static const char SCHEMA_SQL[] =
     /* ── meta ────────────────────────────────────────────── */
     "CREATE TABLE IF NOT EXISTS meta ("
@@ -1193,7 +1221,8 @@ static const char SCHEMA_SQL[] =
     RANDOM_DEVICES_DAILY_DDL
 
     COVERAGE_INTERVALS_DDL
-    QUESTION_STATUS_DDL;
+    QUESTION_STATUS_DDL
+    PROBE_HISTORY_DDL;
 
 /* Applied before the version check — see db.h. */
 static const char META_SQL[] =
@@ -1408,6 +1437,10 @@ static const char MIGRATE_V20_SQL[] =
  * indexes. No existing table or value changes. */
 static const char MIGRATE_V21_SQL[] = QUESTION_STATUS_DDL;
 
+/* v22 -> v23 (2026-11-27): probe_history, a new table and its indexes.
+ * No existing table or value changes. */
+static const char MIGRATE_V22_SQL[] = PROBE_HISTORY_DDL;
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -1432,6 +1465,7 @@ const char *db_schema_migrate_v18_sql(void) { return MIGRATE_V18_SQL; }
 const char *db_schema_migrate_v19_sql(void) { return MIGRATE_V19_SQL; }
 const char *db_schema_migrate_v20_sql(void) { return MIGRATE_V20_SQL; }
 const char *db_schema_migrate_v21_sql(void) { return MIGRATE_V21_SQL; }
+const char *db_schema_migrate_v22_sql(void) { return MIGRATE_V22_SQL; }
 
 /* --print-schema (#185 item 4). The statements a new file gets, in the
  * order db_open() applies them, then the version row check_version()

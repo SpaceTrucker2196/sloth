@@ -39,6 +39,7 @@
 #include "alert_quality.h"
 #include "alert_lifecycle.h"
 #include "questions_live.h"
+#include "probe_hist.h"
 #include "rule_coverage_live.h"
 
 /* Maintenance is hourly: pruning is a scan over every table, and the
@@ -90,6 +91,8 @@ static int      g_over_ceiling_reported;
 static sqlite3_int64 g_session_id;        /* current survey session (#56) */
 static time_t        g_prev_session_end;  /* when the last visit ended */
 static uint32_t      g_cov_written;       /* coverage interval last written (#242) */
+static time_t        g_ph_drained;        /* probe counter last drained (v23) */
+static void db_probe_hist_flush(void);
 /* The last written answer of each site question (#244). */
 static struct { char qid[Q_ID_LEN]; uint64_t sig; } g_qsig[Q_MAX];
 static int           g_qsig_n;
@@ -127,6 +130,12 @@ static const char *const TIER_OBSERVATION[] = {
      * changed. Derived from the findings and coverage rows beside it,
      * and expires with them. */
     "question_status",
+    /* Directed-probe history (schema v23): a count per device, SSID and
+     * ten minutes. The who-probed-for-what inventory is pnl_ssids, on
+     * the entity tier; these are the observations between its first
+     * and last, the bulkiest probe data the file holds, and the size
+     * ceiling may take them. */
+    "probe_history",
 };
 
 /* 3x — the inventory. "Which devices were on this network in March"
@@ -203,6 +212,7 @@ enum {
     ST_VICTRON_DEV, ST_VICTRON_READ,
     ST_COV_IV,
     ST_QSTATUS,
+    ST_PROBE_HIST,
     ST_COUNT
 };
 
@@ -732,6 +742,16 @@ static const char *const SQL[ST_COUNT] = {
     "INSERT INTO question_status (last_seen,daemon,qid,priority,question,"
     "source,status,why,kinds,observable,partly,blind,n_alerts,found,ids)"
     " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+/* v23: a drain adds the probes counted since the last one to the
+ * (mac, ssid, bucket) row, so a key drained several times in its bucket
+ * stays one row whose count is the bucket's total. */
+[ST_PROBE_HIST] =
+    "INSERT INTO probe_history (mac,ssid,bucket,count,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6)"
+    " ON CONFLICT(mac,ssid,bucket) DO UPDATE SET"
+    "  count=probe_history.count+excluded.count,"
+    "  first_seen=MIN(probe_history.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(probe_history.last_seen,excluded.last_seen)",
 [ST_SENSOR_POS] =
     "INSERT OR IGNORE INTO sensor_positions (last_seen,lat,lon,alt_m,acc_m,"
     "loc_src,sats,hdop) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -1326,6 +1346,8 @@ static const db_step_t g_steps[] = {
       " withdraw_why (#245)" },
     { 21, db_schema_migrate_v21_sql, TABLES_NONE,
       "question_status created (#244)" },
+    { 22, db_schema_migrate_v22_sql, TABLES_NONE,
+      "probe_history created" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1473,6 +1495,7 @@ int db_open(const char *path) {
     /* A new file is written every interval the ring still holds. */
     g_cov_written = 0;
     g_qsig_n = 0;
+    g_ph_drained = 0;
     memset(g_adsb_mem, 0, sizeof(g_adsb_mem));
     g_aprs_seq = 0;
     memset(g_victron_mem, 0, sizeof(g_victron_mem));
@@ -1561,6 +1584,7 @@ int db_open(const char *path) {
     g_over_ceiling_reported = 0;
     g_inc_pend_n = 0;
     postrack_set_sink(1);   /* --gps samples now have somewhere to go */
+    probe_hist_set_sink(1); /* directed probes are counted from here */
     alerts_set_incident_hook(db_incident_hook);   /* #175 */
     return 1;
 }
@@ -1572,6 +1596,9 @@ void db_close(void) {
     g_inc_pend_n = 0;
     alerts_set_incident_hook(NULL);
     postrack_set_sink(0);
+    /* The probes counted since the last drain, then nothing more. */
+    db_probe_hist_flush();
+    probe_hist_clear();
     for (int i = 0; i < ST_COUNT; i++) {
         if (g_st[i]) { sqlite3_finalize(g_st[i]); g_st[i] = NULL; }
     }
@@ -2267,6 +2294,42 @@ static void write_question_status(const sloth_state_t *s, time_t now) {
         bind_txt(st, 14, kinds);
         bind_txt(st, 15, ids);
         step_reset(ST_QSTATUS);
+    }
+}
+
+/* v23: drain src/probe_hist.c's counter into probe_history. */
+static void write_probe_history(void) {
+    static probe_hist_row_t r[256];
+    int n;
+    while ((n = probe_hist_drain(r, (int)(sizeof(r) / sizeof(r[0])))) > 0) {
+        for (int i = 0; i < n; i++) {
+            char mac[18]; mac_str(r[i].mac, mac);
+            sqlite3_stmt *st = g_st[ST_PROBE_HIST];
+            bind_txt(st, 1, mac);
+            bind_txt(st, 2, r[i].ssid);
+            sqlite3_bind_int64(st, 3, (sqlite3_int64)r[i].bucket);
+            sqlite3_bind_int64(st, 4, (sqlite3_int64)r[i].count);
+            sqlite3_bind_int64(st, 5, (sqlite3_int64)r[i].first_seen);
+            sqlite3_bind_int64(st, 6, (sqlite3_int64)r[i].last_seen);
+            step_reset(ST_PROBE_HIST);
+        }
+    }
+}
+
+/* db_close(): the probes counted since the last tick's drain, in a
+ * transaction of their own, as incident_queue_flush() writes its
+ * queue. */
+static void db_probe_hist_flush(void) {
+    if (!db_is_open() || !g_st[ST_PROBE_HIST]) return;
+    if (!exec("BEGIN IMMEDIATE", "probe history begin")) {
+        db_fail("probe history begin");
+        return;
+    }
+    write_probe_history();
+    if (g_disabled) { exec("ROLLBACK", "probe history rollback"); return; }
+    if (!exec("COMMIT", "probe history commit")) {
+        exec("ROLLBACK", "probe history rollback");
+        db_fail("probe history commit");
     }
 }
 
@@ -2991,7 +3054,8 @@ static long long prune_oldest_observations(int batch) {
  *    a beacon BSSID is an SSID's, and ARP / DHCP / mDNS / station /
  *    camera rows are the joined network's); any assoc_reqs,
  *    btm_requests or eapol_events row (a client that asked a BSS for an
- *    association); a wifi_stas or arp row.
+ *    association); a wifi_stas or arp row; any probe_history row
+ *    (v23: every one is a directed probe for an SSID).
  *
  * The three lookups with no index on the column (seqnum_correlations'
  * mac_b, eapol_events' sta_mac, arp's mac) are NOT IN over a list
@@ -3018,6 +3082,7 @@ static const char RD_SELECT_SQL[] =
     "                 WHERE x.mac = d.mac AND x.ssid <> '')"
     " AND NOT EXISTS (SELECT 1 FROM probe_clients x"
     "                 WHERE x.mac = d.mac AND COALESCE(x.ssid,'') <> '')"
+    " AND NOT EXISTS (SELECT 1 FROM probe_history x WHERE x.mac = d.mac)"
     " AND NOT EXISTS (SELECT 1 FROM assocs x WHERE x.sta_mac = d.mac)"
     " AND NOT EXISTS (SELECT 1 FROM seqnum_correlations x"
     "                 WHERE x.mac_a = d.mac)"
@@ -3501,6 +3566,12 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_positions      ();
     write_coverage_intervals();
     write_question_status(s, now);
+    /* Every DB_PROBE_HIST_FLUSH_S, or at once after the wall clock
+     * stepped back past the last drain. */
+    if (now - g_ph_drained >= DB_PROBE_HIST_FLUSH_S || now < g_ph_drained) {
+        write_probe_history();
+        g_ph_drained = now;
+    }
     /* gnss_fixes / gnss_sightings and the decoders' tables are
      * sloth-rf's alone since the cutover (#216, ADR 0010). sloth-wifi
      * holds a receiver's fix and sky too (it links the same reader, for

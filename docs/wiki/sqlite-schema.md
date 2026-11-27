@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the schema and its v1 → v22 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the schema and its v1 → v23 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154, #170 and #239.
 
-**Last updated**: 2026-11-25 (#244: schema v22, the `question_status` table, one row each time a site question's answer changes, observation tier), 2026-11-25 (#245: schema v21 (built as v20, renumbered over #228's v20 on 2026-11-27), `alert_incidents` gains `state`, `prelim_at`, `confirmed_at` and `withdraw_why`, and a preliminary or withdrawn incident is a row there, never an `alerts` row; the v20 → v21 step and its two tests), 2026-11-26 (#228 step 5, owner ruling 2026-11-25: schema v20, `twin_evidence_snapshots`, the evidence vector behind an `EVIL_TWIN` pair's confidence for a future labelled-training pass, on the finding tier and deliberately not latched like the rest of this file; the v19 → v20 step and its two tests), 2026-11-24 (#250 review: `alert_incidents` and `coverage_intervals` name their offline readers, `--handoff` and `--interference-report`, and what of each they parse), 2026-11-23 (#246: schema v19, the quality columns of `alert_incidents`, `complete`, `complete_why`, `latency_ms`, `corroboration` and `src_state`, their order-free upsert; the v18 → v19 step and its two tests), 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
+**Last updated**: 2026-11-27 (owner request, the Probes tab's waterfall: schema v23, `probe_history`, directed probes counted per MAC, SSID and 10-minute bucket, observation tier, drained every 60 s; the v22 → v23 step and its two tests; the random-address purge keeps a device with a `probe_history` row), 2026-11-25 (#244: schema v22, the `question_status` table, one row each time a site question's answer changes, observation tier), 2026-11-25 (#245: schema v21 (built as v20, renumbered over #228's v20 on 2026-11-27), `alert_incidents` gains `state`, `prelim_at`, `confirmed_at` and `withdraw_why`, and a preliminary or withdrawn incident is a row there, never an `alerts` row; the v20 → v21 step and its two tests), 2026-11-26 (#228 step 5, owner ruling 2026-11-25: schema v20, `twin_evidence_snapshots`, the evidence vector behind an `EVIL_TWIN` pair's confidence for a future labelled-training pass, on the finding tier and deliberately not latched like the rest of this file; the v19 → v20 step and its two tests), 2026-11-24 (#250 review: `alert_incidents` and `coverage_intervals` name their offline readers, `--handoff` and `--interference-report`, and what of each they parse), 2026-11-23 (#246: schema v19, the quality columns of `alert_incidents`, `complete`, `complete_why`, `latency_ms`, `corroboration` and `src_state`, their order-free upsert; the v18 → v19 step and its two tests), 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
 in the entity tier and `victron_readings` in the observation tier, at
 most one reading row a minute per device, the stamp-only v14 → v15 step
 and its two tests; slothweb's Victron tab charts `victron_readings`).
@@ -181,14 +181,14 @@ These are what make the file trustworthy rather than merely present.
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 | One row per incident: span widens, `peak_sev`/`count`/`observations` only rise, a close once recorded stays; `sev` the latest | `alert_incidents` | Written each tick from the hook's queue and then from the snapshot, and by a full queue's own flush between ticks. Every column but `sev` comes out the same whatever the order; `sev` is the last write's, and the snapshot, the newest view, is written last (#175). See *Per-incident rows* below. |
 
-## Schema — 59 tables, v1 → v22
+## Schema — 60 tables, v1 → v23
 
-`meta` holds `schema_version`, currently **22**. `db_open()` checks it
+`meta` holds `schema_version`, currently **23**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
-to hit first. Since #154 the chain covers the full **v1 → v22**: any
+to hit first. Since #154 the chain covers the full **v1 → v23**: any
 file this build has ever written opens and migrates forward. Only a
-file from a *newer* build (`schema_version` above 22) is refused.
+file from a *newer* build (`schema_version` above 23) is refused.
 
 (The table count above is measured — `grep -oE "CREATE TABLE IF NOT
 EXISTS [a-zA-Z_0-9]+" src/db_schema.c | sort -u | wc -l` — not carried
@@ -415,6 +415,68 @@ no address and no SSID. On the observation tier: an answer is derived
 from the finding and coverage rows beside it and expires with them.
 "When did Q1 become a finding" is
 `SELECT last_seen, found, ids FROM question_status WHERE qid='Q1' AND status='finding' ORDER BY last_seen`.
+
+**v23** (2026-11-27, owner request: the Probes tab's waterfall): a new
+table, `probe_history`, with indexes on `last_seen` and `(ssid,
+bucket)`; no other table or value changes. Not additive for slothweb,
+for the reason v18 gives: sloth-mesh's `WEB_SDB_SCHEMA_MAX` has to reach
+23, with a contract re-pin, and be installed before this sloth is.
+
+**The v22 → v23 migration.** `db_schema_migrate_v22_sql()` is the
+table's own DDL (`CREATE TABLE IF NOT EXISTS`, the same text the
+unconditional schema carries) in the step's one `BEGIN IMMEDIATE`
+transaction with the stamp. Tested on a v22 file (a current file with
+the table and its indexes dropped and the stamp set to 22, a device, a
+`pnl_ssids` and a `question_status` row riding along;
+`test_v22_file_migrates_additively`: the table empty with its 6 columns,
+its 3-column key and two indexes, the rows as they were) and on one
+whose stamp a trigger refuses
+(`test_v22_migration_failure_leaves_file_unchanged`: it stays v22
+without the table). Every older-version fixture that starts from a
+current file drops it first (`PRE_V23_SQL` in `tests/test_db.c`).
+
+**`probe_history`** `(mac, ssid, bucket, count, first_seen, last_seen)`,
+key `(mac, ssid, bucket)`. Directed probe requests (a non-empty SSID
+element; a wildcard probe names no network and is never a row) counted
+per transmitter address, SSID and 10-minute bucket, sloth-wifi's alone
+(sloth-rf has no capture and writes none). `bucket` is the bucket's
+start in Unix seconds, UTC, a multiple of 600 (`PROBE_HIST_BUCKET_S`);
+`count` the probes heard in it; `first_seen` / `last_seen` the first and
+last of them, so `bucket <= first_seen <= last_seen < bucket + 600`.
+`mac` is lowercase `aa:bb:cc:dd:ee:ff` as everywhere in the file (a
+locally administered one is a randomised address: the second hex digit
+is 2, 3, 6, 7, a, b, e or f); `ssid` is the element as `pnl_ssids` holds
+it (C0 controls and DEL written `?`, other octets kept, so not always
+UTF-8). Where `pnl_ssids` says a device probed for a network between
+two times, this is the shape in between.
+
+How it is written (`src/probe_hist.h`, `write_probe_history()`): the
+capture thread counts each probe `probe_pnl_observe()` takes into a
+bounded table, and the tick drains it every `DB_PROBE_HIST_FLUSH_S`
+(60 s) and at close, inside the tick's own transaction: one upsert per
+key heard since the last drain that adds its count to the row. So a
+key is at most ten upserts a bucket however often it probes, a row
+for the bucket now open grows while it is open, and a killed process
+loses at most the last minute. At most `PROBE_HIST_BUCKET_KEYS` (2048)
+keys a bucket: a probe that would need a new key past that, or past
+the table's two buckets' worth, is not counted and is noted in
+`sensor_health`'s `evict_probe_hist` ([[jsonl-schema]] 2.19.0). Probes
+on a key already held are always counted, so a burst of randomised
+addresses costs the rows of its newest addresses in that bucket, not
+the counts of the devices already there, and the file grows by at
+most 2048 rows a bucket (294 912 a day). Nothing is counted without
+`--db`.
+
+On the observation tier: each row is an observation between the
+`pnl_ssids` inventory's first and last, which stays on the entity
+tier; past the window it goes, and the size ceiling may take it. The
+random-address purge treats a `probe_history` row as a tie to an SSID,
+as it does a `pnl_ssids` one. "One SSID over time" reads
+`idx_probe_history_ssid`; "the last N hours" reads
+`idx_probe_history_last_seen` (a bucket's rows all have `last_seen` at
+or after the bucket's start, so `last_seen >= T` finds every bucket
+starting at or after `T`, and the one bucket before it that was still
+heard after `T`); one device's rows read the key.
 
 **`coverage_intervals`** `(start, last_seen, dur_ms, radio_ms, ms_24,
 ms_5, ms_5dfs, ms_6, ms_unknown, f_beacon, f_probe, f_auth, f_assoc,
@@ -789,6 +851,7 @@ Keyed by natural identity, bounded by the fixed arrays in `sloth.h`.
 | `devices` | `mac` | synthesised profile + risk signals; camera identity since v6 (`device_class`, `camera_vendor`, `camera_model`, `setup_mode`, `cam_signals` — sticky only for the MAC-keyed beacon bits 2 and 16: those OR, the class they imply and `setup_mode` only rise, and the vendor stays while they stand; the IP-joined bits, the class they alone gave and `camera_model` are the latest tick's, so a reused lease does not write a camera onto another host's MAC for good — see [[camera-detection]]). An IP-only camera record (no MAC) is not written. Since v7 also `cam_score`, `cam_evidence`, `cam_vetoes`, `cam_conflict`, `dhcp_prl`, `dhcp_vci` (#155), the latest tick's; `device_class` 3 (`not-camera`) never overrides a MAC-keyed camera class |
 | `pnl_clients` / `pnl_ssids` | `mac` / `(mac, ssid)` | split so *"which devices remember network X"* is a join, not a scan of repeated JSON arrays — the deanonymisation question |
 | `probe_clients` | `mac` | unassociated 802.11 devices |
+| `probe_history` | `(mac, ssid, bucket)` | directed probes counted per 10-minute bucket (v23); an observation-tier table listed here beside the PNL it details, see the v23 section |
 | `beacon_aps` / `beacon_ap_ssids` | `bssid` / `(bssid, ssid)` | passive monitor inventory; the SSID child table is the KARMA signal and the multi-VAP topology record |
 | `wifi_aps` | `bssid` | nl80211 scan list — kept **separate** from `beacon_aps` because they are different observations with different trust: what we heard on the air versus what the kernel reports |
 | `wifi_stas` | `mac` | |
@@ -1129,7 +1192,7 @@ rows. Entities keep **3×**, findings keep **12×**.
 
 | Tier | Window | Contents |
 |---|---|---|
-| observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations, `device_positions`, `sensor_positions`, `gnss_fixes`, `gnss_sightings`, `adsb_sightings`, `aprs_packets`, `victron_readings`, `coverage_intervals`, `question_status` |
+| observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations, `device_positions`, `sensor_positions`, `gnss_fixes`, `gnss_sightings`, `adsb_sightings`, `aprs_packets`, `victron_readings`, `coverage_intervals`, `question_status`, `probe_history` |
 | entity | 3× | devices, PNL, beacons, assocs, ARP, leases, discovery, sensors, `adsb_aircraft`, `aprs_stations`, `victron_devices` |
 | finding | 12× | `alerts`, `alert_incidents`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
 
@@ -1268,6 +1331,12 @@ those three here.
 # Which devices remember a given network? (the deanonymisation question)
 sqlite3 sloth.db "SELECT mac, first_seen, last_seen FROM pnl_ssids
                   WHERE ssid='CorpWiFi' ORDER BY last_seen DESC;"
+
+# Probes for a network ten minutes at a time, the last 24 hours, by device
+sqlite3 sloth.db "SELECT datetime(bucket,'unixepoch'), mac, count
+                  FROM probe_history WHERE ssid='CorpWiFi'
+                    AND bucket >= strftime('%s','now') - 86400
+                  ORDER BY bucket, mac;"
 
 # Who was here between 02:00 and 04:00?
 sqlite3 sloth.db "SELECT mac, vendor, hostname FROM devices

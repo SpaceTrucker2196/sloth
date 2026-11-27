@@ -37,6 +37,8 @@
 #include "sloth.h"
 #include "ip_color.h"
 #include "rsn_ie.h"
+#include "probe_hist.h"
+#include "db.h"
 
 #define FILE_MAX (4 * 1024 * 1024)
 
@@ -82,8 +84,9 @@ static char *slurp(const char *path) {
 /* ── constants ─────────────────────────────────────────────────────── */
 
 static int constants(void) {
-    puts("# sloth's constants the page mirrors, compiled from include/sloth.h and");
-    puts("# src/ip_color.h by tools/contract_parity.c (not parsed out of the text).");
+    puts("# sloth's constants the page mirrors, compiled from include/sloth.h,");
+    puts("# src/ip_color.h, src/probe_hist.h and src/db.h by tools/contract_parity.c");
+    puts("# (not parsed out of the text).");
     puts("name\tvalue");
 #define C(x) printf("%s\t%lld\n", #x, (long long)(x))
     C(DEV_SRC_ARP); C(DEV_SRC_DHCP); C(DEV_SRC_MDNS); C(DEV_SRC_BEACON);
@@ -99,6 +102,10 @@ static int constants(void) {
     C(IP_NUM_COLORS);
     C(IP_SRC_CONN); C(IP_SRC_PKT); C(IP_SRC_ARP); C(IP_SRC_DNS);
     C(IP_SRC_ICMP); C(IP_SRC_ALERT); C(IP_SRC_DEV);
+    /* sloth.db's probe_history (schema v23): the bucket width a reader
+     * steps by, the keys a bucket holds at most, and how stale the open
+     * bucket's rows can be. */
+    C(PROBE_HIST_BUCKET_S); C(PROBE_HIST_BUCKET_KEYS); C(DB_PROBE_HIST_FLUSH_S);
 #undef C
     return ferror(stdout) ? 1 : 0;
 }

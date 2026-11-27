@@ -34,6 +34,7 @@
 #include "tune.h"
 #include "alert_lifecycle.h"
 #include "questions.h"
+#include "probe_hist.h"
 
 /* The current schema version as meta stores it: every "migrates to
  * current" test pins this, not a literal, so a bump moves one line. */
@@ -4173,6 +4174,12 @@ static void test_v13_migration_failure_leaves_file_unchanged(void) {
  * SQLite 3.35.0 and sloth's floor is 3.31.0 (src/db.c). The table is
  * empty on a fresh file, so nothing is lost. */
 /* A file before v22 (#244) has no question_status table. */
+/* A file before v23 has no probe_history table. */
+#define PRE_V23_SQL \
+    "DROP INDEX idx_probe_history_last_seen;" \
+    "DROP INDEX idx_probe_history_ssid;" \
+    "DROP TABLE probe_history;"
+
 #define PRE_V22_SQL \
     "DROP INDEX idx_question_status_last_seen;" \
     "DROP INDEX idx_question_status_qid;" \
@@ -4207,7 +4214,7 @@ static void write_v14_file(void) {
     ASSERT_EQ(sqlite3_exec(h,
         "DROP TABLE victron_devices; DROP TABLE victron_readings;"
         PRE_V19_INCIDENTS_SQL
-        PRE_V22_SQL
+        PRE_V22_SQL PRE_V23_SQL
         "INSERT INTO alerts (key,type,sev,title,count,first_seen,last_seen)"
         " VALUES ('v14-key',1,1,'v14-row',7,1600000000,1600000100);"
         "UPDATE meta SET value='14' WHERE key='schema_version';",
@@ -4281,7 +4288,7 @@ static void write_v15_file(void) {
     ASSERT_EQ(sqlite3_exec(h,
         "DROP TABLE victron_readings;"
         PRE_V19_INCIDENTS_SQL
-        PRE_V22_SQL
+        PRE_V22_SQL PRE_V23_SQL
         "CREATE TABLE victron_readings (last_seen INTEGER NOT NULL,"
         " mac TEXT NOT NULL, src TEXT NOT NULL, rssi INTEGER,"
         " voltage_v REAL, aux_voltage_v REAL, mid_voltage_v REAL,"
@@ -4357,7 +4364,7 @@ static void write_v16_file(void) {
     ASSERT_EQ(sqlite3_exec(h,
         "DROP TABLE random_devices_daily;"
         PRE_V19_INCIDENTS_SQL
-        PRE_V22_SQL
+        PRE_V22_SQL PRE_V23_SQL
         "INSERT INTO devices (mac,first_seen,last_seen,sources)"
         " VALUES ('02:00:00:00:00:01',1600000000,1600000000,16);"
         "UPDATE meta SET value='16' WHERE key='schema_version';",
@@ -4430,7 +4437,7 @@ static void write_v17_file(void) {
         "DROP INDEX idx_coverage_intervals_last_seen;"
         "DROP TABLE coverage_intervals;"
         PRE_V19_INCIDENTS_SQL
-        PRE_V22_SQL
+        PRE_V22_SQL PRE_V23_SQL
         "INSERT INTO devices (mac,first_seen,last_seen,sources)"
         " VALUES ('00:11:22:00:00:01',1600000000,1600000100,16);"
         "INSERT INTO random_devices_daily (day,sources,count,first_seen,last_seen)"
@@ -4518,7 +4525,7 @@ static void write_v18_file(void) {
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     ASSERT_EQ(sqlite3_exec(h,
         PRE_V19_INCIDENTS_SQL
-        PRE_V22_SQL
+        PRE_V22_SQL PRE_V23_SQL
         "INSERT INTO alert_incidents (key,incident_id,type,first_seen,"
         "last_seen,sev,peak_sev,count,observations,closed_at,reason)"
         " VALUES ('v18-key','00000000000000b1',18,1600000000,1600000100,"
@@ -4601,7 +4608,7 @@ static void write_v19_file(void) {
     sqlite3 *h = NULL;
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     char sql[4096];
-    snprintf(sql, sizeof sql, "%s%s%s", PRE_V19_INCIDENTS_SQL PRE_V22_SQL,
+    snprintf(sql, sizeof sql, "%s%s%s", PRE_V19_INCIDENTS_SQL PRE_V22_SQL PRE_V23_SQL,
              db_schema_migrate_v18_sql(),
         "DROP INDEX idx_twin_evidence_snapshots_last_seen;"
         "DROP TABLE twin_evidence_snapshots;"
@@ -4764,7 +4771,7 @@ static void write_v20_file(void) {
     sqlite3 *h = NULL;
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     char sql[4096];
-    snprintf(sql, sizeof sql, "%s%s%s", PRE_V19_INCIDENTS_SQL PRE_V22_SQL,
+    snprintf(sql, sizeof sql, "%s%s%s", PRE_V19_INCIDENTS_SQL PRE_V22_SQL PRE_V23_SQL,
              db_schema_migrate_v18_sql(),
              "INSERT INTO alert_incidents (key,incident_id,type,first_seen,"
              "last_seen,sev,peak_sev,count,observations,closed_at,reason,"
@@ -4843,7 +4850,7 @@ static void write_v21_file(void) {
     sqlite3 *h = NULL;
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     ASSERT_EQ(sqlite3_exec(h,
-        PRE_V22_SQL
+        PRE_V22_SQL PRE_V23_SQL
         "INSERT INTO devices (mac,first_seen,last_seen,sources)"
         " VALUES ('00:11:22:00:00:21',1600000000,1600000100,16);"
         "INSERT INTO alert_incidents (key,incident_id,type,first_seen,"
@@ -4968,6 +4975,178 @@ static void test_question_status_ages_with_observations(void) {
     db_maintain(NOW);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status"), 1);
     ASSERT_EQ(q_int("SELECT last_seen FROM question_status"), recent);
+    db_close();
+    unlink(db_path);
+}
+
+/* ── Schema v23: probe_history ────────────────────────────────────── */
+
+/* A v22 file: a current file with probe_history and its indexes dropped
+ * and the stamp set to 22, exactly a v22 file's shape, since v22 -> v23
+ * adds a table and touches no other. A device, a PNL SSID and a
+ * question_status row ride along. */
+static void write_v22_file(void) {
+    fresh_db();
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        PRE_V23_SQL
+        "INSERT INTO devices (mac,first_seen,last_seen,sources)"
+        " VALUES ('00:11:22:00:00:22',1600000000,1600000100,16);"
+        "INSERT INTO pnl_ssids (mac,ssid,first_seen,last_seen)"
+        " VALUES ('00:11:22:00:00:22','Cafe',1600000000,1600000100);"
+        "INSERT INTO question_status (last_seen,daemon,qid,priority,question,"
+        "source,status,kinds) VALUES (1600000100,'wifi','Q1',1,'q?','defaults',"
+        "'finding',16);"
+        "UPDATE meta SET value='22' WHERE key='schema_version';",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v22 -> v23: the table and its two indexes arrive empty, and the rows
+ * that were there read as they were. */
+static void test_v22_file_migrates_additively(void) {
+    write_v22_file();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name='probe_history'"), 0);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, DB_VER_STR);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('probe_history')"), 6);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('probe_history')"
+                    " WHERE pk > 0"), 3);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                    " AND name IN ('idx_probe_history_last_seen',"
+                    "'idx_probe_history_ssid')"), 2);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM probe_history"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices WHERE mac='00:11:22:00:00:22'"
+                    " AND first_seen=1600000000 AND last_seen=1600000100"
+                    " AND sources=16"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pnl_ssids WHERE mac='00:11:22:00:00:22'"
+                    " AND ssid='Cafe' AND last_seen=1600000100"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM question_status WHERE qid='Q1'"
+                    " AND status='finding'"), 1);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v22 file whose stamp cannot be written stays v22 without the
+ * table: the CREATE and the stamp are one transaction. Seen red with
+ * the v22 step's SQL run outside its BEGIN IMMEDIATE (the table stayed
+ * beside a v22 stamp). */
+static void test_v22_migration_failure_leaves_file_unchanged(void) {
+    write_v22_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v23 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='23'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "22");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE name IN"
+                    " ('probe_history','idx_probe_history_last_seen',"
+                    "'idx_probe_history_ssid')"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pnl_ssids"), 1);
+    unlink(db_path);
+}
+
+/* The counter reaches probe_history at the first tick, then no sooner
+ * than DB_PROBE_HIST_FLUSH_S later, each drain adding to the key's one
+ * row, and db_close() writes what is left. Seen red with the upsert
+ * writing excluded.count over the row's count (2, not 3), with the
+ * cadence test dropped from db_tick() (the second tick wrote early),
+ * and with db_close()'s flush removed (the last probe lost). */
+TEST_STATE(g_ph);
+static void test_probe_history_rows(void) {
+    fresh_db();
+    memset(&g_ph, 0, sizeof(g_ph));
+    const time_t b = 1700000400;   /* a bucket start */
+    uint8_t a[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
+    uint8_t c[6] = { 0x00, 0x11, 0x22, 0x00, 0x00, 0x02 };
+    probe_hist_note(a, "Cafe", b + 10);
+    probe_hist_note(a, "Cafe", b + 11);
+    probe_hist_note(c, "Cafe", b + 12);
+    probe_hist_note(a, "Home", b + 13);
+    db_tick(&g_ph, b + 20);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM probe_history"), 3);
+    ASSERT_EQ(q_int("SELECT count FROM probe_history WHERE mac='02:00:00:00:00:01'"
+                    " AND ssid='Cafe' AND bucket=1700000400 AND first_seen=1700000410"
+                    " AND last_seen=1700000411"), 2);
+    ASSERT_EQ(q_int("SELECT count FROM probe_history WHERE mac='00:11:22:00:00:02'"
+                    " AND ssid='Cafe'"), 1);
+    /* Inside the flush interval: counted, not yet written. */
+    probe_hist_note(a, "Cafe", b + 30);
+    db_tick(&g_ph, b + 21);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM probe_history"), 4);
+    db_tick(&g_ph, b + 20 + DB_PROBE_HIST_FLUSH_S);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM probe_history"), 3);
+    ASSERT_EQ(q_int("SELECT count FROM probe_history WHERE mac='02:00:00:00:00:01'"
+                    " AND ssid='Cafe'"), 3);
+    ASSERT_EQ(q_int("SELECT last_seen FROM probe_history WHERE mac='02:00:00:00:00:01'"
+                    " AND ssid='Cafe'"), 1700000430);
+    /* The next bucket is its own row. */
+    probe_hist_note(a, "Cafe", b + 600);
+    db_close();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM probe_history"), 4);
+    ASSERT_EQ(q_int("SELECT count FROM probe_history WHERE mac='02:00:00:00:00:01'"
+                    " AND ssid='Cafe' AND bucket=1700001000"), 1);
+    /* Closed, the sink is detached: nothing more is counted. */
+    probe_hist_note(a, "Cafe", b + 601);
+    ASSERT_EQ(probe_hist_keys(), 0);
+    unlink(db_path);
+}
+
+/* probe_history is on the observation tier. Seen red with
+ * "probe_history" taken out of TIER_OBSERVATION (the old row stayed). */
+static void test_probe_history_ages_with_observations(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    long long old = NOW - 45 * DAY, recent = NOW - 2 * DAY;
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO probe_history (mac,ssid,bucket,count,first_seen,last_seen)"
+        " VALUES ('02:00:00:00:00:01','Cafe',%lld,4,%lld,%lld);"
+        "INSERT INTO probe_history (mac,ssid,bucket,count,first_seen,last_seen)"
+        " VALUES ('02:00:00:00:00:01','Cafe',%lld,2,%lld,%lld);",
+        old - old % 600, old, old, recent - recent % 600, recent, recent);
+    insert_at(sql);
+    db_maintain(NOW);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM probe_history"), 1);
+    ASSERT_EQ(q_int("SELECT last_seen FROM probe_history"), recent);
+    db_close();
+    unlink(db_path);
+}
+
+/* A random address whose one tie to a network is a probe_history row
+ * (a directed probe) is not purged. Seen red with the probe_history
+ * line taken out of RD_SELECT_SQL. */
+static void test_random_purge_keeps_a_probe_history_device(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    const long long old = NOW - 10 * DAY;
+    rd_device("02:00:00:00:00:01", old, old, DEV_SRC_PROBE, 0, "");
+    rd_device("06:00:00:00:00:02", old, old, DEV_SRC_PROBE, 0, "");
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO probe_history (mac,ssid,bucket,count,first_seen,last_seen)"
+        " VALUES ('06:00:00:00:00:02','Cafe',%lld,1,%lld,%lld);",
+        old - old % 600, old, old);
+    insert_at(sql);
+    rd_maintain_all(NOW);
+    ASSERT_EQ(rd_has("02:00:00:00:00:01"), 0);
+    ASSERT_EQ(rd_has("06:00:00:00:00:02"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM probe_history"), 1);
     db_close();
     unlink(db_path);
 }
@@ -6577,6 +6756,11 @@ void run_db_tests(void) {
     RUN_TEST(test_v21_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_question_status_rows);
     RUN_TEST(test_question_status_ages_with_observations);
+    RUN_TEST(test_v22_file_migrates_additively);
+    RUN_TEST(test_v22_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_probe_history_rows);
+    RUN_TEST(test_probe_history_ages_with_observations);
+    RUN_TEST(test_random_purge_keeps_a_probe_history_device);
     RUN_TEST(test_coverage_intervals_age_with_observations);
     RUN_TEST(test_victron_columns_match_the_allow_list);
     RUN_TEST(test_victron_tables_written);

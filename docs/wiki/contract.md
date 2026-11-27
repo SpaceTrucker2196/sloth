@@ -152,7 +152,7 @@ carries the answers instead, as data, each written by
 
 | File | What | Replaces |
 |---|---|---|
-| `constants.tsv` | `name value` for the `sloth.h` and `ip_color.h` macros and enumerators the page mirrors (`DEV_SRC_*`, `DEV_RISK_*`, `WPA_DG_*`, `CH_SRC_HE_6GHZ`, `MAX_BLE_DEVICES`, `BLE_DEV_NAME_MAX`, `IP_NUM_COLORS`, `IP_SRC_*`), compiled in, not parsed | `#include "sloth.h"` in the page's tests |
+| `constants.tsv` | `name value` for the `sloth.h` and `ip_color.h` macros and enumerators the page mirrors (`DEV_SRC_*`, `DEV_RISK_*`, `WPA_DG_*`, `CH_SRC_HE_6GHZ`, `MAX_BLE_DEVICES`, `BLE_DEV_NAME_MAX`, `IP_NUM_COLORS`, `IP_SRC_*`; since sloth.db v23 `PROBE_HIST_BUCKET_S`, `PROBE_HIST_BUCKET_KEYS` and `DB_PROBE_HIST_FLUSH_S` from `src/probe_hist.h` and `src/db.h`, `probe_history`'s bucket width, keys per bucket and drain interval), compiled in, not parsed | `#include "sloth.h"` in the page's tests |
 | `akm-names.tsv` | `rsn_akm_name(t)` for all 256 `t` | linking `src/rsn_ie.c` |
 | `ip-color.tsv` | `ip_color_index(key)` on 799 fixed keys: the empty key, every single byte, the page tests' cases, 512 pseudo-random strings | linking `src/ip_color.c`; a port of the hash in the consumer is held to these |
 | `literals.tsv` | every C string literal, as written between the quotes, of the files `tests/contract/literals.txt` names (whole files, a glob, or one array: `tests/test_db.c`'s guardrail words, `src/db_schema.c`'s `VICTRON_COLS[]`) | reading those files for a quoted word |
