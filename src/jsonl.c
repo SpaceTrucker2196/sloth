@@ -1022,7 +1022,16 @@ void jsonl_emit_btm_steers(const sloth_state_t *s) {
 
 /* Channel-switch announcements (#63). Every announcement, legitimate
  * or not — a consumer judging one needs the ordinary DFS traffic around
- * it, and `ta` versus `bssid` is the forgery signal. */
+ * it, and `ta` versus `bssid` is the forgery signal.
+ *
+ * `event_ts` (#255): `start_obj()` already writes `ts` as this line's
+ * *emit* time, the convention every other record follows. A second
+ * `kv_int(..., "ts", e->ts)` here repeated that key with the frame's
+ * own time instead of adding a new one — a duplicate key most parsers
+ * silently resolve with last-value-wins, but one slothweb's decoder
+ * flags and drops, so every wifi_csa_event record was lost rather than
+ * read. `event_ts` is additive and carries what the duplicate used to:
+ * the identity key is `bssid`+`event_ts`, not `bssid`+`ts`. */
 void jsonl_emit_csa_events(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = sloth_wall();
@@ -1038,7 +1047,7 @@ void jsonl_emit_csa_events(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "switch_count", e->switch_count);
         kv_int(buf, LINEBUF, &off, "source",       e->source);
         kv_int(buf, LINEBUF, &off, "from_channel", e->from_channel);
-        kv_int(buf, LINEBUF, &off, "ts",           (long long)e->ts);
+        kv_int(buf, LINEBUF, &off, "event_ts",     (long long)e->ts);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -1102,7 +1111,13 @@ void jsonl_emit_mlds(const sloth_state_t *s) {
  * carrying which of the three independent signals fired — a consumer
  * correlating them wants to know whether the body, the DNS answer or
  * the TLS destination gave it away, because a portal evading one still
- * has to pass the others. */
+ * has to pass the others.
+ *
+ * `event_ts` (#255): same fix as wifi_csa_event's — `start_obj()`
+ * already writes `ts` as this line's emit time, so a second `kv_int`
+ * of the detection's own time under the same key was a duplicate, not
+ * a second field. The identity key is `host`+`event_ts`, not
+ * `host`+`ts`. */
 void jsonl_emit_cp_events(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = sloth_wall();
@@ -1120,7 +1135,7 @@ void jsonl_emit_cp_events(const sloth_state_t *s) {
         kv_str(buf, LINEBUF, &off, "server",   e->server);
         kv_int(buf, LINEBUF, &off, "server_port", e->server_port);
         kv_str(buf, LINEBUF, &off, "kit",      cp_kit_name(e->kit));
-        kv_int(buf, LINEBUF, &off, "ts",       (long long)e->ts);
+        kv_int(buf, LINEBUF, &off, "event_ts", (long long)e->ts);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

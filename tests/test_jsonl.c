@@ -2769,6 +2769,62 @@ static void test_btm_steer_empty_emits_nothing(void) {
     unlink(tmp_path);
 }
 
+static int count_occurrences(const char *hay, const char *needle) {
+    int n = 0;
+    size_t len = strlen(needle);
+    for (const char *p = hay; (p = strstr(p, needle)) != NULL; p += len) n++;
+    return n;
+}
+
+/* #255: `start_obj()` writes `ts` once, as this line's emit time.
+ * `jsonl_emit_csa_events()` used to also write the frame's own time
+ * under the same key — a duplicate most parsers resolve
+ * last-value-wins, but slothweb's decoder flags and drops the whole
+ * record, so every wifi_csa_event line was lost. The frame's own time
+ * now has its own field, `event_ts`; `ts` stays the emit time and is
+ * written exactly once. */
+static void test_csa_event_record(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    sloth_csa_event_t *e = &s.csa_events[s.csa_count++];
+    static const uint8_t BSSID[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x40};
+    static const uint8_t TA[6]    = {0xaa,0xbb,0xcc,0xdd,0xee,0x41};
+    memcpy(e->bssid, BSSID, 6);
+    memcpy(e->ta,    TA,    6);
+    e->new_channel  = 9;
+    e->new_op_class = 0;
+    e->switch_mode  = 1;
+    e->switch_count = 1;
+    e->source       = CSA_SRC_BEACON;
+    e->from_channel = 0;
+    e->ts           = 1700000002;
+    jsonl_emit_csa_events(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(strstr(body, "\"type\":\"wifi_csa_event\"") != NULL);
+    ASSERT(strstr(body, "\"bssid\":\"aa:bb:cc:dd:ee:40\"") != NULL);
+    ASSERT(strstr(body, "\"ta\":\"aa:bb:cc:dd:ee:41\"") != NULL);
+    ASSERT(strstr(body, "\"new_channel\":9") != NULL);
+    ASSERT(strstr(body, "\"event_ts\":1700000002") != NULL);
+    /* A regression that reintroduces the old duplicate kv_int(...,
+     * "ts", ...) call would make this 2 — this literal excludes
+     * "event_ts" (no leading quote right before "ts" there). */
+    ASSERT_EQ(count_occurrences(body, "\"ts\":"), 1);
+    unlink(tmp_path);
+}
+
+static void test_csa_event_empty_emits_nothing(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    jsonl_emit_csa_events(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(strstr(body, "wifi_csa_event") == NULL);
+    unlink(tmp_path);
+}
+
 /* ── file permissions, #87 ───────────────────────────────── */
 
 /* The JSONL stream carries cleartext-credential alerts, probe PNLs and
@@ -3126,6 +3182,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_dns_log_record_writes_jsonl);
     RUN_TEST(test_btm_steer_record);
     RUN_TEST(test_btm_steer_empty_emits_nothing);
+    RUN_TEST(test_csa_event_record);
+    RUN_TEST(test_csa_event_empty_emits_nothing);
     RUN_TEST(test_json_escape_output_is_valid_utf8);
     RUN_TEST(test_json_escape_keeps_text_escapes_line_separators);
 

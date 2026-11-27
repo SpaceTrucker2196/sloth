@@ -1183,6 +1183,53 @@ static void test_repeated_kit_page_does_not_flood_the_ring(void) {
     memset(s, 0, sizeof(*s));
 }
 
+static int count_occurrences(const char *hay, const char *needle) {
+    int n = 0;
+    size_t len = strlen(needle);
+    for (const char *p = hay; (p = strstr(p, needle)) != NULL; p += len) n++;
+    return n;
+}
+
+/* #255: `start_obj()` already writes `ts` once, as this line's emit
+ * time. `jsonl_emit_cp_events()` used to write the detection's own
+ * time under the same key — a duplicate `ts` most parsers resolve
+ * last-value-wins, but slothweb's decoder flags and drops the whole
+ * record, so every captive_portal_event line was lost. The frame's
+ * own time now has its own field, `event_ts`; `ts` stays the emit
+ * time and is written exactly once. */
+static void test_jsonl_ts_is_not_duplicated(void) {
+    static char tmp[TEST_TMP_MAX];
+    int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_cp_XXXXXX"));
+    if (fd >= 0) close(fd);
+    jsonl_close();
+    unlink(tmp);
+    ASSERT(jsonl_open(tmp));
+    sloth_state_t *s = &g_cps;
+    memset(s, 0, sizeof(*s));
+    s->cp_event_count = 1;
+    s->cp_events[0].kind = CP_KIND_HIJACK;
+    s->cp_events[0].ts   = 1700000001;
+    jsonl_emit_cp_events(s);
+    jsonl_close();
+    static char buf[8192];
+    buf[0] = '\0';
+    FILE *fp = fopen(tmp, "r");
+    if (fp) {
+        size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+        buf[n] = '\0';
+        fclose(fp);
+    }
+    unlink(tmp);
+    ASSERT(strstr(buf, "\"type\":\"captive_portal_event\"") != NULL);
+    ASSERT(strstr(buf, "\"event_ts\":1700000001") != NULL);
+    /* Exactly one "ts" key: start_obj's emit time. A regression that
+     * reintroduces the old duplicate kv_int(..., "ts", ...) call would
+     * make this 2 — this literal excludes "event_ts" (no leading
+     * quote right before "ts" there). */
+    ASSERT_EQ(count_occurrences(buf, "\"ts\":"), 1);
+    memset(s, 0, sizeof(*s));
+}
+
 /* The JSONL record carries the responder and the kit (#169); a
  * DNS-sourced event says it has neither rather than leaving the fields
  * out, so a consumer sees one record shape. */
@@ -1274,6 +1321,7 @@ void run_captive_portal_tests(void) {
     RUN_TEST(test_kit_names);
     RUN_TEST(test_record_ex_keeps_the_responder);
     RUN_TEST(test_jsonl_carries_responder_and_kit);
+    RUN_TEST(test_jsonl_ts_is_not_duplicated);
     RUN_TEST(test_repeated_kit_page_does_not_flood_the_ring);
 
     TEST_SUITE("captive-portal graded severity (#169)");
