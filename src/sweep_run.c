@@ -218,12 +218,16 @@ static FILE *out_create(const sweep_run_t *r, const char *path, char *err,
         close(dfd);
         return NULL;
     }
-    close(dfd);
+    /* dfd is kept until fdopen() has answered: its failure branch
+     * removes the file this call created, as the two above do (#260's
+     * review: dfd was closed first and the empty file stayed). */
     FILE *f = fdopen(fd, "wb");
     if (!f) {
         snprintf(err, errsz, "%.200s: %s", path, strerror(errno));
         close(fd);
+        (void)unlinkat(dfd, name, 0);
     }
+    close(dfd);
     return f;
 }
 
