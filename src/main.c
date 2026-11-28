@@ -1866,13 +1866,20 @@ int main(int argc, char **argv) {
         for (int i = 0; i < allow_iface_count && i < PF_MAX_IFACE; i++)
             pf.iface[pf.n_iface++] = allow_ifaces[i];
         /* Bounded by the source arrays too, not only by pf's: the CLI
-         * holds fewer names than PF_MAX_NAMED (cppcheck 2.13
-         * arrayIndexOutOfBounds on the PF_MAX_NAMED bound alone). */
+         * holds fewer names than PF_MAX_NAMED. The count is clamped
+         * before the loop, not in its condition: cppcheck (2.13 in CI,
+         * 2.17 here) reads an `i < PF_MAX_NAMED` term in the condition
+         * as index 15 into the smaller array whatever else bounds it
+         * (arrayIndexOutOfBounds, #260). */
         const int mon_cap = (int)(sizeof(mon_cli.name) / sizeof(mon_cli.name[0]));
         const int df_cap  = (int)(sizeof(df_cli.name) / sizeof(df_cli.name[0]));
-        for (int i = 0; i < mon_cli.n && i < mon_cap && i < PF_MAX_NAMED; i++)
+        int n_mon = mon_cli.n < mon_cap ? mon_cli.n : mon_cap;
+        int n_df  = df_cli.n < df_cap ? df_cli.n : df_cap;
+        if (n_mon > PF_MAX_NAMED) n_mon = PF_MAX_NAMED;
+        if (n_df > PF_MAX_NAMED) n_df = PF_MAX_NAMED;
+        for (int i = 0; i < n_mon; i++)
             pf.mon[pf.n_mon++] = mon_cli.name[i];
-        for (int i = 0; i < df_cli.n && i < df_cap && i < PF_MAX_NAMED; i++)
+        for (int i = 0; i < n_df; i++)
             pf.df[pf.n_df++] = df_cli.name[i];
         pf.monitor_only = monitor_only;
         pf.hop          = g_hop_enabled;

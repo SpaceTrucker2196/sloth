@@ -119,6 +119,15 @@ doubleFree:src/secure_file.c
 # The same in sloth-sdrsweep's write_atomic(): fdopen() failure leaves
 # fd open (POSIX), so close(fd) on that path is the only close.
 doubleFree:src/sdrsweep/main.c
+# The same in sweep_run.c's out_create() and open_group_baseline() (#249,
+# listed under #260): openat() then fdopen(), and the close(fd) is on
+# fdopen()'s failure branch only.
+doubleFree:src/sweep_run.c
+# questions.c fail() takes its format as a parameter and always passes
+# one argument; the callers whose message has no %s pass NULL. An
+# argument a format does not consume is evaluated and ignored (C99
+# 7.19.6.1p2), so nothing is read that is not there (#244, #260).
+wrongPrintfScanfArgNum:src/questions.c
 # Band heights / panel widths start equal on purpose; each is a separate
 # layout knob so one can be tuned without touching the others.
 duplicateAssignExpression:src/views/dashboard.c

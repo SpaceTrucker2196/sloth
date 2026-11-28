@@ -29,7 +29,7 @@ jobs:
       # where pkg-config finds SoapySDR, so without it this job's six
       # -Werror configs would never compile the helper.
       - name: Install dependencies
-        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev libsoapysdr-dev
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev libsoapysdr-dev
 
       - name: Build
         run: make && test -x sloth-sdrsweep
@@ -115,7 +115,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install dependencies
-        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
 
       - name: Test under ASan + UBSan
         run: make test
@@ -191,7 +191,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install dependencies
-        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev pkg-config
 
       - name: Replay generated savefiles against the golden
         run: make replay-check REPLAY_DIR="$RUNNER_TEMP/replay"
@@ -237,7 +237,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.mesh.outputs.token == 'yes'
-        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev pkg-config
 
       - name: Build this commit's contract
         if: steps.mesh.outputs.token == 'yes'
@@ -374,7 +374,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install dependencies
-        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
 
       - name: Test under ThreadSanitizer
         run: make test
@@ -500,7 +500,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install dependencies
-        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
 
       - name: Build (capturing the exact compile/link commands)
         run: make clean && make 2>&1 | tee build.log
